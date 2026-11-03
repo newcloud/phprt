@@ -132,10 +132,11 @@ if [ ! -x "$SRC/configure" ]; then
   [ -x "$AC_DIR/bin/autoconf" ] || bash "$MODULES/autoconf.sh"
   [ -x "$RE2C_DIR/bin/re2c" ]   || bash "$MODULES/re2c.sh"
   [ -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ] || bash "$MODULES/perlshim.sh"
+  # 注意要 export：后面的 configure / make 也要能找到 re2c
+  export PATH="$AC_DIR/bin:$RE2C_DIR/bin:$PREFIX/bin:$PATH"
+  export PERL5LIB="$PERL_DIR/share/perl5core${PERL5LIB:+:$PERL5LIB}"
   log "源码包没有 configure，跑 buildconf 生成"
-  PATH="$AC_DIR/bin:$RE2C_DIR/bin:$PREFIX/bin:$PATH" \
-  PERL5LIB="$PERL_DIR/share/perl5core${PERL5LIB:+:$PERL5LIB}" \
-    ./buildconf --force > "$LOGS/php-buildconf.log" 2>&1 \
+  ./buildconf --force > "$LOGS/php-buildconf.log" 2>&1 \
     || { tail -30 "$LOGS/php-buildconf.log"; die "buildconf 失败"; }
 fi
 
