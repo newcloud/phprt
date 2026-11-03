@@ -123,6 +123,22 @@ export PKG_CONFIG_PATH="${PC_PATH%:}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 # ------------------------------------------------------------------ 编译 ----
 cd "$SRC"
+
+# GitHub 的分支/tag 归档不带 configure（官方 release 包才带），先 buildconf 生成
+if [ ! -x "$SRC/configure" ]; then
+  AC_DIR="$(dep_dir_of autoconf)"
+  RE2C_DIR="$(dep_dir_of re2c)"
+  PERL_DIR="$(dep_dir_of perl5core)"
+  [ -x "$AC_DIR/bin/autoconf" ] || bash "$MODULES/autoconf.sh"
+  [ -x "$RE2C_DIR/bin/re2c" ]   || bash "$MODULES/re2c.sh"
+  [ -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ] || bash "$MODULES/perlshim.sh"
+  log "源码包没有 configure，跑 buildconf 生成"
+  PATH="$AC_DIR/bin:$RE2C_DIR/bin:$PREFIX/bin:$PATH" \
+  PERL5LIB="$PERL_DIR/share/perl5core${PERL5LIB:+:$PERL5LIB}" \
+    ./buildconf --force > "$LOGS/php-buildconf.log" 2>&1 \
+    || { tail -30 "$LOGS/php-buildconf.log"; die "buildconf 失败"; }
+fi
+
 log "configure（日志 ${LOGS#"$PHPRT_HOME"/}/php-configure.log）"
 CPPFLAGS="${CPPFLAGS% }" LDFLAGS="$LDFLAGS" \
   ./configure "${ARGS[@]}" > "$LOGS/php-configure.log" 2>&1 \

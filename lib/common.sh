@@ -127,6 +127,7 @@ dep_dir_of() { # dep_dir_of <名字>
     libffi)    dep_dir libffi    "$LIBFFI_VERSION" ;;
     libyaml)   dep_dir libyaml   "$LIBYAML_VERSION" ;;
     autoconf)  printf '%s/autoconf-%s\n' "$TOOLS" "$AUTOCONF_VERSION" ;;
+    re2c)      printf '%s/re2c-%s\n' "$TOOLS" "$RE2C_VERSION" ;;
     perl5core) printf '%s/perl5core-%s\n' "$TOOLS" "$PERL_SHIM_VERSION" ;;
     *) die "未知依赖: $1" ;;
   esac
