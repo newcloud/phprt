@@ -195,7 +195,9 @@ run_module() { # run_module <name>
 }
 
 # 模块顺序固定（名字 = lib/modules/<名字>.sh 的文件名）
-ALL_MODULES=(openssl zlib libxml2 sqlite libcurl oniguruma libzip php redis composer)
+ALL_MODULES=(openssl zlib libxml2 sqlite libcurl oniguruma libzip
+             icu libpng jpeg freetype libffi libyaml
+             php redis xdebug apcu yaml composer)
 
 enabled_module() { # enabled_module <name>
   case "$1" in
@@ -208,7 +210,13 @@ enabled_module() { # enabled_module <name>
     libzip)    [ "${ENABLE_LIBZIP:-0}" = 1 ] ;;
     php)       : ;;
     icu)       [ "${ENABLE_ICU:-0}" = 1 ] ;;
+    libpng|jpeg|freetype) [ "${ENABLE_GD:-0}" = 1 ] ;;
+    libffi)    [ "${ENABLE_FFI:-0}" = 1 ] ;;
+    libyaml)   [ "${ENABLE_YAML:-0}" = 1 ] ;;
     redis)     [ "${ENABLE_REDIS:-0}" = 1 ] ;;
+    xdebug)    [ "${ENABLE_XDEBUG:-0}" = 1 ] ;;
+    apcu)      [ "${ENABLE_APCU:-0}" = 1 ] ;;
+    yaml)      [ "${ENABLE_YAML:-0}" = 1 ] ;;
     composer)  [ "${ENABLE_COMPOSER:-0}" = 1 ] ;;
     *)         return 1 ;;
   esac
@@ -230,6 +238,9 @@ else
   if [ "$ONLY" = php ]; then
     # redis.so / composer.phar 都装在 PHP 目录或依赖 PHP 版本，PHP 一变就得跟着重来
     [ "${ENABLE_REDIS:-0}" = 1 ]    && MODULES_TO_RUN+=(redis)
+    [ "${ENABLE_XDEBUG:-0}" = 1 ]   && MODULES_TO_RUN+=(xdebug)
+    [ "${ENABLE_APCU:-0}" = 1 ]     && MODULES_TO_RUN+=(apcu)
+    [ "${ENABLE_YAML:-0}" = 1 ]     && MODULES_TO_RUN+=(yaml)
     [ "${ENABLE_COMPOSER:-0}" = 1 ] && MODULES_TO_RUN+=(composer)
   fi
 fi

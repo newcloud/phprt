@@ -103,6 +103,11 @@ dep_dir_of() { # dep_dir_of <名字>
     oniguruma) dep_dir oniguruma "$ONIGURUMA_VERSION" ;;
     libzip)    dep_dir libzip    "$LIBZIP_VERSION" ;;
     icu)       dep_dir icu       "$ICU_VERSION" ;;
+    libpng)    dep_dir libpng    "$LIBPNG_VERSION" ;;
+    jpeg)      dep_dir jpeg      "$JPEG_VERSION" ;;
+    freetype)  dep_dir freetype  "$FREETYPE_VERSION" ;;
+    libffi)    dep_dir libffi    "$LIBFFI_VERSION" ;;
+    libyaml)   dep_dir libyaml   "$LIBYAML_VERSION" ;;
     autoconf)  printf '%s/autoconf-%s\n' "$TOOLS" "$AUTOCONF_VERSION" ;;
     perl5core) printf '%s/perl5core-%s\n' "$TOOLS" "$PERL_SHIM_VERSION" ;;
     *) die "未知依赖: $1" ;;
@@ -137,6 +142,10 @@ enabled_dep_names() {
   [ "${ENABLE_LIBCURL:-0}" = 1 ]   && echo curl
   [ "${ENABLE_ONIGURUMA:-0}" = 1 ] && echo oniguruma
   [ "${ENABLE_LIBZIP:-0}" = 1 ]    && echo libzip
+  [ "${ENABLE_ICU:-0}" = 1 ]       && echo icu
+  [ "${ENABLE_GD:-0}" = 1 ]        && echo libpng && echo jpeg && echo freetype
+  [ "${ENABLE_FFI:-0}" = 1 ]       && echo libffi
+  [ "${ENABLE_YAML:-0}" = 1 ]      && echo libyaml
   return 0
 }
 
@@ -170,7 +179,7 @@ dep_include_flags() { # dep_include_flags <名字...> -> "-I... -I..."
 # 签名文件放在被描述的那个安装目录里（删目录 = 签名一起没了 = 会重装）
 stamp_file() { # stamp_file <模块名>
   case "$1" in
-    php|redis) printf '%s/.phprt-stamp-%s\n' "$PREFIX" "$1" ;;
+    php|redis|xdebug|apcu|yaml) printf '%s/.phprt-stamp-%s\n' "$PREFIX" "$1" ;;
     composer)  printf '%s/.phprt-stamp-composer\n' "$PHPRT_HOME" ;;
     perlshim)  printf '%s/.phprt-stamp-perlshim\n' "$(dep_dir_of perl5core)" ;;
     *)         printf '%s/.phprt-stamp-%s\n' "$(dep_dir_of "$1")" "$1" ;;
@@ -209,6 +218,9 @@ php_sig() {
   s+=";oniguruma=${ENABLE_ONIGURUMA:-0}:$ONIGURUMA_VERSION"
   s+=";icu=${ENABLE_ICU:-0}:$ICU_VERSION"
   s+=";libzip=${ENABLE_LIBZIP:-0}:$LIBZIP_VERSION"
+  s+=";mysqli=${ENABLE_MYSQLI:-0}"
+  s+=";gd=${ENABLE_GD:-0}:$LIBPNG_VERSION/$JPEG_VERSION/$FREETYPE_VERSION"
+  s+=";ffi=${ENABLE_FFI:-0}:$LIBFFI_VERSION"
   printf '%s\n' "$s"
 }
 
@@ -249,13 +261,16 @@ fetch() { # fetch <url> [dest] [sha256]
 
   [ "$OFFLINE" = 1 ] && die "离线模式，但缺少: $(basename "$dest")（把它放进 $DOWNLOADS/ 再试）"
 
+  # 先下到 .part 再原子改名：下载中断时不会留下一个"看起来像缓存"的半截文件
+  local part="$dest.part"
   log "下载 $(basename "$dest")"
-  if _dl_once "$url" "$dest" ""; then
+  if _dl_once "$url" "$part" ""; then
     :
   else
     warn "直连失败，改用代理 $PROXY"
-    _dl_once "$url" "$dest" "$PROXY" || die "下载失败: $url"
+    _dl_once "$url" "$part" "$PROXY" || { rm -f "$part"; die "下载失败: $url"; }
   fi
+  mv -f "$part" "$dest"
   ok "$(basename "$dest") $(du -h "$dest" | cut -f1)"
   sha_check "$dest" "$expect"
 }

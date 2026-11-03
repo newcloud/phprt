@@ -63,6 +63,46 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 
 依赖库（`deps/*/lib`）和扩展目录是**运行时用通配符找的**，所以重编 PHP、加减依赖都不需要重新生成这个文件。
 
+## 扩展
+
+**编译进 php 二进制（静态）**
+
+`openssl` `zlib` `libxml2` `dom` `xml` `xmlreader` `xmlwriter` `SimpleXML` `soap`
+`sqlite3` `pdo_sqlite` `curl` `mbstring` `zip` `gd` `ffi` `mysqli` `pdo_mysql`
+`bcmath` `calendar` `exif` `filter` `hash` `iconv` `json` `ctype` `session`
+`tokenizer` `Phar` `pcntl` `posix` `sockets` `shmop` `sysvmsg` `sysvsem` `sysvshm` `opcache`
+
+**PECL 动态扩展（`.so`，放在 `php-<版本>/lib/php/extensions/…`）**
+
+| 扩展 | 说明 | ini |
+| --- | --- | --- |
+| `redis` | Redis 客户端 | `conf.d/20-redis.ini` |
+| `apcu` | 进程内共享内存缓存（常驻 worker 友好） | `conf.d/25-apcu.ini` |
+| `yaml` | YAML 解析（依赖 libyaml） | `conf.d/26-yaml.ini` |
+| `xdebug` | 调试/覆盖率，默认 `xdebug.mode=off` | `conf.d/30-xdebug.ini` |
+
+调试时打开：`XDEBUG_MODE=debug ./myphp script.php`。
+
+**没编的**
+
+| 扩展 | 原因 |
+| --- | --- |
+| `intl` | 依赖 ICU，ICU 是 C++ 项目，需要 `g++`；当前机器没有 C++ 编译器（`ENABLE_INTL=0`、`ENABLE_ICU=0`） |
+| `swoole` | 纯 C++ 项目，同上 |
+| `pgsql` / `pdo_pgsql` | 需要 libpq |
+| `memcached` / `imagick` / `mongodb` / `yaml` 之外的大多数 PECL | 需要对应的外部库 |
+
+装了 `g++`（`sudo dnf install -y gcc-c++`）之后，把 `config.conf` 里
+`ENABLE_ICU=1`、`ENABLE_INTL=1` 打开，跑 `install.sh` 就会补上 intl；swoole 需要再加一个
+`lib/modules/swoole.sh`（照着 `modules/redis.sh` 写）。
+
+**加一个新扩展的两条路**
+
+- 编译期扩展（gd/intl/pgsql 这类）：`config.conf` 加开关 + `lib/modules/<名字>.sh` 依赖脚本
+  + `lib/modules/php.sh` 里加 configure 参数，然后 `install.sh`（只有 PHP 会重编）。
+- PECL 扩展：照 `lib/modules/redis.sh` 抄 —— 下载 tgz → `phpize` → `configure --with-php-config`
+  → `make install` → 往 `php-<版本>/etc/conf.d/` 写一行 `extension=xxx.so`。
+
 ## 日常命令
 
 ```bash

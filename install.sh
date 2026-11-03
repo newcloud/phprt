@@ -240,27 +240,9 @@ BUILD_ARGS=()
 [ "$OFFLINE" = 1 ] && BUILD_ARGS+=(--offline)
 [ -n "$JOBS_OPT" ] && BUILD_ARGS+=(--jobs "$JOBS_OPT")
 
-INSTALLED=0
-[ -x "$PHPRT_HOME/php-$PHP_VERSION/bin/php" ] \
-  && [ -f "$PHPRT_HOME/php-$PHP_VERSION/.phprt-stamp-php" ] && INSTALLED=1
-
-DO_BUILD=1
-if [ "$INSTALLED" = 1 ] && [ "$FORCE" != 1 ]; then
-  say "PHP $PHP_VERSION 已安装（$PHPRT_HOME/php-$PHP_VERSION）"
-  ans="$(ask '  要重新编译吗? [y/N]: ' 'N')"
-  case "$ans" in
-    y|Y|yes|YES) DO_BUILD=1; BUILD_ARGS+=(--force) ;;
-    *) DO_BUILD=0 ;;
-  esac
-fi
-
-if [ "$DO_BUILD" = 1 ]; then
-  PHPRT_HOME="$PHPRT_HOME" bash "$HERE/build.sh" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
-    || bad "编译失败（见 $PHPRT_HOME/logs/）"
-else
-  good "跳过编译（--force 可强编）"
-  [ -x "$PHPRT_HOME/php-$PHP_VERSION/bin/php" ] || bad "PHP 本体丢失: $PHPRT_HOME/php-$PHP_VERSION/bin/php"
-fi
+# 直接交给 build.sh：配置没变它秒过，改了开关/版本它自己会重编
+PHPRT_HOME="$PHPRT_HOME" bash "$HERE/build.sh" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
+  || bad "编译失败（见 $PHPRT_HOME/logs/）"
 
 # 装完把解压的源码清掉（约占 1G；下载包和编译结果都保留）
 if [ "$KEEP_SRC" != 1 ] && [ -d "$PHPRT_HOME/build" ] && [ -n "$(ls -A "$PHPRT_HOME/build" 2>/dev/null)" ]; then

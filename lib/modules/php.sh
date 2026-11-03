@@ -41,6 +41,11 @@ D_CURL="$(dep_dir_of curl)"
 D_ONIG="$(dep_dir_of oniguruma)"
 D_ICU="$(dep_dir_of icu)"
 D_LIBZIP="$(dep_dir_of libzip)"
+D_ICU="$(dep_dir_of icu)"
+D_LIBPNG="$(dep_dir_of libpng)"
+D_JPEG="$(dep_dir_of jpeg)"
+D_FREETYPE="$(dep_dir_of freetype)"
+D_LIBFFI="$(dep_dir_of libffi)"
 
 # ------------------------------------------------------------------ 参数 ----
 ARGS=(
@@ -67,10 +72,21 @@ if [ "${ENABLE_SQLITE:-0}" = 1 ]; then
 else
   ARGS+=(--without-sqlite3 --without-pdo-sqlite)
 fi
-ARGS+=(--without-mysqli --without-pdo-mysql)   # MySQL 相关暂不启用
+if [ "${ENABLE_MYSQLI:-0}" = 1 ]; then
+  # mysqlnd 是 PHP 自带的原生驱动，不需要 libmysqlclient
+  ARGS+=(--with-mysqli=mysqlnd --with-pdo-mysql=mysqlnd)
+else
+  ARGS+=(--without-mysqli --without-pdo-mysql)
+fi
 [ "${ENABLE_ONIGURUMA:-0}" = 1 ] && ARGS+=(--enable-mbstring)
-[ "${ENABLE_ICU:-0}" = 1 ] && ARGS+=(--enable-intl --with-icu-dir="$D_ICU")
+[ "${ENABLE_INTL:-0}" = 1 ] && [ "${ENABLE_ICU:-0}" = 1 ] && ARGS+=(--enable-intl --with-icu-dir="$D_ICU")
 [ "${ENABLE_LIBZIP:-0}" = 1 ] && ARGS+=(--with-zip="$D_LIBZIP")
+if [ "${ENABLE_GD:-0}" = 1 ]; then
+  ARGS+=(--enable-gd --with-jpeg="$D_JPEG" --with-freetype="$D_FREETYPE")
+else
+  ARGS+=(--disable-gd)
+fi
+[ "${ENABLE_FFI:-0}" = 1 ] && ARGS+=(--with-ffi="$D_LIBFFI")
 
 # 常用内置扩展（不依赖外部库，全开）
 ARGS+=(
@@ -146,6 +162,8 @@ max_execution_time = 0
 default_charset = "UTF-8"
 extension_dir = "$EXT_DIR"
 $CA_LINES
+; FFI：CLI 里直接 FFI::cdef 需要 1（生产可改 preload）
+ffi.enable = 1
 
 [opcache]
 opcache.enable = 1
