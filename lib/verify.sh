@@ -106,6 +106,23 @@ check_ext ffi        "${ENABLE_FFI:-0}"
 check_ext yaml       "${ENABLE_YAML:-0}"
 check_ext apcu       "${ENABLE_APCU:-0}"
 check_ext xdebug     "${ENABLE_XDEBUG:-0}"
+check_ext swoole     "${ENABLE_SWOOLE:-0}"
+
+log "5b) gd 支持的图片格式"
+gd_supports() { # gd_supports <名字> <开关> <php 判断表达式>
+  local name="$1" on="$2" expr="$3"
+  [ "$on" = 1 ] || return 0
+  if run_php -r "exit(($expr) ? 0 : 1);"; then
+    printf '    ✓ %-6s 已支持\n' "$name"
+  else
+    printf '    ✗ %-6s 开关为 1 但 gd 没编进去\n' "$name"; fail=1
+  fi
+}
+gd_supports png      "${ENABLE_GD:-0}"    "imagetypes() & IMG_PNG"
+gd_supports jpeg     "${ENABLE_GD:-0}"    "imagetypes() & IMG_JPG"
+gd_supports webp     "${ENABLE_WEBP:-0}"  "imagetypes() & IMG_WEBP"
+gd_supports avif     "${ENABLE_AVIF:-0}"  "function_exists('imageavif')"
+gd_supports freetype "${ENABLE_GD:-0}"    "function_exists('imagettftext')"
 
 log "6) php.ini"
 run_php --ini | sed -n '1,3p' | sed 's/^/    /'

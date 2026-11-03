@@ -29,10 +29,13 @@
 | `xdebug-3.5.3.tgz` | 278K | https://pecl.php.net/get/xdebug-3.5.3.tgz |
 | `apcu-5.1.28.tgz` | 92K | https://pecl.php.net/get/apcu-5.1.28.tgz |
 | `yaml-2.3.0.tgz` | 41K | https://pecl.php.net/get/yaml-2.3.0.tgz |
+| `libwebp-1.6.0.tar.gz` | 4.1M | https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz |
+| `libaom-3.12.0.tar.gz` | 5.3M | https://storage.googleapis.com/aom-releases/libaom-3.12.0.tar.gz |
+| `libavif-1.3.0.tar.gz` | 14M | https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.3.0.tar.gz |
+| `swoole-6.2.4.tgz` | 2.6M | https://pecl.php.net/get/swoole-6.2.4.tgz |
+| `icu4c-79.1-sources.tgz` | 27M | https://github.com/unicode-org/icu/releases/download/release-79.1/icu4c-79.1-sources.tgz |
 
-合计约 104M。少几个也能装，只是缺的那个会联网下载。
-
-开了 `ENABLE_INTL=1` 还要加 `icu4c-79.1-sources.tgz`（GitHub release，约 30M）。
+合计约 155M（含 ICU / libaom / libavif）。少几个也能装，缺的那个会联网下载。
 
 ## 分发给别人
 

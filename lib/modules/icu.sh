@@ -31,12 +31,12 @@ if [ "$REBUILD" = 1 ] && [ -d "$SRC" ]; then
 else
   rm -rf "$SRC"
   log "解压 $TAR"
-  extract "$DOWNLOADS/$TAR" "$SRCDIR"
-  [ -d "$SRC" ] || die "解压后未找到 $SRC"
+  # sources 包里顶层是 icu/，去掉这一层，$SRC 直接就是 ICU 源码根
+  extract "$DOWNLOADS/$TAR" "$SRC" 1
+  [ -d "$SRC/source" ] || die "解压后未找到 $SRC/source"
 fi
 
-cd "$SRC/source" 2>/dev/null || cd "$SRC/icu/source" 2>/dev/null \
-  || die "ICU 源码里找不到 source/ 目录"
+cd "$SRC/source" 2>/dev/null || die "ICU 源码里找不到 source/ 目录"
 
 log "configure + make -j$JOBS（ICU 编译较久，3-5 分钟）"
 ./configure --prefix="$D" \

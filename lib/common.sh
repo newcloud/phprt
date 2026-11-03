@@ -106,6 +106,9 @@ dep_dir_of() { # dep_dir_of <名字>
     libpng)    dep_dir libpng    "$LIBPNG_VERSION" ;;
     jpeg)      dep_dir jpeg      "$JPEG_VERSION" ;;
     freetype)  dep_dir freetype  "$FREETYPE_VERSION" ;;
+    webp)      dep_dir webp      "$WEBP_VERSION" ;;
+    aom)       dep_dir aom       "$AOM_VERSION" ;;
+    avif)      dep_dir avif      "$AVIF_VERSION" ;;
     libffi)    dep_dir libffi    "$LIBFFI_VERSION" ;;
     libyaml)   dep_dir libyaml   "$LIBYAML_VERSION" ;;
     autoconf)  printf '%s/autoconf-%s\n' "$TOOLS" "$AUTOCONF_VERSION" ;;
@@ -144,6 +147,8 @@ enabled_dep_names() {
   [ "${ENABLE_LIBZIP:-0}" = 1 ]    && echo libzip
   [ "${ENABLE_ICU:-0}" = 1 ]       && echo icu
   [ "${ENABLE_GD:-0}" = 1 ]        && echo libpng && echo jpeg && echo freetype
+  [ "${ENABLE_WEBP:-0}" = 1 ]      && echo webp
+  [ "${ENABLE_AVIF:-0}" = 1 ]      && echo aom && echo avif
   [ "${ENABLE_FFI:-0}" = 1 ]       && echo libffi
   [ "${ENABLE_YAML:-0}" = 1 ]      && echo libyaml
   return 0
@@ -180,7 +185,7 @@ dep_include_flags() { # dep_include_flags <名字...> -> "-I... -I..."
 # 签名文件放在被描述的那个安装目录里（删目录 = 签名一起没了 = 会重装）
 stamp_file() { # stamp_file <模块名>
   case "$1" in
-    php|redis|xdebug|apcu|yaml) printf '%s/.phprt-stamp-%s\n' "$PREFIX" "$1" ;;
+    php|redis|xdebug|apcu|yaml|swoole) printf '%s/.phprt-stamp-%s\n' "$PREFIX" "$1" ;;
     composer)  printf '%s/.phprt-stamp-composer\n' "$PHPRT_HOME" ;;
     perlshim)  printf '%s/.phprt-stamp-perlshim\n' "$(dep_dir_of perl5core)" ;;
     *)         printf '%s/.phprt-stamp-%s\n' "$(dep_dir_of "$1")" "$1" ;;
@@ -221,6 +226,8 @@ php_sig() {
   s+=";libzip=${ENABLE_LIBZIP:-0}:$LIBZIP_VERSION"
   s+=";mysqli=${ENABLE_MYSQLI:-0}"
   s+=";gd=${ENABLE_GD:-0}:$LIBPNG_VERSION/$JPEG_VERSION/$FREETYPE_VERSION"
+  s+=";webp=${ENABLE_WEBP:-0}:$WEBP_VERSION"
+  s+=";avif=${ENABLE_AVIF:-0}:$AOM_VERSION/$AVIF_VERSION"
   s+=";ffi=${ENABLE_FFI:-0}:$LIBFFI_VERSION"
   printf '%s\n' "$s"
 }

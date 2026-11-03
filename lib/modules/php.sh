@@ -46,6 +46,8 @@ D_LIBPNG="$(dep_dir_of libpng)"
 D_JPEG="$(dep_dir_of jpeg)"
 D_FREETYPE="$(dep_dir_of freetype)"
 D_LIBFFI="$(dep_dir_of libffi)"
+D_WEBP="$(dep_dir_of webp)"
+D_AVIF="$(dep_dir_of avif)"
 
 # ------------------------------------------------------------------ 参数 ----
 ARGS=(
@@ -83,6 +85,8 @@ fi
 [ "${ENABLE_LIBZIP:-0}" = 1 ] && ARGS+=(--with-zip="$D_LIBZIP")
 if [ "${ENABLE_GD:-0}" = 1 ]; then
   ARGS+=(--enable-gd --with-jpeg="$D_JPEG" --with-freetype="$D_FREETYPE")
+  [ "${ENABLE_WEBP:-0}" = 1 ] && ARGS+=(--with-webp="$D_WEBP")
+  [ "${ENABLE_AVIF:-0}" = 1 ] && ARGS+=(--with-avif="$D_AVIF")
 else
   ARGS+=(--disable-gd)
 fi

@@ -69,7 +69,7 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 
 `openssl` `zlib` `libxml2` `dom` `xml` `xmlreader` `xmlwriter` `SimpleXML` `soap`
 `sqlite3` `pdo_sqlite` `curl` `mbstring` `zip` `gd` `ffi` `mysqli` `pdo_mysql`
-`bcmath` `calendar` `exif` `filter` `hash` `iconv` `json` `ctype` `session`
+`gd`（PNG/JPEG/WebP/AVIF/FreeType）`bcmath` `calendar` `exif` `filter` `hash` `iconv` `json` `ctype` `session`
 `tokenizer` `Phar` `pcntl` `posix` `sockets` `shmop` `sysvmsg` `sysvsem` `sysvshm` `opcache`
 
 **PECL 动态扩展（`.so`，放在 `php-<版本>/lib/php/extensions/…`）**
@@ -87,8 +87,8 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 
 | 扩展 | 原因 |
 | --- | --- |
-| `intl` | 依赖 ICU，ICU 是 C++ 项目，需要 `g++`；当前机器没有 C++ 编译器（`ENABLE_INTL=0`、`ENABLE_ICU=0`） |
-| `swoole` | 纯 C++ 项目，同上 |
+| `intl` / `swoole` | 需要 C++ 编译器（本机已装 `gcc-c++` 后开启 `ENABLE_ICU=1`、`ENABLE_INTL=1`、`ENABLE_SWOOLE=1`） |
+| `HEIC` | libgd 没有 HEIC 后端，PHP 里要用只能上 imagick + ImageMagick + libheif |
 | `pgsql` / `pdo_pgsql` | 需要 libpq |
 | `memcached` / `imagick` / `mongodb` / `yaml` 之外的大多数 PECL | 需要对应的外部库 |
 
