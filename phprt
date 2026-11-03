@@ -26,7 +26,7 @@ find_home() {
   fi
   local d="$PWD"
   while :; do
-    if [ -d "$d/.phprt/bin" ]; then printf '%s\n' "$d/.phprt"; return; fi
+    if [ -f "$d/.phprt/config.conf" ]; then printf '%s\n' "$d/.phprt"; return; fi
     [ "$d" = "/" ] && break
     d="$(dirname "$d")"
   done
