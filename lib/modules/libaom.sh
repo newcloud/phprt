@@ -30,6 +30,13 @@ if [ "$REBUILD" != 1 ] || [ ! -d "$SRC" ]; then
   [ -d "$SRC" ] || die "解压后未找到 $SRC"
 fi
 
+# 没有 nasm/yasm 时 libaom 会拒绝配置，退化成 generic（无 SIMD，慢但结果一样）
+ASM_ARGS=()
+command -v nasm >/dev/null 2>&1 || command -v yasm >/dev/null 2>&1 || {
+  warn "没装 nasm/yasm，libaom 用 generic CPU 编译（会慢一些）"
+  ASM_ARGS+=(-DAOM_TARGET_CPU=generic)
+}
+
 log "cmake + make -j$JOBS（AV1，编码器开着，比较慢）"
 cmake -S "$SRC" -B "$SRC/build" \
   -DCMAKE_INSTALL_PREFIX="$D" \
@@ -39,6 +46,7 @@ cmake -S "$SRC" -B "$SRC/build" \
   -DBUILD_SHARED_LIBS=ON \
   -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_DOCS=OFF -DENABLE_TOOLS=OFF \
   -DCONFIG_AV1_ENCODER=1 -DCONFIG_AV1_DECODER=1 -DCONFIG_MULTITHREAD=1 \
+  ${ASM_ARGS[@]+"${ASM_ARGS[@]}"} \
   > "$LOGS/aom-cmake.log" 2>&1 \
   || { tail -30 "$LOGS/aom-cmake.log"; die "libaom cmake 失败"; }
 cmake --build "$SRC/build" --parallel "$JOBS" > "$LOGS/aom-make.log" 2>&1 \
