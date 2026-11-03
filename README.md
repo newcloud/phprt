@@ -30,7 +30,11 @@ cd ~/myproject && ~/src/phprt/install.sh
 ./install.sh --global --php 8.5.12 --ini dev
 ./install.sh --local --ini-local --no-app           # 装进 ./.phprt，ini 放项目里
 ./install.sh --offline                              # 只用 downloads/ 里的包
+./install.sh --keep-src                             # 保留 build/ 里的源码（--rebuild 快）
 ```
+
+装完 `build/` 会被自动清掉（解压出来的源码约 1G）；整个安装根一般是 320M 左右，
+其中下载包 96M，删了不影响运行、只是下次要重下。
 
 ## 装出来长什么样
 

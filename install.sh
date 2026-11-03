@@ -12,6 +12,7 @@
 #    ./install.sh --ini-local         把预设复制成项目里的 ./php.ini 再指向它
 #    ./install.sh --ini /path/php.ini 用已有的 ini 文件
 #    ./install.sh --no-app            不生成项目入口 myapp.sh
+#    ./install.sh --keep-src          保留 build/ 里解压出来的源码（--rebuild 更快）
 #    ./install.sh --offline           只用手里的下载包，缺包直接报错
 #    ./install.sh --force             已装的版本也重新编译
 #    ./install.sh --jobs 8            并行度
@@ -29,6 +30,7 @@ PHP_OPT=""
 INI_OPT=""
 INI_LOCAL=0
 NO_APP=0
+KEEP_SRC=0
 ASSUME_YES=0
 FORCE=0
 OFFLINE=0
@@ -47,6 +49,7 @@ while [ $# -gt 0 ]; do
     --ini=*)     INI_OPT="${1#*=}"; shift ;;
     --ini-local) INI_LOCAL=1; shift ;;
     --no-app)    NO_APP=1; shift ;;
+    --keep-src)  KEEP_SRC=1; shift ;;
     -y|--yes)    ASSUME_YES=1; shift ;;
     --force)     FORCE=1; shift ;;
     --offline)   OFFLINE=1; shift ;;
@@ -262,6 +265,12 @@ else
   [ -x "$PHPRT_HOME/bin/myphp-$PHP_VERSION" ] || \
     PHPRT_HOME="$PHPRT_HOME" bash "$HERE/build.sh" --set-default --only php \
     || bad "生成入口失败"
+fi
+
+# 装完把解压的源码清掉（约占 1G；下载包和编译结果都保留）
+if [ "$KEEP_SRC" != 1 ] && [ -d "$PHPRT_HOME/build" ] && [ -n "$(ls -A "$PHPRT_HOME/build" 2>/dev/null)" ]; then
+  rm -rf "${PHPRT_HOME:?}/build"/*
+  good "已清理源码目录 build/（加 --keep-src 可保留）"
 fi
 
 # --------------------------------------------------------- 7. 项目入口 ----
