@@ -68,9 +68,11 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 **编译进 php 二进制（静态）**
 
 `openssl` `zlib` `libxml2` `dom` `xml` `xmlreader` `xmlwriter` `SimpleXML` `soap`
-`sqlite3` `pdo_sqlite` `curl` `mbstring` `zip` `gd` `ffi` `mysqli` `pdo_mysql`
-`gd`（PNG/JPEG/WebP/AVIF/FreeType）`bcmath` `calendar` `exif` `filter` `hash` `iconv` `json` `ctype` `session`
+`sqlite3` `pdo_sqlite` `curl` `mbstring` `zip` `intl` `gd` `ffi` `mysqli` `pdo_mysql`
+`bcmath` `calendar` `exif` `filter` `hash` `iconv` `json` `ctype` `session`
 `tokenizer` `Phar` `pcntl` `posix` `sockets` `shmop` `sysvmsg` `sysvsem` `sysvshm` `opcache`
+
+`gd` 的图片格式：**PNG / JPEG / WebP / AVIF** + FreeType 字体
 
 **PECL 动态扩展（`.so`，放在 `php-<版本>/lib/php/extensions/…`）**
 
@@ -79,6 +81,7 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 | `redis` | Redis 客户端 | `conf.d/20-redis.ini` |
 | `apcu` | 进程内共享内存缓存（常驻 worker 友好） | `conf.d/25-apcu.ini` |
 | `yaml` | YAML 解析（依赖 libyaml） | `conf.d/26-yaml.ini` |
+| `swoole` | 协程/网络框架（C++，需要 g++） | `conf.d/27-swoole.ini` |
 | `xdebug` | 调试/覆盖率，默认 `xdebug.mode=off` | `conf.d/30-xdebug.ini` |
 
 调试时打开：`XDEBUG_MODE=debug ./myphp script.php`。
@@ -87,14 +90,12 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 
 | 扩展 | 原因 |
 | --- | --- |
-| `intl` / `swoole` | 需要 C++ 编译器（本机已装 `gcc-c++` 后开启 `ENABLE_ICU=1`、`ENABLE_INTL=1`、`ENABLE_SWOOLE=1`） |
-| `HEIC` | libgd 没有 HEIC 后端，PHP 里要用只能上 imagick + ImageMagick + libheif |
+| `HEIC` | libgd 没有 HEIC 后端。PHP 里要用只能上 imagick + ImageMagick + libheif（另加 5 个模块） |
 | `pgsql` / `pdo_pgsql` | 需要 libpq |
-| `memcached` / `imagick` / `mongodb` / `yaml` 之外的大多数 PECL | 需要对应的外部库 |
+| `memcached` / `imagick` / `mongodb` 等 | 需要对应的外部库 |
 
-装了 `g++`（`sudo dnf install -y gcc-c++`）之后，把 `config.conf` 里
-`ENABLE_ICU=1`、`ENABLE_INTL=1` 打开，跑 `install.sh` 就会补上 intl；swoole 需要再加一个
-`lib/modules/swoole.sh`（照着 `modules/redis.sh` 写）。
+**注意几个编译依赖**：`intl`（ICU）和 `swoole` 需要 **C++ 编译器**（`gcc-c++`）；
+`libaom` 有 `nasm` 才启 SIMD（没有会自动退到 generic，功能一样只是慢）。
 
 **加一个新扩展的两条路**
 

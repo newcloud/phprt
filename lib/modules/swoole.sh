@@ -14,6 +14,7 @@ PHP="$PREFIX/bin/php"
 
 AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
+D_OPENSSL="$(dep_dir_of openssl)"
 SIG="swoole=$SWOOLE_VERSION;$(php_sig)"
 
 if [ "$FORCE" != 1 ] && stamp_ok swoole "$SIG" && [ -f "$PREFIX/etc/conf.d/27-swoole.ini" ]; then
@@ -57,10 +58,11 @@ log "phpize"
 phpize > "$LOGS/swoole-phpize.log" 2>&1 \
   || { tail -30 "$LOGS/swoole-phpize.log"; die "phpize 失败"; }
 
-# openssl / sockets / mysqlnd 用 PHP 自带的那套；不引 c-ares、pgsql 这些额外依赖
+# 用我们自己编的 OpenSSL；brotli 用不到就关掉（否则会链系统 libbrotli*）
 log "configure（--enable-swoole --enable-openssl --enable-sockets --enable-mysqlnd）"
 ./configure --with-php-config="$PREFIX/bin/php-config" \
-  --enable-swoole --enable-openssl --enable-sockets --enable-mysqlnd \
+  --enable-swoole --enable-openssl --with-openssl-dir="$D_OPENSSL" \
+  --enable-sockets --enable-mysqlnd --disable-brotli \
   > "$LOGS/swoole-configure.log" 2>&1 \
   || { tail -40 "$LOGS/swoole-configure.log"; die "swoole configure 失败"; }
 

@@ -63,7 +63,8 @@ check_ldd() { # check_ldd <文件>
   local f="$1" bad
   bad="$(LD_LIBRARY_PATH="$(printf '%s:' "$PHPRT_HOME"/deps/*/lib)" ldd "$f" 2>/dev/null \
         | awk '$3 ~ /^\// {print $3}' \
-        | grep -Ev '/(libc|libm|libgcc_s|libpthread|libdl|librt|libresolv|libcrypt)\.so' \
+        | # libz 也在白名单里：swoole 无条件链系统 zlib（ABI 稳定，任何发行版都有）
+        grep -Ev '/(libc|libm|libgcc_s|libstdc\+\+|libpthread|libdl|librt|libresolv|libcrypt|libz)\.so' \
         | grep -v "^$PHPRT_HOME/" || true)"
   if [ -n "$bad" ]; then
     warn "${f#"$PHPRT_HOME"/} 借用了安装根以外的库:"; printf '      %s\n' $bad; ldd_bad=1; fail=1
