@@ -38,7 +38,21 @@ TOOLS="$PHPRT_HOME/tools"
 DOWNLOADS="$PHPRT_HOME/downloads"
 SRCDIR="$PHPRT_HOME/build"
 LOGS_DIR="$PHPRT_HOME/logs"
-CONFIG="${PHPRT_CONFIG:-$PHPRT_HOME/config.conf}"
+# 一个 PHP 版本一份配置：<安装根>/configs/php-<版本>.conf
+# 优先级：PHPRT_CONFIG > PHPRT_PHP_VERSION > configs/default > 旧布局 config.conf
+resolve_config() {
+  local c
+  if [ -n "${PHPRT_CONFIG:-}" ]; then printf '%s\n' "$PHPRT_CONFIG"; return; fi
+  if [ -n "${PHPRT_PHP_VERSION:-}" ]; then
+    printf '%s/configs/php-%s.conf\n' "$PHPRT_HOME" "$PHPRT_PHP_VERSION"; return
+  fi
+  if [ -e "$PHPRT_HOME/configs/default" ]; then
+    c="$(readlink -f "$PHPRT_HOME/configs/default")"
+    [ -n "$c" ] && { printf '%s\n' "$c"; return; }
+  fi
+  printf '%s/config.conf\n' "$PHPRT_HOME"
+}
+CONFIG="$(resolve_config)"
 
 # 一次构建 = 一个 RUN_ID = 一个日志目录；模块作为子进程时继承同一个值
 RUN_ID="${PHPRT_RUN_ID:-$(date '+%Y-%m-%d_%H-%M-%S')}"
@@ -71,7 +85,8 @@ die()   { printf '%s错误:%s %s\n' "$C_E" "$C_R" "$*" >&2; _rec "错误: $*"; e
 short() { printf '%s\n' "${1#"$PHPRT_HOME"/}"; }
 
 load_config() {
-  [ -f "$CONFIG" ] || die "缺少配置: $CONFIG（先运行 ./install.sh，它会把配置写到安装根）"
+  [ -f "$CONFIG" ] || die "缺少配置: $CONFIG
+  （先运行 ./install.sh；多版本时用 --php <版本>，或用 phprt build --php <版本>）"
   # shellcheck disable=SC1090
   . "$CONFIG"
   [ -n "${PHP_VERSION:-}" ] || die "config.conf 里 PHP_VERSION 不能为空（见 lib/versions/）"

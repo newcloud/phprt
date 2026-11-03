@@ -16,6 +16,7 @@
 #    ./build.sh --prune          删除没有任何 PHP 版本引用的依赖/工具目录（--yes 免确认）
 #    ./build.sh --jobs 8         指定并行度（默认 nproc）
 #    ./build.sh --prefix DIR     换一个安装根（等价 PHPRT_HOME=DIR）
+#    ./build.sh --php 8.6.0-dev  指定要构建的 PHP 版本（读 configs/php-<版本>.conf）
 #
 #  开关与版本/下载地址都在 config.conf 和 lib/versions/，本文件只做解析与调度。
 # =============================================================================
@@ -27,6 +28,8 @@ while [ "$_i" -lt "${#_argv[@]}" ]; do
   case "${_argv[$_i]}" in
     --prefix)    PHPRT_HOME="${_argv[$((_i + 1))]:-}"; export PHPRT_HOME; _i=$((_i + 2)) ;;
     --prefix=*)  PHPRT_HOME="${_argv[$_i]#*=}"; export PHPRT_HOME; _i=$((_i + 1)) ;;
+    --php)       PHPRT_PHP_VERSION="${_argv[$((_i + 1))]:-}"; export PHPRT_PHP_VERSION; _i=$((_i + 2)) ;;
+    --php=*)     PHPRT_PHP_VERSION="${_argv[$_i]#*=}"; export PHPRT_PHP_VERSION; _i=$((_i + 1)) ;;
     *)           _i=$((_i + 1)) ;;
   esac
 done
@@ -47,6 +50,8 @@ while [ $# -gt 0 ]; do
     -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
     --prefix)  shift 2 ;;   # 已在上面处理
     --prefix=*) shift ;;
+    --php)     shift 2 ;;   # 已在上面处理
+    --php=*)   shift ;;
     --offline) export OFFLINE=1; shift ;;
     --rebuild) export REBUILD=1; shift ;;
     --force)   export FORCE=1; export REBUILD=1; shift ;;

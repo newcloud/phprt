@@ -34,13 +34,14 @@ VERIFY_INI="$PHPRT_HOME/php${PHP_VERSION}_default.ini"
 
 log "1) 安装根"
 printf '    %s\n' "$PHPRT_HOME"
-for f in "php-$PHP_VERSION/bin/php" config.conf "php${PHP_VERSION}_default.ini" downloads composer.phar; do
+for f in "php-$PHP_VERSION/bin/php" "php${PHP_VERSION}_default.ini" downloads; do
   if [ -e "$PHPRT_HOME/$f" ]; then
     printf '    ✓ %s\n' "$f"
   else
     printf '    ✗ %s 缺失\n' "$f"; fail=1
   fi
 done
+[ "${ENABLE_COMPOSER:-0}" = 1 ] && { [ -f "$PHPRT_HOME/composer.phar" ] && printf '    ✓ composer.phar\n' || { printf '    ✗ composer.phar 缺失\n'; fail=1; }; }
 run_php -v | head -1 | sed 's/^/    /' || fail=1
 
 log "2) 依赖目录记录（php-$PHP_VERSION/.phprt-deps）"

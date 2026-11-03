@@ -22,7 +22,8 @@ ensure_clean_target php "$PREFIX"
 TAR="$(basename "$PHP_URL")"
 fetch "$PHP_URL" "$DOWNLOADS/$TAR" "${PHP_SHA256:-}"
 
-SRC="$SRCDIR/php-$PHP_VERSION"
+# 正式包解压出来是 php-<版本>/；GitHub 分支包是 php-src-<分支>/，用 PHP_SRC_DIR 指定
+SRC="$SRCDIR/${PHP_SRC_DIR:-php-$PHP_VERSION}"
 if [ "$REBUILD" = 1 ] && [ -d "$SRC" ]; then
   log "复用源码目录 $SRC"
   ( cd "$SRC" && make distclean >/dev/null 2>&1 || true )
@@ -30,7 +31,11 @@ else
   rm -rf "$SRC"
   log "解压 $TAR -> build/"
   extract "$DOWNLOADS/$TAR" "$SRCDIR"
-  [ -d "$SRC" ] || die "解压后未找到 $SRC"
+  if [ ! -d "$SRC" ]; then
+    # 兜底：src/ 下唯一一个带 configure 的 php* 目录
+    SRC="$(find "$SRCDIR" -maxdepth 2 -type f -name configure -path '*php*' -printf '%h\n' 2>/dev/null | head -1)"
+    [ -n "$SRC" ] && [ -d "$SRC" ] || die "解压后没找到 PHP 源码目录（src/ 里没有 configure）"
+  fi
 fi
 
 D_OPENSSL="$(dep_dir_of openssl)"

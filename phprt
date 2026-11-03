@@ -55,11 +55,22 @@ cmd_list() {
   if [ -z "$vers" ]; then
     printf '  还没有编译好的 PHP 版本\n'
   else
-    printf '\n%-12s %s\n' "版本" "路径"
-    local v
+    local def=""
+    [ -e "$h/configs/default" ] && def="$(basename "$(readlink -f "$h/configs/default")" | sed 's/^php-//; s/\.conf$//')"
+    printf '\n%-12s %-8s %-9s %s\n' "版本" "默认" "占用" "配置文件"
+    local v cfg prof size mark
     while IFS= read -r v; do
       [ -n "$v" ] || continue
-      printf '%-12s %s\n' "$v" "$h/php-$v"
+      cfg="$h/configs/php-$v.conf"
+      if [ -f "$cfg" ]; then
+        prof="$(grep -c '^ENABLE_[A-Z0-9_]*=1' "$cfg" 2>/dev/null || echo 0)"
+        prof="$prof 个开关"
+      else
+        prof="无配置"
+      fi
+      size="$(du -sh "$h/php-$v" 2>/dev/null | cut -f1)"
+      mark=""; [ "$v" = "$def" ] && mark="←"
+      printf '%-12s %-8s %-9s %s\n' "$v" "$mark" "$size" "$prof"
     done <<< "$vers"
     local inis
     inis="$(ls -1 "$h"/php*_*.ini 2>/dev/null | xargs -rn1 basename 2>/dev/null | tr '\n' ' ')"
@@ -225,7 +236,24 @@ cmd_exec() {
 }
 
 cmd_build()   { PHPRT_HOME="$(find_home)" exec bash "$HERE/build.sh" "$@"; }
-cmd_verify()  { PHPRT_HOME="$(find_home)" exec bash "$HERE/lib/verify.sh" "$@"; }
+cmd_verify() {
+  local h ver=""
+  h="$(find_home)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --root)  h="${2:-}"; shift 2 ;;
+      --root=*) h="${1#*=}"; shift ;;
+      --php)   ver="${2:-}"; shift 2 ;;
+      --php=*) ver="${1#*=}"; shift ;;
+      *)       die "未知参数: $1" ;;
+    esac
+  done
+  if [ -n "$ver" ]; then
+    PHPRT_HOME="$h" PHPRT_PHP_VERSION="$ver" exec bash "$HERE/lib/verify.sh"
+  else
+    PHPRT_HOME="$h" exec bash "$HERE/lib/verify.sh"
+  fi
+}
 
 cmd_clean() {
   local all=0

@@ -8,6 +8,8 @@
 #    ./install.sh --local             装到当前目录下的 .phprt（只给这个项目用）
 #    ./install.sh --prefix /opt/php   装到指定目录
 #    ./install.sh --php 8.5.12        指定版本（见 lib/versions/）
+#    ./install.sh --profile minimal   最小档：所有 ENABLE_*=0（只 cli/opcache，最快）
+#    ./install.sh --set-default       把这个版本设为安装根的默认版本
 #    ./install.sh --ini dev           用内置 ini 预设（default / dev / prod）
 #    ./install.sh --ini-local         把预设复制成项目里的 ./php.ini 再指向它
 #    ./install.sh --ini /path/php.ini 用已有的 ini 文件
@@ -31,6 +33,8 @@ INI_OPT=""
 INI_LOCAL=0
 NO_APP=0
 KEEP_SRC=0
+PROFILE=full
+SET_DEFAULT=0
 ASSUME_YES=0
 FORCE=0
 OFFLINE=0
@@ -50,6 +54,9 @@ while [ $# -gt 0 ]; do
     --ini-local) INI_LOCAL=1; shift ;;
     --no-app|--no-entry) NO_APP=1; shift ;;
     --keep-src)  KEEP_SRC=1; shift ;;
+    --profile)   PROFILE="${2:-}"; shift 2 ;;
+    --profile=*) PROFILE="${1#*=}"; shift ;;
+    --set-default) SET_DEFAULT=1; shift ;;
     -y|--yes)    ASSUME_YES=1; shift ;;
     --force)     FORCE=1; shift ;;
     --offline)   OFFLINE=1; shift ;;
@@ -178,17 +185,46 @@ else
   esac
 fi
 
-# --------------------------------------------------- 4. 合成 config.conf ----
-say "写配置 -> $PHPRT_HOME/config.conf"
-mkdir -p "$PHPRT_HOME"
+# ------------------------------------------- 4. 写 configs/php-<版本>.conf ----
+case "$PROFILE" in
+  full|minimal) ;;
+  *) bad "--profile 只支持 full / minimal（给的是: $PROFILE）" ;;
+esac
+
+CFG_DIR="$PHPRT_HOME/configs"
+CFG="$CFG_DIR/php-$PHP_VERSION.conf"
+mkdir -p "$CFG_DIR"
+
+# 旧布局（单个 config.conf）自动迁移，并把 config.conf 留成指向 default 的软链
+if [ ! -e "$CFG_DIR/default" ] && [ -f "$PHPRT_HOME/config.conf" ] && [ ! -L "$PHPRT_HOME/config.conf" ]; then
+  old_ver="$(sed -n 's/^PHP_VERSION=//p' "$PHPRT_HOME/config.conf" | tr -d '"' | head -1)"
+  old_ver="${old_ver:-unknown}"
+  mv -f "$PHPRT_HOME/config.conf" "$CFG_DIR/php-$old_ver.conf"
+  ln -sfn "php-$old_ver.conf" "$CFG_DIR/default"
+  ln -sfn "configs/default" "$PHPRT_HOME/config.conf"
+  good "旧配置已迁移到 configs/php-$old_ver.conf（config.conf 现在指向 default）"
+fi
+
+say "写配置 -> $CFG（$PROFILE）"
 {
-  printf '# 由 install.sh 生成：lib/versions/%s + config.conf\n' "$(basename "$V_FILE")"
+  printf '# 由 install.sh 生成：lib/versions/%s + config.conf（%s 档）\n' "$(basename "$V_FILE")" "$PROFILE"
   cat "$V_FILE"
   printf '\n'
-  cat "$HERE/config.conf"
-} > "$PHPRT_HOME/config.conf.tmp"
-mv -f "$PHPRT_HOME/config.conf.tmp" "$PHPRT_HOME/config.conf"
-good "PHP $PHP_VERSION，开关见 $PHPRT_HOME/config.conf"
+  if [ "$PROFILE" = minimal ]; then
+    # 最小档：所有依赖/扩展开关关掉，只留 PHP 本体里零依赖的部分
+    sed -E 's/^(ENABLE_[A-Z0-9_]+)=1/\1=0/' "$HERE/config.conf"
+  else
+    cat "$HERE/config.conf"
+  fi
+} > "$CFG.tmp"
+mv -f "$CFG.tmp" "$CFG"
+
+if [ "$SET_DEFAULT" = 1 ] || [ ! -e "$CFG_DIR/default" ]; then
+  ln -sfn "php-$PHP_VERSION.conf" "$CFG_DIR/default"
+  good "默认版本 -> $PHP_VERSION"
+fi
+[ -e "$PHPRT_HOME/config.conf" ] || ln -sfn "configs/default" "$PHPRT_HOME/config.conf"
+good "PHP $PHP_VERSION（$PROFILE 档），其它版本不受影响"
 
 # ------------------------------------------------------ 5. 预下载包播种 ----
 seed_downloads() {
@@ -241,7 +277,8 @@ BUILD_ARGS=()
 [ -n "$JOBS_OPT" ] && BUILD_ARGS+=(--jobs "$JOBS_OPT")
 
 # 直接交给 build.sh：配置没变它秒过，改了开关/版本它自己会重编
-PHPRT_HOME="$PHPRT_HOME" bash "$HERE/build.sh" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
+PHPRT_HOME="$PHPRT_HOME" PHPRT_CONFIG="$CFG" \
+  bash "$HERE/build.sh" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
   || bad "编译失败（见 $PHPRT_HOME/logs/）"
 
 # 装完把解压的源码清掉（约占 1G；下载包和编译结果都保留）
