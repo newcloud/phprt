@@ -50,8 +50,8 @@ if [ -n "$PHPRT_INI" ]; then
   export PHPRC="$PHPRT_INI"
 elif [ -n "${PHPRC:-}" ]; then
   export PHPRC
-elif [ -f "$PHPRT_ROOT/php$PHPRT_PHP_default.ini" ]; then
-  export PHPRC="$PHPRT_ROOT/php$PHPRT_PHP_default.ini"
+elif [ -f "$PHPRT_ROOT/php${PHPRT_PHP}_default.ini" ]; then
+  export PHPRC="$PHPRT_ROOT/php${PHPRT_PHP}_default.ini"
 else
   export PHPRC="$PREFIX/etc/php.ini"
 fi
