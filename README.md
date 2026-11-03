@@ -420,4 +420,11 @@ downloads/              预下载包（不进 git）
 
 ## License
 
-[MIT](LICENSE) © 2026 newcloud
+[Mozilla Public License 2.0](LICENSE) © 2026 newcloud
+
+MPL-2.0 是**文件级** copyleft：
+
+- 改了 `phprt` 自己的文件（或基于它新建的文件），这些文件要按 MPL-2.0 开源；
+- 但把它当工具用、嵌进你自己的项目（Larger Work，比如一个 PHP 应用），
+  你的项目**不需要**开源，可以用任何协议；
+- 附带明确的专利授权（MIT 没有这一条）。
