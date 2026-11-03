@@ -196,7 +196,7 @@ run_module() { # run_module <name>
 
 # 模块顺序固定（名字 = lib/modules/<名字>.sh 的文件名）
 ALL_MODULES=(openssl zlib libxml2 sqlite libcurl oniguruma libzip
-             icu libpng jpeg freetype webp aom avif libffi libyaml
+             icu libpng jpeg freetype libwebp libaom libavif libffi libyaml
              php redis xdebug apcu yaml swoole composer)
 
 enabled_module() { # enabled_module <name>
@@ -211,8 +211,8 @@ enabled_module() { # enabled_module <name>
     php)       : ;;
     icu)       [ "${ENABLE_ICU:-0}" = 1 ] ;;
     libpng|jpeg|freetype) [ "${ENABLE_GD:-0}" = 1 ] ;;
-    webp)      [ "${ENABLE_WEBP:-0}" = 1 ] ;;
-    aom|avif)  [ "${ENABLE_AVIF:-0}" = 1 ] ;;
+    libwebp)   [ "${ENABLE_WEBP:-0}" = 1 ] ;;
+    libaom|libavif) [ "${ENABLE_AVIF:-0}" = 1 ] ;;
     libffi)    [ "${ENABLE_FFI:-0}" = 1 ] ;;
     libyaml)   [ "${ENABLE_YAML:-0}" = 1 ] ;;
     redis)     [ "${ENABLE_REDIS:-0}" = 1 ] ;;
