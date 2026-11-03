@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  phprt —— 管理命令（装在仓库里，不复制进安装根）
+#
+#    phprt list                 已安装的 PHP 版本 + 默认版本 + 当前项目的入口
+#    phprt init                 在当前目录生成 myapp.sh（版本 + php.ini 固化进去）
+#    phprt link [版本]           在当前目录建 ./myphp 软链（不想用 myapp.sh 时）
+#    phprt build [参数...]       编译/增量（参数见 ./build.sh --help）
+#    phprt verify               安装结果自检
+#    phprt clean [--all]        清 build/（--all 连 downloads/）
+#    phprt home                 打印当前使用的安装根
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+VERSIONS_DIR="$HERE/lib/versions"
+
+die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
+say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+good() { printf '\033[1;32m  ok\033[0m %s\n' "$*"; }
+
+# 安装根：环境变量 > 从当前目录往上找 .phprt > ~/.phprt
+find_home() {
+  if [ -n "${PHPRT_HOME:-}" ]; then
+    printf '%s\n' "${PHPRT_HOME%/}"; return
+  fi
+  local d="$PWD"
+  while :; do
+    if [ -d "$d/.phprt/bin" ]; then printf '%s\n' "$d/.phprt"; return; fi
+    [ "$d" = "/" ] && break
+    d="$(dirname "$d")"
+  done
+  printf '%s\n' "$HOME/.phprt"
+}
+
+installed_versions() { # 已安装的版本，按版本号从新到旧
+  local h="$1" d
+  for d in "$h"/php-*; do
+    [ -x "$d/bin/php" ] || continue
+    [ -f "$d/.phprt-stamp-php" ] || continue
+    basename "$d" | sed 's/^php-//'
+  done | sort -Vr
+}
+
+latest_installed() {
+  installed_versions "$1" | head -1
+}
+
+cmd_list() {
+  local h; h="$(find_home)"
+  printf '安装根: %s\n' "$h"
+  [ -d "$h" ] || { printf '  （还没安装，先跑 ./install.sh）\n'; return 0; }
+
+  local vers; vers="$(installed_versions "$h")"
+  if [ -z "$vers" ]; then
+    printf '  还没有编译好的 PHP 版本\n'
+  else
+    local def=""
+    [ -e "$h/bin/myphp" ] && def="$(basename "$(readlink -f "$h/bin/myphp")" | sed 's/^myphp-//')"
+    printf '\n%-12s %-10s %s\n' "版本" "默认" "路径"
+    local v mark
+    while IFS= read -r v; do
+      [ -n "$v" ] || continue
+      mark=""; [ "$v" = "$def" ] && mark="←"
+      printf '%-12s %-10s %s\n' "$v" "$mark" "$h/php-$v"
+    done <<< "$vers"
+    printf '\n'
+  fi
+
+  # 当前项目用什么
+  if [ -f "$PWD/myapp.sh" ]; then
+    printf '当前项目: %s/myapp.sh\n' "$PWD"
+    sed -n 's/^PHPRT_PHP=/  PHP=/p; s/^PHPRT_INI=/  ini=/p; s/^PHPRT_ROOT=/  root=/p' "$PWD/myapp.sh"
+  elif [ -L "$PWD/myphp" ]; then
+    printf '当前项目: ./myphp -> %s\n' "$(readlink "$PWD/myphp")"
+  fi
+
+  # 磁盘占用
+  local sizes
+  sizes="$(du -sh "$h" 2>/dev/null | cut -f1)"
+  [ -n "$sizes" ] && printf '\n占用: %s（%s）\n' "$sizes" "$h"
+  return 0
+}
+
+render_app() { # render_app <out> <root> <php> <ini> <args>
+  local out="$1" tpl
+  tpl="$(cat "$HERE/lib/app.tmpl")"
+  tpl="${tpl//@PHPRT_ROOT@/$2}"
+  tpl="${tpl//@PHP_VERSION@/$3}"
+  tpl="${tpl//@PHP_INI@/$4}"
+  tpl="${tpl//@PHP_ARGS@/$5}"
+  printf '%s\n' "$tpl" > "$out.tmp"
+  chmod +x "$out.tmp"
+  mv -f "$out.tmp" "$out"
+}
+
+cmd_init() {
+  local h; h="$(find_home)"
+  local ver="" ini="default" ini_local=0 name="myapp.sh" force=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --php)       ver="${2:-}"; shift 2 ;;
+      --php=*)     ver="${1#*=}"; shift ;;
+      --ini)       ini="${2:-}"; shift 2 ;;
+      --ini=*)     ini="${1#*=}"; shift ;;
+      --ini-local) ini_local=1; shift ;;
+      --name)      name="${2:-}"; shift 2 ;;
+      --name=*)    name="${1#*=}"; shift ;;
+      --root)      h="${2:-}"; shift 2 ;;
+      --root=*)    h="${1#*=}"; shift ;;
+      --force)     force=1; shift ;;
+      *) die "未知参数: $1" ;;
+    esac
+  done
+
+  [ -d "$h" ] || die "安装根不存在: $h（先跑 install.sh）"
+  local vers; vers="$(installed_versions "$h")"
+  if [ -z "$vers" ]; then
+    die "$h 里没有编译好的 PHP（先跑 install.sh）"
+  fi
+  if [ -z "$ver" ]; then
+    ver="$(latest_installed "$h")"
+  fi
+  printf '%s\n' "$vers" | grep -qx "$ver" || die "没装 PHP $ver（已装: $(printf '%s' "$vers" | tr '\n' ' ')）"
+
+  local app="$PWD/$name"
+  if [ -f "$app" ] && ! head -3 "$app" | grep -q '由 phprt 生成'; then
+    [ "$force" = 1 ] || die "$app 已存在且不是 phprt 生成的（加 --force 覆盖）"
+  fi
+
+  # 安装根在项目里就用相对路径
+  local root_value="$h"
+  case "$h/" in
+    "$PWD"/*) root_value="./${h#"$PWD"/}" ;;
+  esac
+
+  # ini
+  local ini_value="" preset=""
+  case "$ini" in
+    default|dev|prod) preset="$ini" ;;
+    *) [ -f "$ini" ] || die "ini 文件不存在: $ini"; ini_value="$ini" ;;
+  esac
+  if [ -n "$preset" ] && [ "$ini_local" = 1 ]; then
+    cp -f "$HERE/ini/$preset.ini" "$PWD/php.ini"
+    ini_value="./php.ini"
+    good "php.ini -> $PWD/php.ini（来自 $preset 预设）"
+  elif [ -n "$preset" ] && [ "$preset" != "default" ]; then
+    [ -f "$h/ini/$preset.ini" ] || die "安装根里没有 ini/$preset.ini（重跑 install.sh 会补上）"
+    ini_value="$h/ini/$preset.ini"
+  fi
+
+  render_app "$app" "$root_value" "$ver" "$ini_value" ""
+  good "$app  PHP=$ver ${ini_value:+ini=$ini_value}"
+  printf '  用法: ./%s -v\n' "$name"
+}
+
+cmd_link() {
+  local h; h="$(find_home)"
+  local ver="${1:-}"
+  [ -d "$h" ] || die "安装根不存在: $h（先跑 install.sh）"
+  [ -n "$ver" ] || ver="$(latest_installed "$h")"
+  [ -n "$ver" ] || die "$h 里没有编译好的 PHP"
+
+  local target="$h/bin/myphp-$ver"
+  [ -x "$target" ] || die "没有 $target"
+  # 安装根在项目里就用相对目标
+  local link_target="$target"
+  case "$h/" in
+    "$PWD"/*) link_target="./${target#"$PWD"/}" ;;
+  esac
+  if [ -e "$PWD/myphp" ] && [ ! -L "$PWD/myphp" ]; then
+    die "$PWD/myphp 是个普通文件，不覆盖"
+  fi
+  ln -sfn "$link_target" "$PWD/myphp"
+  good "$PWD/myphp -> $link_target"
+}
+
+cmd_build()   { PHPRT_HOME="$(find_home)" exec bash "$HERE/build.sh" "$@"; }
+cmd_verify()  { PHPRT_HOME="$(find_home)" exec bash "$HERE/lib/verify.sh" "$@"; }
+
+cmd_clean() {
+  local all=0
+  [ "${1:-}" = "--all" ] && all=1
+  local h; h="$(find_home)"
+  if [ -d "$h/build" ]; then
+    say "删除 $h/build"
+    rm -rf "${h:?}/build"/*
+  fi
+  if [ "$all" = 1 ] && [ -d "$h/downloads" ]; then
+    say "删除 $h/downloads"
+    rm -rf "${h:?}/downloads"/*
+  fi
+  good "已清理"
+}
+
+main() {
+  local cmd="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$cmd" in
+    list|ls)        cmd_list ;;
+    init)           cmd_init "$@" ;;
+    link)           cmd_link "$@" ;;
+    build)          cmd_build "$@" ;;
+    verify)         cmd_verify "$@" ;;
+    clean)          cmd_clean "$@" ;;
+    home)           find_home ;;
+    ""|-h|--help)   awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0" ;;
+    --version|-V)   printf 'phprt (repo %s)\n' "$HERE" ;;
+    *)              die "未知子命令: $cmd（--help 查看用法）" ;;
+  esac
+}
+
+main "$@"

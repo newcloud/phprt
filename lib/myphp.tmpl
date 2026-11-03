@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  myphp-<版本> —— 由 build.sh 生成（模板：lib/myphp.tmpl）
+#
+#  这是某个 PHP 版本的直接入口：设好 PHPRC / LD_LIBRARY_PATH / extension_dir
+#  然后 exec 真正的 php。路径全部按自身位置算，整个安装根搬走也能用。
+#
+#    myphp-8.5.12 -v                  当普通 php 用
+#    myphp-8.5.12 composer install    用本地 composer
+#    myphp-8.5.12 --env               看它设了哪些环境变量
+#    myphp-8.5.12 --deps              看链接了哪些依赖库
+#
+#  项目里一般不用直接调它，而是用 phprt 生成的 myapp.sh（可以在那里指定
+#  别的 php.ini / 额外的 -d）。myapp.sh 会 export PHPRC 再 exec 本脚本，
+#  所以下面的 PHPRC / PHP_INI_SCAN_DIR 都用「未设置才填默认」的写法。
+# =============================================================================
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+HOME_DIR="$(dirname "$(dirname "$SELF")")"
+PREFIX="$HOME_DIR/php-@PHP_VERSION@"
+
+if [ ! -x "$PREFIX/bin/php" ]; then
+  echo "PHP 尚未安装: $PREFIX/bin/php（在仓库里跑 ./install.sh）" >&2
+  exit 1
+fi
+
+# 依赖库目录（构建时按相对安装根的路径写死，运行时再拼上实际位置）
+DEP_LIB_DIRS=(
+@DEP_LIB_DIRS@
+)
+
+: "${PHPRC:=$PREFIX/etc/php.ini}"
+: "${PHP_INI_SCAN_DIR:=$PREFIX/etc/conf.d}"
+export PHPRC PHP_INI_SCAN_DIR
+export PATH="$PREFIX/bin:$PATH"
+
+_ld=""
+for _d in "${DEP_LIB_DIRS[@]}"; do
+  [ -d "$_d" ] && _ld+="$_d:"
+done
+export LD_LIBRARY_PATH="${_ld%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# 自编译的 OpenSSL 用它自己安装目录里的配置（install_ssldirs 装出来的）
+if [ -z "${OPENSSL_CONF:-}" ]; then
+  _ossl_conf="$HOME_DIR/deps/openssl-@OPENSSL_VERSION@/etc/ssl/openssl.cnf"
+  [ -f "$_ossl_conf" ] && export OPENSSL_CONF="$_ossl_conf"
+fi
+
+# 扩展目录按当前实际位置算，覆盖 php.ini 里的绝对路径
+EXT_DIR=""
+for _c in "$PREFIX"/lib/php/extensions/*/; do
+  [ -d "$_c" ] && { EXT_DIR="${_c%/}"; break; }
+done
+PHP_ARGS=()
+[ -n "$EXT_DIR" ] && PHP_ARGS=(-d "extension_dir=$EXT_DIR")
+
+case "${1:-}" in
+  --env)
+    printf 'PHP=%s\nPHPRC=%s\nPHP_INI_SCAN_DIR=%s\nEXT_DIR=%s\nOPENSSL_CONF=%s\nLD_LIBRARY_PATH=%s\nPATH=%s\n' \
+      "$PREFIX/bin/php" "$PHPRC" "$PHP_INI_SCAN_DIR" "$EXT_DIR" "${OPENSSL_CONF:-}" \
+      "$LD_LIBRARY_PATH" "$PATH"
+    exit 0 ;;
+  --deps)
+    printf '%s\n' "$PREFIX"
+    printf '%s\n' "${DEP_LIB_DIRS[@]}"
+    exit 0 ;;
+  composer)
+    shift
+    [ -f "$HOME_DIR/bin/composer.phar" ] || {
+      echo "Composer 尚未安装（需要 ENABLE_OPENSSL=1 且 ENABLE_COMPOSER=1）" >&2; exit 1; }
+    exec "$PREFIX/bin/php" "${PHP_ARGS[@]}" "$HOME_DIR/bin/composer.phar" "$@" ;;
+esac
+
+exec "$PREFIX/bin/php" "${PHP_ARGS[@]}" "$@"
