@@ -156,6 +156,13 @@ cmd_init() {
     [ -f "$ini_value" ] || die "缺少 $ini_value（先 phprt build）"
   fi
 
+  # ini 落在项目里就写相对路径（和 PHPRT_ROOT 保持一致），项目整体搬走也能用
+  if [ -n "$ini_value" ]; then
+    case "$ini_value/" in
+      "$PWD"/*) ini_value="./${ini_value#"$PWD"/}" ;;
+    esac
+  fi
+
   render_app "$app" "$root_value" "$ver" "$ini_value" ""
   good "$app  PHP=$ver ${ini_value:+ini=$ini_value}"
   printf '  用法: ./%s -v\n' "$name"

@@ -300,6 +300,11 @@ else
     [ -f "$INI_VALUE_FINAL" ] || bad "缺少 $INI_VALUE_FINAL（先跑一次 build）"
   fi
 
+  # ini 落在项目里就写相对路径（和 PHPRT_ROOT 保持一致），项目整体搬走也能用
+  case "$INI_VALUE_FINAL/" in
+    "$PROJECT"/*) INI_VALUE_FINAL="./${INI_VALUE_FINAL#"$PROJECT"/}" ;;
+  esac
+
   APP="$PROJECT/myphp"
   if [ -L "$APP" ]; then
     # phprt link 建的软链：直接换成生成的脚本
