@@ -23,15 +23,18 @@ run_php() { # run_php <参数...>
   done
   local pargs=()
   [ -n "$ext" ] && pargs=(-d "extension_dir=$ext")
-  PHPRC="$PREFIX/etc/php.ini" PHP_INI_SCAN_DIR="$PREFIX/etc/conf.d" \
+  PHPRC="${VERIFY_INI:-$PREFIX/etc/php.ini}" PHP_INI_SCAN_DIR="$PREFIX/etc/conf.d" \
   LD_LIBRARY_PATH="${ld%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   OPENSSL_CONF="${ossl:-}" \
   "$PREFIX/bin/php" ${pargs[@]+"${pargs[@]}"} "$@"
 }
 
+VERIFY_INI="$PHPRT_HOME/php${PHP_VERSION}_default.ini"
+[ -f "$VERIFY_INI" ] || VERIFY_INI="$PREFIX/etc/php.ini"
+
 log "1) 安装根"
 printf '    %s\n' "$PHPRT_HOME"
-for f in "php-$PHP_VERSION/bin/php" config.conf ini/default.ini downloads composer.phar; do
+for f in "php-$PHP_VERSION/bin/php" config.conf "php${PHP_VERSION}_default.ini" downloads composer.phar; do
   if [ -e "$PHPRT_HOME/$f" ]; then
     printf '    ✓ %s\n' "$f"
   else

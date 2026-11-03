@@ -44,12 +44,16 @@ if [ ! -x "$PREFIX/bin/php" ]; then
 fi
 
 # ------------------------------------------------------------- 环境设置 ----
-# myphp 里指定了 ini 就用它；没指定则沿用外部 PHPRC，再没有就用安装默认
+# 优先用 myphp 里指定的 ini；否则用安装根里的 php<版本>_default.ini；
+# 再没有才退到 PHP 自带的那份
 if [ -n "$PHPRT_INI" ]; then
   export PHPRC="$PHPRT_INI"
-else
-  : "${PHPRC:=$PREFIX/etc/php.ini}"
+elif [ -n "${PHPRC:-}" ]; then
   export PHPRC
+elif [ -f "$PHPRT_ROOT/php$PHPRT_PHP_default.ini" ]; then
+  export PHPRC="$PHPRT_ROOT/php$PHPRT_PHP_default.ini"
+else
+  export PHPRC="$PREFIX/etc/php.ini"
 fi
 : "${PHP_INI_SCAN_DIR:=$PREFIX/etc/conf.d}"
 export PHP_INI_SCAN_DIR

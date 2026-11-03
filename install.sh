@@ -164,7 +164,7 @@ if [ -n "$INI_OPT" ]; then
   [ "$INI_LOCAL" = 1 ] && INI_PRESET="${INI_PRESET:-default}"
 else
   sel="$(menu "php.ini 用哪个？" 1 \
-    "默认（安装根里的 default.ini）" \
+    "默认（安装根里的 php<版本>_default.ini）" \
     "dev    显示所有错误、关 opcache" \
     "prod   不显示错误、开 opcache" \
     "用已有的 ini 文件（输入路径）" \
@@ -235,8 +235,6 @@ if [ -d "$HERE/downloads" ]; then
 fi
 
 # --------------------------------------------------------------- 6. 编译 ----
-mkdir -p "$PHPRT_HOME/ini"
-cp -a "$HERE/ini/." "$PHPRT_HOME/ini/"
 
 BUILD_ARGS=()
 [ "$OFFLINE" = 1 ] && BUILD_ARGS+=(--offline)
@@ -286,15 +284,20 @@ else
 
   # 决定 ini：预设 → 安装根里的 ini；项目内新建 → ./php.ini；外部路径 → 原样
   INI_VALUE_FINAL=""
+  preset="${INI_PRESET:-default}"
   if [ "$INI_LOCAL" = 1 ]; then
-    cp -f "$HERE/ini/${INI_PRESET:-default}.ini" "$PROJECT/php.ini"
+    src="$HERE/ini/$preset.ini"
+    [ -f "$src" ] || src="$PHPRT_HOME/php${PHP_VERSION}_${preset}.ini"
+    [ -f "$src" ] || bad "找不到预设 ini: $preset"
+    cp -f "$src" "$PROJECT/php.ini"
     INI_VALUE_FINAL="./php.ini"
-    good "项目 php.ini -> $PROJECT/php.ini（来自 ${INI_PRESET:-default} 预设）"
+    good "项目 php.ini -> $PROJECT/php.ini（来自 $preset）"
   elif [ -n "$INI_VALUE" ]; then
     [ -f "$INI_VALUE" ] || bad "ini 文件不存在: $INI_VALUE"
     INI_VALUE_FINAL="$INI_VALUE"
-  elif [ "${INI_PRESET:-default}" != "default" ]; then
-    INI_VALUE_FINAL="$PHPRT_HOME/ini/$INI_PRESET.ini"
+  else
+    INI_VALUE_FINAL="$PHPRT_HOME/php${PHP_VERSION}_${preset}.ini"
+    [ -f "$INI_VALUE_FINAL" ] || bad "缺少 $INI_VALUE_FINAL（先跑一次 build）"
   fi
 
   APP="$PROJECT/myphp"

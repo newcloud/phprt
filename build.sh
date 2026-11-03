@@ -125,6 +125,14 @@ do_prune() {
     done < "$f"
   done
 
+  # 已卸载版本留下的 php<版本>_*.ini
+  for f in "$PHPRT_HOME"/php*_*.ini; do
+    [ -f "$f" ] || continue
+    n="$(basename "$f" | sed -n 's/^php\(.*\)_[A-Za-z0-9_]*\.ini$/\1/p')"
+    [ -n "$n" ] || continue
+    [ -d "$PHPRT_HOME/php-$n" ] || cand+=("$f")
+  done
+
   for d in "$DEPS"/* "$TOOLS"/* "$PHPRT_HOME"/php-*; do
     [ -d "$d" ] || continue
     hit=0
@@ -139,7 +147,7 @@ do_prune() {
     return 0
   fi
 
-  log "以下目录没有被 config.conf 或任何 php-*/ 引用："
+  log "以下目录/文件没有被 config.conf 或任何 php-*/ 引用："
   for d in "${cand[@]}"; do
     printf '    %-40s %s\n' "$(short "$d")" "$(du -sh "$d" 2>/dev/null | cut -f1)"
   done
@@ -234,6 +242,39 @@ fi
 [ "${ENABLE_COMPOSER:-0}" = 1 ] && [ "${ENABLE_OPENSSL:-0}" != 1 ] && \
   warn "ENABLE_COMPOSER=1 但 ENABLE_OPENSSL=0：Composer 下载不了依赖"
 
+# ---------------------------------------------------------- php.ini 生成 ----
+# 每个版本三份：default（以构建产物为底）/ dev / prod，都带上 CA 路径。
+# 只在缺失时生成，不覆盖用户改过的文件（想重置就删掉再 build）。
+gen_inis() {
+  local ver="$PHP_VERSION" ca def name f
+  ca="$(ca_ini_lines)"
+
+  def="$(ini_file "$ver" default)"
+  if [ ! -f "$def" ] && [ -f "$PREFIX/etc/php.ini" ]; then
+    {
+      printf '; phprt 默认 php.ini（PHP %s）\n' "$ver"
+      printf '; ./myphp 和 phprt exec 默认用它；要改默认配置就改这个文件。\n'
+      printf '; 这里不写 extension_dir：由 ./myphp 用 -d 给出，安装根整体搬走也有效。\n\n'
+      grep -vE '^extension_dir[[:space:]]*=' "$PREFIX/etc/php.ini"
+    } > "$def.tmp"
+    mv -f "$def.tmp" "$def"
+  fi
+
+  for name in dev prod; do
+    f="$(ini_file "$ver" "$name")"
+    [ -f "$REPO/ini/$name.ini" ] || continue
+    [ -f "$f" ] && continue
+    {
+      printf '; phprt: PHP %s / %s\n' "$ver" "$name"
+      cat "$REPO/ini/$name.ini"
+      printf '\n[PHP]\n%s\n' "$ca"
+    } > "$f.tmp"
+    mv -f "$f.tmp" "$f"
+  done
+
+  ok "php.ini: $(short "$(ini_file "$ver" default)") · dev · prod"
+}
+
 # ------------------------------------------------------- history/latest ------
 STARTED="$(date '+%Y-%m-%d %H:%M:%S')"
 SECONDS=0
@@ -275,4 +316,6 @@ export SUMMARY_LOG="$LOGS/summary.log"
 for m in "${MODULES_TO_RUN[@]}"; do
   run_module "$m"
 done
+
+gen_inis
 

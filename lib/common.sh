@@ -10,6 +10,7 @@
 #  安装根布局：
 #    composer.phar          Composer（项目里 ./myphp composer ... 用）
 #    ini/                   php.ini 预设（default / dev / prod）
+#    php<版本>_<别名>.ini     php.ini（default/dev/prod，每个版本一套）
 #    php-<版本>/             PHP 本体（每个 PHP 版本一套）
 #    deps/<名字>-<版本>/      依赖库，跨版本共享
 #    tools/<名字>-<版本>/     构建工具（autoconf、perl 核心模块）
@@ -107,6 +108,25 @@ dep_dir_of() { # dep_dir_of <名字>
     perl5core) printf '%s/perl5core-%s\n' "$TOOLS" "$PERL_SHIM_VERSION" ;;
     *) die "未知依赖: $1" ;;
   esac
+}
+
+# 安装根里的 php.ini：php<版本>_<别名>.ini（default / dev / prod / 自定义）
+ini_file() { printf '%s/php%s_%s.ini\n' "$PHPRT_HOME" "$1" "$2"; }
+
+# CA 路径：优先从构建生成的 php.ini 里抄，抄不到就按系统常见位置探测
+ca_ini_lines() {
+  local phpini="$PREFIX/etc/php.ini" ca
+  if [ -f "$phpini" ] && grep -qE '^(openssl\.cafile|curl\.cainfo)' "$phpini"; then
+    grep -E '^(openssl\.cafile|curl\.cainfo)' "$phpini"
+    return 0
+  fi
+  for ca in /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+            /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem; do
+    [ -f "$ca" ] || continue
+    printf 'openssl.cafile = "%s"\ncurl.cainfo = "%s"\n' "$ca" "$ca"
+    return 0
+  done
+  return 0
 }
 
 # 按 config.conf 开关列出本次启用且确实存在的依赖库目录（顺序固定）

@@ -22,6 +22,7 @@ cd ~/myproject && ~/src/phprt/install.sh
 1. **装到哪儿** —— `~/.phprt`（全局共用，推荐）或 `./.phprt`（只本项目，删目录即卸载）
 2. **PHP 版本** —— 清单在 `lib/versions/`，现在只有 8.5.12
 3. **php.ini** —— 默认 / `dev` / `prod` / 已有文件 / 在项目里新建一份
+   （安装根里会生成 `php8.5.12_default.ini`、`php8.5.12_dev.ini`、`php8.5.12_prod.ini`）
 
 非交互（CI、脚本）：
 
@@ -41,7 +42,7 @@ cd ~/myproject && ~/src/phprt/install.sh
 ```
 ~/.phprt/
 ├── composer.phar           Composer（./myphp composer ... 用它）
-├── ini/{default,dev,prod}.ini
+├── php8.5.12_default.ini    php.ini（默认；dev.ini / prod.ini 同目录，按版本命名）
 ├── php-8.5.12/             PHP 本体
 ├── deps/                   依赖库（openssl、zlib、sqlite… 跨版本共享）
 ├── tools/                  autoconf、perl 核心模块（构建期用）
@@ -56,7 +57,7 @@ cd ~/myproject && ~/src/phprt/install.sh
 ```bash
 PHPRT_ROOT=/home/z/.phprt     # 安装根（装到项目里时是 ./.phprt，相对路径）
 PHPRT_PHP=8.5.12              # 用哪个 PHP 版本
-PHPRT_INI=/home/z/.phprt/ini/dev.ini   # 用哪个 php.ini（留空=安装默认）
+PHPRT_INI=/home/z/.phprt/php8.5.12_dev.ini  # 用哪个 php.ini（留空=安装根里的 _default）
 PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 ```
 
@@ -82,7 +83,7 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 ```bash
 ./install.sh --php 8.6.0      # 装到同一个安装根，依赖和下载缓存全部复用
 ./phprt init --php 8.6.0 --force   # 项目切版本（重写 ./myphp 里的 PHPRT_PHP）
-rm -rf ~/.phprt/php-8.5.12
+rm -rf ~/.phprt/php-8.5.12 ~/.phprt/php8.5.12_*.ini
 ./build.sh --prune --yes      # 再把没人引用的依赖清掉
 ```
 
@@ -93,7 +94,7 @@ install.sh          用户入口
 phprt               管理命令（list/init/exec/build/verify/clean）
 build.sh            实际构建调度
 config.conf         开关与依赖版本（不含 PHP 版本）
-ini/                php.ini 预设
+ini/                php.ini 模板（dev/prod；安装时按版本生成到安装根）
 lib/common.sh       路径、下载、stamp
 lib/modules/*.sh    每个依赖一个脚本
 lib/versions/       PHP 版本清单
