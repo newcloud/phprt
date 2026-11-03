@@ -21,8 +21,18 @@
 | `autoconf-2.72.tar.xz` | 1.4M | https://ftp.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz |
 | `perl-5.42.2.tar.xz` | 14M | https://www.cpan.org/src/5.0/perl-5.42.2.tar.xz |
 | `composer-latest-stable.phar` | 3.7M | https://getcomposer.org/download/latest-stable/composer.phar |
+| `freetype-2.13.3.tar.xz` | 2.5M | https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz |
+| `libjpeg-turbo-3.1.2.tar.gz` | 2.4M | https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.2/libjpeg-turbo-3.1.2.tar.gz |
+| `libffi-3.4.8.tar.gz` | 1.4M | https://github.com/libffi/libffi/releases/download/v3.4.8/libffi-3.4.8.tar.gz |
+| `libpng-1.6.50.tar.xz` | 1.1M | https://download.sourceforge.net/libpng/libpng-1.6.50.tar.xz |
+| `yaml-0.2.5.tar.gz` | 596K | https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz |
+| `xdebug-3.5.3.tgz` | 278K | https://pecl.php.net/get/xdebug-3.5.3.tgz |
+| `apcu-5.1.28.tgz` | 92K | https://pecl.php.net/get/apcu-5.1.28.tgz |
+| `yaml-2.3.0.tgz` | 41K | https://pecl.php.net/get/yaml-2.3.0.tgz |
 
-合计约 96M。少几个也能装，只是缺的那个会联网下载。
+合计约 104M。少几个也能装，只是缺的那个会联网下载。
+
+开了 `ENABLE_INTL=1` 还要加 `icu4c-79.1-sources.tgz`（GitHub release，约 30M）。
 
 ## 分发给别人
 

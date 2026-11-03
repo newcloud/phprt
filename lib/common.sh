@@ -149,11 +149,12 @@ enabled_dep_names() {
   return 0
 }
 
-dep_lib_dirs() { # dep_lib_dirs <名字...>  -> 存在的 <dep>/lib
+dep_lib_dirs() { # dep_lib_dirs <名字...>  -> 存在的 <dep>/lib（个别工具会装到 lib64）
   local n d
   for n in "$@"; do
     d="$(dep_dir_of "$n")"
     [ -d "$d/lib" ] && printf '%s\n' "$d/lib"
+    [ -d "$d/lib64" ] && printf '%s\n' "$d/lib64"
   done
   return 0
 }
