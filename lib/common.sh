@@ -33,7 +33,6 @@ case "$PHPRT_HOME" in
 esac
 PHPRT_HOME="${PHPRT_HOME%/}"
 
-INI_DIR="$PHPRT_HOME/ini"
 DEPS="$PHPRT_HOME/deps"
 TOOLS="$PHPRT_HOME/tools"
 DOWNLOADS="$PHPRT_HOME/downloads"
@@ -78,7 +77,7 @@ load_config() {
   [ -n "${PHP_VERSION:-}" ] || die "config.conf 里 PHP_VERSION 不能为空（见 lib/versions/）"
   PREFIX="$PHPRT_HOME/php-$PHP_VERSION"
   # 目录只在这里创建：早于 load_config 使用的函数都不该依赖它们是已存在的
-  mkdir -p "$INI_DIR" "$DEPS" "$TOOLS" "$DOWNLOADS" "$SRCDIR" "$PREFIX"
+  mkdir -p "$DEPS" "$TOOLS" "$DOWNLOADS" "$SRCDIR" "$PREFIX"
   # verify.sh / --prune 不写日志，不该留下空日志目录
   [ "${PHPRT_NO_LOGS:-0}" = 1 ] || mkdir -p "$LOGS"
 }
