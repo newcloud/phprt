@@ -63,8 +63,8 @@ cmd_list() {
       [ -n "$v" ] || continue
       cfg="$h/configs/php-$v.conf"
       if [ -f "$cfg" ]; then
-        prof="$(grep -c '^ENABLE_[A-Z0-9_]*=1' "$cfg" 2>/dev/null || echo 0)"
-        prof="$prof 个开关"
+        prof="$(grep -c '^ENABLE_[A-Z0-9_]*=1' "$cfg" 2>/dev/null || true)"
+        prof="${prof:-0} 个开关"
       else
         prof="无配置"
       fi

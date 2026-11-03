@@ -40,5 +40,10 @@ make -j"$JOBS" > "$LOGS/re2c-make.log" 2>&1 \
   || { tail -20 "$LOGS/re2c-make.log"; die "re2c make 失败"; }
 make install >> "$LOGS/re2c-make.log" 2>&1
 
+# re2c 默认带调试符号，11 个可执行文件加起来近 200M，装完 strip 一下
+for _b in "$D"/bin/*; do
+  [ -f "$_b" ] && strip "$_b" 2>/dev/null || true
+done
+
 stamp_write re2c "$SIG"
 ok "re2c $RE2C_VERSION -> $D/bin/re2c"
