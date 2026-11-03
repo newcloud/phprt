@@ -26,14 +26,14 @@ APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 case "$PHPRT_ROOT" in
   /*) ;;
-  *)  PHPRT_ROOT="$APP_DIR/$PHPRT_ROOT" ;;
+  *)  PHPRT_ROOT="$APP_DIR/${PHPRT_ROOT#./}" ;;
 esac
 
 # ini 写相对路径时按项目目录算，这样从别的目录调用（RoadRunner 之类）也照样对
 if [ -n "$PHPRT_INI" ]; then
   case "$PHPRT_INI" in
     /*) ;;
-    *)  PHPRT_INI="$APP_DIR/$PHPRT_INI" ;;
+    *)  PHPRT_INI="$APP_DIR/${PHPRT_INI#./}" ;;
   esac
   export PHPRC="$PHPRT_INI"
 fi
