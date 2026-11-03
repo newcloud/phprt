@@ -10,8 +10,8 @@
 #    myphp-8.5.12 --env               看它设了哪些环境变量
 #    myphp-8.5.12 --deps              看链接了哪些依赖库
 #
-#  项目里一般不用直接调它，而是用 phprt 生成的 myapp.sh（可以在那里指定
-#  别的 php.ini / 额外的 -d）。myapp.sh 会 export PHPRC 再 exec 本脚本，
+#  项目里一般不用直接调它，而是用 phprt 生成的 ./myphp（可以在那里指定
+#  别的 php.ini / 额外的 -d）。./myphp 会 export PHPRC 再 exec 本脚本，
 #  所以下面的 PHPRC / PHP_INI_SCAN_DIR 都用「未设置才填默认」的写法。
 # =============================================================================
 set -euo pipefail

@@ -11,14 +11,14 @@
 #    ./install.sh --ini dev           用内置 ini 预设（default / dev / prod）
 #    ./install.sh --ini-local         把预设复制成项目里的 ./php.ini 再指向它
 #    ./install.sh --ini /path/php.ini 用已有的 ini 文件
-#    ./install.sh --no-app            不生成项目入口 myapp.sh
+#    ./install.sh --no-entry          不生成项目入口 ./myphp
 #    ./install.sh --keep-src          保留 build/ 里解压出来的源码（--rebuild 更快）
 #    ./install.sh --offline           只用手里的下载包，缺包直接报错
 #    ./install.sh --force             已装的版本也重新编译
 #    ./install.sh --jobs 8            并行度
 #
-#  做的事：装 PHP 到安装根 → 生成 bin/myphp-<版本> → 在当前目录生成 myapp.sh
-#  （myapp.sh 里固化版本和 ini，就是本项目的 PHP 运行环境）
+#  做的事：装 PHP 到安装根 → 生成 bin/myphp-<版本> → 在当前目录生成 ./myphp
+#  （./myphp 里固化版本和 ini，就是本项目的 PHP 运行环境）
 # =============================================================================
 set -euo pipefail
 
@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
     --ini)       INI_OPT="${2:-}"; shift 2 ;;
     --ini=*)     INI_OPT="${1#*=}"; shift ;;
     --ini-local) INI_LOCAL=1; shift ;;
-    --no-app)    NO_APP=1; shift ;;
+    --no-app|--no-entry) NO_APP=1; shift ;;
     --keep-src)  KEEP_SRC=1; shift ;;
     -y|--yes)    ASSUME_YES=1; shift ;;
     --force)     FORCE=1; shift ;;
@@ -276,9 +276,9 @@ fi
 # --------------------------------------------------------- 7. 项目入口 ----
 PROJECT="$PWD"
 if [ "$NO_APP" = 1 ]; then
-  say "跳过 myapp.sh（--no-app）"
+  say "跳过项目入口 ./myphp（--no-entry）"
 elif [ "$PROJECT" = "$HERE" ]; then
-  printf '\n提示: 你现在在 phprt 源码目录里，没有生成 myapp.sh。\n'
+  printf '\n提示: 你现在在 phprt 源码目录里，没有生成 ./myphp。\n'
   printf '      到你的项目目录执行： %s/phprt init\n' "$HERE"
 else
   # 安装根在项目内就用相对路径，项目整体搬走也能用
@@ -300,12 +300,16 @@ else
     INI_VALUE_FINAL="$PHPRT_HOME/ini/$INI_PRESET.ini"
   fi
 
-  APP="$PROJECT/myapp.sh"
-  if [ -f "$APP" ] && ! head -3 "$APP" | grep -q '由 phprt 生成'; then
+  APP="$PROJECT/myphp"
+  if [ -L "$APP" ]; then
+    # phprt link 建的软链：直接换成生成的脚本
+    rm -f "$APP"
+    good "把原来的 ./myphp 软链换成本项目的生成脚本"
+  elif [ -f "$APP" ] && ! head -3 "$APP" | grep -q '由 phprt 生成'; then
     [ "$FORCE" = 1 ] || bad "$APP 已存在且不是 phprt 生成的（加 --force 覆盖）"
   fi
 
-  tpl="$(cat "$HERE/lib/app.tmpl")"
+  tpl="$(cat "$HERE/lib/myphp-project.tmpl")"
   tpl="${tpl//@PHPRT_ROOT@/$ROOT_VALUE}"
   tpl="${tpl//@PHP_VERSION@/$PHP_VERSION}"
   tpl="${tpl//@PHP_INI@/$INI_VALUE_FINAL}"
@@ -324,15 +328,15 @@ MYPHP="$PHPRT_HOME/bin/myphp-$PHP_VERSION"
 ext_count="$("$MYPHP" -m | grep -c . || true)"
 printf '    扩展 %s 个\n' "$ext_count"
 
-if [ -f "$PROJECT/myapp.sh" ]; then
-  ( cd "$PROJECT" && ./myapp.sh -r 'echo "    myapp.sh: PHP ", PHP_VERSION, "  ini=", php_ini_loaded_file(), "\n";' ) \
-    || bad "myapp.sh 跑不起来"
+if [ -f "$PROJECT/myphp" ]; then
+  ( cd "$PROJECT" && ./myphp -r 'echo "    ./myphp: PHP ", PHP_VERSION, "  ini=", php_ini_loaded_file(), "\n";' ) \
+    || bad "./myphp 跑不起来"
 fi
 
 printf '\n\033[1;32m完成\033[0m\n'
 printf '  安装根:  %s\n' "$PHPRT_HOME"
 printf '  入口:    %s\n' "$MYPHP"
-[ -f "$PROJECT/myapp.sh" ] && printf '  项目:    %s/myapp.sh\n' "$PROJECT"
-printf '\n  下一步:  ./myapp.sh -v        （没有 myapp.sh 就用 %s -v）\n' "$MYPHP"
+[ -f "$PROJECT/myphp" ] && printf '  项目:    %s/myphp\n' "$PROJECT"
+printf '\n  下一步:  ./myphp -v        （没有 ./myphp 就用 %s -v）\n' "$MYPHP"
 printf '  管理:    %s/phprt list\n' "$HERE"
 printf '\n'

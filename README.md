@@ -2,7 +2,7 @@
 
 从源码编译一套完整的 PHP（含 openssl / curl / sqlite / zip / redis / Composer），
 装进安装根目录（默认 `~/.phprt` 或项目内的 `./.phprt`），不需要 root、不动系统目录、
-不往 `~/.bashrc` 里塞东西。装完给每个项目一个 `myapp.sh`，`./myapp.sh worker.php` 直接跑。
+不往 `~/.bashrc` 里塞东西。装完给每个项目一个 `myphp`，`./myphp worker.php` 直接跑。
 
 ## 三步
 
@@ -13,8 +13,8 @@ git clone <repo> ~/src/phprt && cd ~/src/phprt
 cd ~/myproject && ~/src/phprt/install.sh
 
 # 2) 用
-./myapp.sh -v
-./myapp.sh worker.php
+./myphp -v
+./myphp worker.php
 ```
 
 装的时候会问三件事：
@@ -56,20 +56,20 @@ cd ~/myproject && ~/src/phprt/install.sh
 项目里只有一个文件：
 
 ```bash
-# myapp.sh —— 本项目固定的版本和 ini，改它就是改本项目的运行环境
+# myphp —— 本项目固定的版本和 ini，改它就是改本项目的运行环境
 PHPRT_ROOT=/home/z/.phprt
 PHPRT_PHP=8.5.12
 PHPRT_INI=/home/z/.phprt/ini/dev.ini
 PHPRT_ARGS=(-d memory_limit=256M)
 ```
 
-不想用 `myapp.sh` 也行：`./phprt link 8.5.12` 会在当前目录建 `./myphp` 软链。
+`myphp` 是普通文件（可以直接看、直接改）。也可以只用软链：`./phprt link 8.5.12`。
 
 ## 日常命令
 
 ```bash
 ./phprt list              # 已装版本 / 默认版本 / 当前项目用的是哪个
-./phprt init --ini dev    # 给当前目录生成 myapp.sh
+./phprt init --ini dev    # 给当前目录生成 ./myphp
 ./phprt link 8.5.12       # 建 ./myphp 软链
 ./phprt build             # 增量编译（--offline / --force / --only php）
 ./phprt verify            # 自检：扩展、动态库、搬迁测试
@@ -84,7 +84,7 @@ PHPRT_ARGS=(-d memory_limit=256M)
 
 ```bash
 ./install.sh --php 8.6.0      # 装到同一个安装根，依赖和下载缓存全部复用
-./phprt link 8.6.0            # 项目切版本（只换软链 / 改 myapp.sh 里的 PHPRT_PHP）
+./phprt link 8.6.0            # 项目切版本（只换软链 / 改 myphp 里的 PHPRT_PHP）
 rm -rf ~/.phprt/php-8.5.12 ~/.phprt/bin/myphp-8.5.12
 ./build.sh --prune --yes      # 再把没人引用的依赖清掉
 ```
@@ -101,7 +101,7 @@ lib/common.sh       路径、下载、stamp
 lib/modules/*.sh    每个依赖一个脚本
 lib/versions/       PHP 版本清单
 lib/myphp.tmpl      版本入口模板
-lib/app.tmpl        myapp.sh 模板
+lib/myphp-project.tmpl  项目入口 ./myphp 的模板
 lib/verify.sh       自检
 downloads/          预下载包（不进 git，见里面的 README）
 ```
@@ -110,6 +110,6 @@ downloads/          预下载包（不进 git，见里面的 README）
 
 - **不复制进安装根**：构建脚本只在仓库里，安装根里只有编译产物和生成出来的入口。
 - **可搬迁**：`myphp` 按自身位置算路径，整个安装根搬走后仍然能用（`phprt verify` 会测）。
-  `php-<版本>/bin/php` 单独拿出去不行，那个要用 `myphp`/`myapp.sh` 起。
+  `php-<版本>/bin/php` 单独拿出去不行，那个要用安装根里的 `bin/myphp` 或项目的 `./myphp` 起。
 - **不碰系统**：没有 root，不写 `/usr/local`，不改 shell 配置；卸载就是删安装根。
 - **联网**：默认直连，失败自动走 `http://127.0.0.1:10808`（`PHPRT_PROXY=` 可改）。

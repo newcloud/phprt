@@ -3,8 +3,8 @@
 #  phprt —— 管理命令（装在仓库里，不复制进安装根）
 #
 #    phprt list                 已安装的 PHP 版本 + 默认版本 + 当前项目的入口
-#    phprt init                 在当前目录生成 myapp.sh（版本 + php.ini 固化进去）
-#    phprt link [版本]           在当前目录建 ./myphp 软链（不想用 myapp.sh 时）
+#    phprt init                 在当前目录生成 ./myphp（版本 + php.ini 固化进去）
+#    phprt link [版本]           在当前目录建 ./myphp 软链（不想用生成脚本时）
 #    phprt build [参数...]       编译/增量（参数见 ./build.sh --help）
 #    phprt verify               安装结果自检
 #    phprt clean [--all]        清 build/（--all 连 downloads/）
@@ -67,12 +67,12 @@ cmd_list() {
     printf '\n'
   fi
 
-  # 当前项目用什么
-  if [ -f "$PWD/myapp.sh" ]; then
-    printf '当前项目: %s/myapp.sh\n' "$PWD"
-    sed -n 's/^PHPRT_PHP=/  PHP=/p; s/^PHPRT_INI=/  ini=/p; s/^PHPRT_ROOT=/  root=/p' "$PWD/myapp.sh"
-  elif [ -L "$PWD/myphp" ]; then
+  # 当前项目用什么（软链优先判断：-f 会跟随软链）
+  if [ -L "$PWD/myphp" ]; then
     printf '当前项目: ./myphp -> %s\n' "$(readlink "$PWD/myphp")"
+  elif [ -f "$PWD/myphp" ]; then
+    printf '当前项目: %s/myphp\n' "$PWD"
+    sed -n 's/^PHPRT_PHP=/  PHP=/p; s/^PHPRT_INI=/  ini=/p; s/^PHPRT_ROOT=/  root=/p' "$PWD/myphp"
   fi
 
   # 磁盘占用
@@ -84,7 +84,7 @@ cmd_list() {
 
 render_app() { # render_app <out> <root> <php> <ini> <args>
   local out="$1" tpl
-  tpl="$(cat "$HERE/lib/app.tmpl")"
+  tpl="$(cat "$HERE/lib/myphp-project.tmpl")"
   tpl="${tpl//@PHPRT_ROOT@/$2}"
   tpl="${tpl//@PHP_VERSION@/$3}"
   tpl="${tpl//@PHP_INI@/$4}"
@@ -96,7 +96,7 @@ render_app() { # render_app <out> <root> <php> <ini> <args>
 
 cmd_init() {
   local h; h="$(find_home)"
-  local ver="" ini="default" ini_local=0 name="myapp.sh" force=0
+  local ver="" ini="default" ini_local=0 name="myphp" force=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -125,7 +125,10 @@ cmd_init() {
   printf '%s\n' "$vers" | grep -qx "$ver" || die "没装 PHP $ver（已装: $(printf '%s' "$vers" | tr '\n' ' ')）"
 
   local app="$PWD/$name"
-  if [ -f "$app" ] && ! head -3 "$app" | grep -q '由 phprt 生成'; then
+  if [ -L "$app" ]; then
+    [ "$force" = 1 ] || die "$app 是软链（可能来自 phprt link），先删掉或加 --force"
+    rm -f "$app"
+  elif [ -f "$app" ] && ! head -3 "$app" | grep -q '由 phprt 生成'; then
     [ "$force" = 1 ] || die "$app 已存在且不是 phprt 生成的（加 --force 覆盖）"
   fi
 

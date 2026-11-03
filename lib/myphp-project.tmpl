@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  myapp.sh —— 由 phprt 生成（模板：lib/app.tmpl）
+#  myphp —— 由 phprt 生成（模板：lib/myphp-project.tmpl）
 #
 #  这个文件就是「本项目的 PHP 运行环境」：版本、php.ini、额外参数全固化成
 #  明文，cat 一眼就能看见，可以跟着项目一起进 git。想换版本/换 ini 就改这里
 #  （或者重新跑 phprt init）。
 #
-#    ./myapp.sh -v
-#    ./myapp.sh worker.php
-#    ./myapp.sh composer install
+#    ./myphp -v
+#    ./myphp worker.php
+#    ./myphp composer install
 # =============================================================================
 set -euo pipefail
 
