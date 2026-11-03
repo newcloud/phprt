@@ -420,5 +420,4 @@ downloads/              预下载包（不进 git）
 
 ## License
 
-仓库暂未附带 LICENSE 文件（默认保留所有权利）。要开源给别人用，
-建议加一个 MIT 或 Apache-2.0 —— 需要的话提个 issue。
+[MIT](LICENSE) © 2026 newcloud
