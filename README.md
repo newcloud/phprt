@@ -97,6 +97,10 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 **注意几个编译依赖**：`intl`（ICU）和 `swoole` 需要 **C++ 编译器**（`gcc-c++`）；
 `libaom` 有 `nasm` 才启 SIMD（没有会自动退到 generic，功能一样只是慢）。
 
+**加新扩展**：完整步骤（含模板、要同步改的 11 处、踩过的坑）见
+[`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md) —— 把仓库交给你的 AI agent，
+说「按 docs/ADD-EXTENSION.md 加 xxx 扩展」即可。
+
 **加一个新扩展的两条路**
 
 - 编译期扩展（gd/intl/pgsql 这类）：`config.conf` 加开关 + `lib/modules/<名字>.sh` 依赖脚本
