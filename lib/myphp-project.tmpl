@@ -2,14 +2,17 @@
 # =============================================================================
 #  myphp —— 由 phprt 生成（模板：lib/myphp-project.tmpl）
 #
-#  这个文件就是「本项目的 PHP 运行环境」：版本、php.ini、额外参数全固化成
-#  明文，cat 一眼就能看见，可以跟着项目一起进 git。
+#  这个文件就是「本项目的 PHP 运行环境」：版本、php.ini、可写目录、沙箱开关
+#  全固化成明文，cat 一眼就能看见，可以跟着项目一起进 git。
 #  依赖库和扩展目录是运行时用通配符找的，所以重编 PHP、加减依赖都不用改这里。
 #
 #    ./myphp -v
 #    ./myphp worker.php
 #    ./myphp composer install
-#    ./myphp --env              看它设了哪些环境变量
+#    ./myphp --env                  看它设了哪些环境变量
+#    ./myphp --sandbox worker.php   在 bwrap 沙箱里跑（干净根 + 系统库白名单）
+#    ./myphp --sandbox-check        沙箱自检：可写目录 / 只读区域 / 系统库是否被挡住
+#    ./myphp --no-sandbox ...       这次不进沙箱（固化的是 on 时用）
 # =============================================================================
 set -euo pipefail
 
@@ -20,6 +23,14 @@ PHPRT_INI="@PHP_INI@"
 
 # 额外的 php 参数，比如 -d memory_limit=512M（顺序在 -d extension_dir 之后）
 PHPRT_ARGS=(@PHP_ARGS@)
+
+# 沙箱（bwrap）：off | on
+#   on = 空根 + 系统库白名单 + 项目整体只读，只放开 PHPRT_RW_DIRS 里的目录。
+#   三个变量都能用同名环境变量临时覆盖（数组不行，所以可写目录是空格分隔的字符串）。
+PHPRT_SANDBOX="${PHPRT_SANDBOX:-@SANDBOX@}"
+PHPRT_RW_DIRS="${PHPRT_RW_DIRS:-@RW_DIRS@}"
+PHPRT_SANDBOX_OPTS="${PHPRT_SANDBOX_OPTS:-}"   # 追加给 bwrap 的参数，如 "--ro-bind /data /data"
+PHPRT_SANDBOX_LIBS="${PHPRT_SANDBOX_LIBS:-}"   # 额外放行的系统库（空格分隔的路径）
 
 APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
@@ -81,17 +92,166 @@ done
 PHP_ARGS=()
 [ -n "$EXT_DIR" ] && PHP_ARGS=(-d "extension_dir=$EXT_DIR")
 
+# --------------------------------------------------------------- 沙箱 ------
+# on 时做的事（参数顺序就是挂载顺序，后挂的覆盖先挂的）：
+#   1. --tmpfs /            新空根：宿主的 /home /root /etc 全都不存在
+#   2. --tmpfs /usr/lib64   系统库目录清空，再按 sandbox.libs 逐个放回
+#                           → 系统 libcurl/libssl/libicu 之类直接从文件系统里消失
+#   3. 项目整体 ro-bind，只把 PHPRT_RW_DIRS 里的目录 bind 成可写
+#   4. 安装根 ro-bind（在项目内时覆盖第 3 条，保证 PHP 自己不可改）
+#   5. --unshare-all：pid/ipc/uts/cgroup 都隔离；网络默认共享（服务要 bind 端口）
+sandbox_exec() {
+  command -v bwrap >/dev/null 2>&1 || {
+    echo "沙箱需要 bubblewrap（bwrap），但 PATH 里没有。" >&2
+    echo "  装法: sudo dnf install bubblewrap   /   sudo apt install bubblewrap" >&2
+    echo "  不想用沙箱: ./myphp --no-sandbox ..." >&2
+    exit 1
+  }
+
+  local libs="$PREFIX/sandbox.libs"
+  if [ ! -f "$libs" ]; then
+    echo "缺少沙箱白名单: $libs" >&2
+    echo "  生成: phprt build --php $PHPRT_PHP" >&2
+    exit 1
+  fi
+  # 用户命名空间被发行版关掉时，bwrap 会在真正启动时才报错，先探一下
+  if ! bwrap --unshare-user --ro-bind / / -- /bin/true 2>/dev/null; then
+    echo "bwrap 不能创建用户命名空间（某些发行版默认禁用）。" >&2
+    echo "  Ubuntu 24.04+: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0" >&2
+    exit 1
+  fi
+
+  local -a a=( bwrap --die-with-parent --unshare-all --tmpfs / --ro-bind /usr /usr )
+  if [ "$SBX_NET" = none ]; then a+=( --unshare-net ); else a+=( --share-net ); fi
+
+  # /bin /lib64 这类目录在发行版之间可能是软链（Fedora）也可能是真目录（Debian）
+  local p t
+  for p in bin sbin lib lib64; do
+    if [ -L "/$p" ]; then
+      t="$(readlink "/$p")"
+      a+=( --symlink "$t" "/$p" )
+    elif [ -d "/$p" ]; then
+      a+=( --ro-bind "/$p" "/$p" )
+    fi
+  done
+
+  # 系统库目录先清空（目录本身留着当挂载点），再按白名单逐个放回
+  local d SBX_MASK=""
+  for d in /usr/lib64 /usr/lib/x86_64-linux-gnu /lib64 /lib/x86_64-linux-gnu; do
+    [ -L "$d" ] && continue
+    if [ -d "$d" ]; then
+      a+=( --tmpfs "$d" )
+      SBX_MASK+="$d "
+    fi
+  done
+  SBX_MASK="${SBX_MASK% }"
+
+  local line
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    [ -e "$line" ] && a+=( --ro-bind "$line" "$line" )
+  done < "$libs"
+  for line in $PHPRT_SANDBOX_LIBS; do
+    [ -e "$line" ] && a+=( --ro-bind "$line" "$line" )
+  done
+
+  # /etc 只给必需的几个；CA 那两个目录（/etc/pki /etc/ssl）curl/openssl 要用
+  for line in /etc/hosts /etc/resolv.conf /etc/nsswitch.conf \
+              /etc/passwd /etc/group /etc/localtime /etc/pki /etc/ssl; do
+    [ -e "$line" ] && a+=( --ro-bind "$line" "$line" )
+  done
+
+  a+=( --dev /dev --proc /proc --tmpfs /tmp --tmpfs /home )
+
+  # 项目整体只读 → 安装根只读 → 再逐个放开可写目录
+  a+=( --ro-bind "$APP_DIR" "$APP_DIR" )
+  a+=( --ro-bind "$PHPRT_ROOT" "$PHPRT_ROOT" )
+
+  local rw SBX_RW=""
+  for rw in $PHPRT_RW_DIRS; do
+    case "$rw" in /*) ;; *) rw="$APP_DIR/$rw" ;; esac
+    [ -d "$rw" ] || mkdir -p "$rw" || { echo "可写目录建不出来: $rw" >&2; exit 1; }
+    a+=( --bind "$rw" "$rw" )
+    SBX_RW+="$rw "
+  done
+  SBX_RW="${SBX_RW% }"
+
+  a+=( --chdir "$APP_DIR" --setenv HOME /home --setenv TMPDIR /tmp )
+  a+=( --setenv PHPRT_CHECK_ROOT "$PHPRT_ROOT" )
+  a+=( --setenv PHPRT_CHECK_RW "$SBX_RW" )
+  a+=( --setenv PHPRT_CHECK_MASK "$SBX_MASK" )
+  [ -n "$PHPRT_SANDBOX_OPTS" ] && a+=( $PHPRT_SANDBOX_OPTS )   # 有意分词：逃生口
+  a+=( "$PREFIX/bin/php" "${PHP_ARGS[@]}" ${PHPRT_ARGS[@]+"${PHPRT_ARGS[@]}"} "$@" )
+  exec "${a[@]}"
+}
+
+# --------------------------------------------------------------- 参数 ------
+# 认完自己的开关就把剩下的原样交给 php（-v / -r / worker.php / composer ...）
+SANDBOX="$PHPRT_SANDBOX"
+SBX_NET=share
+SBX_CHECK=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sandbox)       SANDBOX=on; shift ;;
+    --no-sandbox)    SANDBOX=off; shift ;;
+    --sandbox-check) SANDBOX=on; SBX_CHECK=1; shift ;;
+    --no-net)        SBX_NET=none; shift ;;
+    --)              shift; break ;;
+    *)               break ;;
+  esac
+done
+
 case "${1:-}" in
   --env)
     printf 'PHP=%s\nPHPRC=%s\nPHP_INI_SCAN_DIR=%s\nEXT_DIR=%s\nOPENSSL_CONF=%s\nLD_LIBRARY_PATH=%s\nPATH=%s\n' \
       "$PREFIX/bin/php" "$PHPRC" "$PHP_INI_SCAN_DIR" "$EXT_DIR" "${OPENSSL_CONF:-}" \
       "$LD_LIBRARY_PATH" "$PATH"
+    printf 'SANDBOX=%s\nRW_DIRS=%s\n' "$SANDBOX" "$PHPRT_RW_DIRS"
     exit 0 ;;
   composer)
     shift
     [ -f "$PHPRT_ROOT/composer.phar" ] || {
       echo "Composer 尚未安装（需要 ENABLE_OPENSSL=1 且 ENABLE_COMPOSER=1）" >&2; exit 1; }
+    if [ "$SANDBOX" = on ]; then
+      COMPOSER_HOME=/tmp/composer sandbox_exec "$PHPRT_ROOT/composer.phar" "$@"
+    fi
     exec "$PREFIX/bin/php" "${PHP_ARGS[@]}" "$PHPRT_ROOT/composer.phar" "$@" ;;
 esac
+
+if [ "$SBX_CHECK" = 1 ]; then
+  printf '\033[1;36m==>\033[0m 沙箱自检（%s）\n' "$PREFIX/bin/php"
+  set -- -r '
+$w = function ($p) {
+  if (!is_dir($p)) return "不存在";
+  $f = $p . "/.phprt-probe";
+  $ok = @file_put_contents($f, "x") !== false;
+  @unlink($f);
+  return $ok ? "可写" : "只读";
+};
+echo "php=", PHP_VERSION, "  模块=", count(get_loaded_extensions()), "\n";
+echo "ini=", php_ini_loaded_file(), "\n\n";
+echo "可写目录:\n";
+foreach (preg_split("/\s+/", trim((string) getenv("PHPRT_CHECK_RW"))) as $d) {
+  if ($d === "") continue;
+  printf("  %-44s %s\n", $d, $w($d));
+}
+printf("\n  %-44s %s\n", "安装根 " . getenv("PHPRT_CHECK_ROOT"), $w((string) getenv("PHPRT_CHECK_ROOT")));
+printf("  %-44s %s\n", "项目根 " . getcwd(), $w((string) getcwd()));
+$mask = (string) getenv("PHPRT_CHECK_MASK");
+printf("\n系统库目录 %s：可见 %d 项（应只有白名单）\n", $mask,
+  count(@scandir($mask) ?: []));
+foreach (["libcurl.so.4", "libssl.so.3", "libicuuc.so.79", "libxml2.so.16", "libz.so.1"] as $f) {
+  $hit = false;
+  foreach (preg_split("/\s+/", trim($mask)) as $d) {
+    if ($d !== "" && file_exists($d . "/" . $f)) { $hit = true; break; }
+  }
+  printf("  %-16s %s\n", $f, $hit ? "仍可见" : "已挡住");
+}
+'
+fi
+
+if [ "$SANDBOX" = on ]; then
+  sandbox_exec "$@"
+fi
 
 exec "$PREFIX/bin/php" "${PHP_ARGS[@]}" ${PHPRT_ARGS[@]+"${PHPRT_ARGS[@]}"} "$@"

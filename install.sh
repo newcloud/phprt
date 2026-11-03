@@ -10,6 +10,8 @@
 #    ./install.sh --php 8.5.12        指定版本（见 lib/versions/）
 #    ./install.sh --profile minimal   最小档：所有 ENABLE_*=0（只 cli/opcache，最快）
 #    ./install.sh --set-default       把这个版本设为安装根的默认版本
+#    ./install.sh --sandbox           生成的 ./myphp 默认在 bwrap 沙箱里跑
+#    ./install.sh --rw var,var/log    沙箱里允许写的目录（相对项目根，默认 var）
 #    ./install.sh --ini dev           用内置 ini 预设（default / dev / prod）
 #    ./install.sh --ini-local         把预设复制成项目里的 ./php.ini 再指向它
 #    ./install.sh --ini /path/php.ini 用已有的 ini 文件
@@ -34,6 +36,8 @@ INI_LOCAL=0
 NO_APP=0
 KEEP_SRC=0
 PROFILE=full
+SANDBOX=off
+RW_DIRS="var"
 SET_DEFAULT=0
 ASSUME_YES=0
 FORCE=0
@@ -56,6 +60,10 @@ while [ $# -gt 0 ]; do
     --keep-src)  KEEP_SRC=1; shift ;;
     --profile)   PROFILE="${2:-}"; shift 2 ;;
     --profile=*) PROFILE="${1#*=}"; shift ;;
+    --sandbox)   SANDBOX=on; shift ;;
+    --no-sandbox) SANDBOX=off; shift ;;
+    --rw)        RW_DIRS="$RW_DIRS ${2//,/ }"; shift 2 ;;
+    --rw=*)      RW_DIRS="$RW_DIRS ${1#*=}"; shift ;;
     --set-default) SET_DEFAULT=1; shift ;;
     -y|--yes)    ASSUME_YES=1; shift ;;
     --force)     FORCE=1; shift ;;
@@ -190,6 +198,13 @@ case "$PROFILE" in
   full|minimal) ;;
   *) bad "--profile 只支持 full / minimal（给的是: $PROFILE）" ;;
 esac
+
+# 沙箱可写目录：空格分隔、去重
+_rw=()
+for _r in $RW_DIRS; do
+  case " ${_rw[*]} " in *" $_r "*) ;; *) _rw+=("$_r") ;; esac
+done
+RW_DIRS="${_rw[*]}"
 
 CFG_DIR="$PHPRT_HOME/configs"
 CFG="$CFG_DIR/php-$PHP_VERSION.conf"
@@ -338,6 +353,8 @@ else
   tpl="${tpl//@PHP_VERSION@/$PHP_VERSION}"
   tpl="${tpl//@PHP_INI@/$INI_VALUE_FINAL}"
   tpl="${tpl//@PHP_ARGS@/}"
+  tpl="${tpl//@SANDBOX@/$SANDBOX}"
+  tpl="${tpl//@RW_DIRS@/$RW_DIRS}"
   printf '%s\n' "$tpl" > "$APP.tmp"
   chmod +x "$APP.tmp"
   mv -f "$APP.tmp" "$APP"

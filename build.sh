@@ -338,4 +338,6 @@ for m in "${MODULES_TO_RUN[@]}"; do
 done
 
 gen_inis
+# 沙箱白名单跟着实际编译产物走：加减依赖、重编扩展都会自动更新
+gen_sandbox_libs
 

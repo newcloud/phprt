@@ -157,6 +157,8 @@ tpl="${tpl//@PHPRT_ROOT@/$tmp}"
 tpl="${tpl//@PHP_VERSION@/$PHP_VERSION}"
 tpl="${tpl//@PHP_INI@/}"
 tpl="${tpl//@PHP_ARGS@/}"
+tpl="${tpl//@SANDBOX@/off}"
+tpl="${tpl//@RW_DIRS@/var}"
 printf '%s\n' "$tpl" > "$tmp/myphp"
 chmod +x "$tmp/myphp"
 
@@ -164,6 +166,21 @@ if "$tmp/myphp" -r 'echo "    搬迁后 PHP ", PHP_VERSION, " / redis ", (phpver
   ok "搬迁后可直接运行（也验证了项目入口模板）"
 else
   warn "搬迁后运行失败"; fail=1
+fi
+
+log "8b) 沙箱（bwrap：干净根 + 系统库白名单）"
+if command -v bwrap >/dev/null 2>&1 && [ -f "$(sandbox_libs_file)" ]; then
+  mkdir -p "$tmp/var"
+  if "$tmp/myphp" --sandbox --no-net -r '
+      printf("    沙箱内 PHP %s / %d 个模块 / 系统 libcurl %s\n", PHP_VERSION,
+        count(get_loaded_extensions()), file_exists("/usr/lib64/libcurl.so.4") ? "仍可见" : "已挡住");
+      exit((is_writable("/tmp") && !is_writable("'"$tmp"'")) ? 0 : 1);'; then
+    ok "沙箱可用（README 里 docs/SANDBOX.md 有参数说明）"
+  else
+    warn "沙箱运行失败"; fail=1
+  fi
+else
+  printf '    跳过（没装 bwrap，或还没有 %s）\n' "$(short "$(sandbox_libs_file)")"
 fi
 rm -rf "$tmp"
 

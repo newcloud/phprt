@@ -168,6 +168,28 @@ PHPRT_CONFIG=<文件>  >  --php <版本>（configs/php-<版本>.conf）  >  conf
 脚本不用改。从 git 分支/归档构建时源码里没有 `configure`，`php.sh` 会自动补 autoconf + re2c
 并跑 `buildconf`。
 
+## 沙箱（bwrap）
+
+装好 `bubblewrap` 后，`./myphp` 可以进沙箱跑：空根 + 系统库白名单 + 项目只读。
+
+```bash
+./myphp --sandbox worker.php                     # 这一次
+phprt init --sandbox --rw var                     # 固化到 ./myphp（.rr.yaml 不用改）
+phprt init --sandbox --rw var --rw var/log        # 可写目录可以列多个
+./myphp --sandbox-check                           # 自检
+```
+
+沙箱里：
+
+- 宿主机的 `/home`、`/root`、`/etc` 其余部分、别的项目 **都看不见**
+- `/usr/lib64` 被清空，只放回 `ldd` 扫出来的 glibc 家族 + NSS/gconv
+  → 系统的 `libcurl`/`libssl`/`libicu` **在沙箱里不存在**，PHP 只能用 `deps/` 里的
+- 项目整体只读，只有 `PHPRT_RW_DIRS`（默认 `var`）可写；安装根永远只读
+- PID/IPC/UTS 隔离，网络默认共享（服务要 bind 端口），`--no-net` 可关
+
+白名单由 `phprt build` 自动生成到 `<安装根>/php-<版本>/sandbox.libs`，加减依赖会自动跟着变。
+完整说明、逃生口和排错见 **[docs/SANDBOX.md](docs/SANDBOX.md)**。
+
 ## 目录说明
 
 ```
