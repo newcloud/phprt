@@ -16,7 +16,6 @@
 #    ./build.sh --prune          删除没有任何 PHP 版本引用的依赖/工具目录（--yes 免确认）
 #    ./build.sh --jobs 8         指定并行度（默认 nproc）
 #    ./build.sh --prefix DIR     换一个安装根（等价 PHPRT_HOME=DIR）
-#    ./build.sh --set-default    把 bin/myphp 指向本次编译的版本
 #
 #  开关与版本/下载地址都在 config.conf 和 lib/versions/，本文件只做解析与调度。
 # =============================================================================
@@ -40,7 +39,6 @@ DO_VERIFY=0
 DO_CLEAN_BUILD=0
 DO_PRUNE=0
 ASSUME_YES=0
-SET_DEFAULT=0
 SPEC="$*"
 [ -n "$SPEC" ] || SPEC="（无参数）"
 
@@ -56,7 +54,6 @@ while [ $# -gt 0 ]; do
     --clean-build|--clean-cache) DO_CLEAN_BUILD=1; shift ;;
     --prune)   DO_PRUNE=1; shift ;;
     --yes)     ASSUME_YES=1; shift ;;
-    --set-default) SET_DEFAULT=1; shift ;;
     --only)    ONLY="${2:-}"; shift 2 ;;
     --only=*)  ONLY="${1#*=}"; shift ;;
     --skip)    SKIP_LIST+=("${2:-}"); shift 2 ;;
@@ -80,7 +77,7 @@ write_home_readme() {
   cat > "$PHPRT_HOME/README.txt" <<'EOF'
 这是 phprt 的安装根，脚本本身在源码仓库里（不在这个目录）。
 
-bin/          入口：myphp-<版本>、默认 myphp、composer.phar
+composer.phar Composer（项目的 ./myphp composer ... 用它）
 ini/          php.ini 预设：default / dev / prod
 php-<版本>/    PHP 本体（每个版本一套，互不干扰）
 deps/         依赖库，跨版本共享
@@ -237,33 +234,6 @@ fi
 [ "${ENABLE_COMPOSER:-0}" = 1 ] && [ "${ENABLE_OPENSSL:-0}" != 1 ] && \
   warn "ENABLE_COMPOSER=1 但 ENABLE_OPENSSL=0：Composer 下载不了依赖"
 
-# ------------------------------------------------------------ 入口 myphp ----
-gen_myphp() {
-  local tpl="$HERE/myphp.tmpl" out="$BINDIR/myphp-$PHP_VERSION" block="" n d rel
-  [ -f "$tpl" ] || die "缺少模板: $tpl"
-  while IFS= read -r n; do
-    [ -n "$n" ] || continue
-    d="$(dep_dir_of "$n")"
-    rel="$(short "$d")"
-    block+="  \"\$HOME_DIR/$rel/lib\""$'\n'
-  done < <(enabled_dep_names)
-
-  awk -v ver="$PHP_VERSION" -v ossl="$OPENSSL_VERSION" -v block="$block" '
-    {
-      if ($0 ~ /@DEP_LIB_DIRS@/) { printf "%s", block; next }
-      gsub(/@PHP_VERSION@/, ver)
-      gsub(/@OPENSSL_VERSION@/, ossl)
-      print
-    }' "$tpl" > "$out.tmp"
-  chmod +x "$out.tmp"
-  mv -f "$out.tmp" "$out"
-
-  # 默认版本：软链放在 bin/ 内，用相对目标，整个安装根搬走也不断
-  if [ "$SET_DEFAULT" = 1 ] || [ ! -e "$BINDIR/myphp" ]; then
-    ln -sfn "myphp-$PHP_VERSION" "$BINDIR/myphp"
-  fi
-}
-
 # ------------------------------------------------------- history/latest ------
 STARTED="$(date '+%Y-%m-%d %H:%M:%S')"
 SECONDS=0
@@ -278,8 +248,7 @@ finish() { # finish <退出码>
   fi
   if [ "$rc" = 0 ]; then
     printf '\n%s构建完成%s\n' "$C_G" "$C_R"
-    printf '  入口: %s\n' "$(short "$BINDIR/myphp-$PHP_VERSION")"
-    printf '  用法: %s -v\n' "$BINDIR/myphp-$PHP_VERSION"
+    printf '  下一步: 到项目目录跑  phprt init   生成 ./myphp\n'
     printf '  日志: %s\n' "$(short "$LOGS/summary.log")"
     printf '  记录: %s\n' "$(short "$HISTORY")"
   else
@@ -307,4 +276,3 @@ for m in "${MODULES_TO_RUN[@]}"; do
   run_module "$m"
 done
 
-gen_myphp

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Composer（单文件 phar，放到 bin/composer.phar；由 myphp composer 调用）
+#  Composer（单文件 phar，放到 <安装根>/composer.phar；由 ./myphp composer 调用）
 #  phar 与 PHP 版本无关，所以和 myphp 放在一起共享
 #  可单独执行: lib/modules/composer.sh
 # =============================================================================
@@ -12,14 +12,14 @@ PHP="$PREFIX/bin/php"
 [ -x "$PHP" ] || die "还没有 PHP：先编译 PHP 本体（./build.sh --only php）"
 
 SIG="composer=$COMPOSER_VERSION"
-if [ "$FORCE" != 1 ] && stamp_ok composer "$SIG" && [ -f "$BINDIR/composer.phar" ]; then
+if [ "$FORCE" != 1 ] && stamp_ok composer "$SIG" && [ -f "$PHPRT_HOME/composer.phar" ]; then
   ok "Composer 已安装，跳过"; exit 0
 fi
 
 # --force 只清 composer 自己的文件：bin 里还放着 myphp，不能整个删
 if [ "$FORCE" = 1 ]; then
-  log "清空 $BINDIR/composer.phar（--force）"
-  rm -f "$BINDIR/composer.phar" "$BINDIR/.phprt-stamp-composer"
+  log "清空 $PHPRT_HOME/composer.phar（--force）"
+  rm -f "$PHPRT_HOME/composer.phar" "$PHPRT_HOME/.phprt-stamp-composer"
 fi
 
 URL="${COMPOSER_URL:-}"
@@ -44,14 +44,13 @@ else
   mv "$CACHED.part" "$CACHED"
 fi
 
-mkdir -p "$BINDIR"
-install -m 644 "$CACHED" "$BINDIR/composer.phar"
+install -m 644 "$CACHED" "$PHPRT_HOME/composer.phar"
 
 # 校验 phar 能被本地 PHP 正常加载
 LIB_DIRS="$(dep_lib_dirs $(enabled_dep_names) | tr '\n' ':' | sed 's/:$//')"
 LD_LIBRARY_PATH="$(dirname "$PHP")/../lib${LIB_DIRS:+:$LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$PHP" "$BINDIR/composer.phar" --version > /dev/null 2>&1 \
+  "$PHP" "$PHPRT_HOME/composer.phar" --version > /dev/null 2>&1 \
   || die "Composer 装上了但跑不起来（检查 openssl / phar）"
 
 stamp_write composer "$SIG"
-ok "Composer $("$PHP" "$BINDIR/composer.phar" --version 2>/dev/null | head -1) -> $BINDIR/composer.phar"
+ok "Composer $("$PHP" "$PHPRT_HOME/composer.phar" --version 2>/dev/null | head -1) -> $PHPRT_HOME/composer.phar"

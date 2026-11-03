@@ -17,7 +17,7 @@
 #    ./install.sh --force             已装的版本也重新编译
 #    ./install.sh --jobs 8            并行度
 #
-#  做的事：装 PHP 到安装根 → 生成 bin/myphp-<版本> → 在当前目录生成 ./myphp
+#  做的事：装 PHP 到安装根 → 在当前目录生成 ./myphp（自包含的启动器）
 #  （./myphp 里固化版本和 ini，就是本项目的 PHP 运行环境）
 # =============================================================================
 set -euo pipefail
@@ -238,7 +238,7 @@ fi
 mkdir -p "$PHPRT_HOME/ini"
 cp -a "$HERE/ini/." "$PHPRT_HOME/ini/"
 
-BUILD_ARGS=(--set-default)
+BUILD_ARGS=()
 [ "$OFFLINE" = 1 ] && BUILD_ARGS+=(--offline)
 [ -n "$JOBS_OPT" ] && BUILD_ARGS+=(--jobs "$JOBS_OPT")
 
@@ -257,14 +257,11 @@ if [ "$INSTALLED" = 1 ] && [ "$FORCE" != 1 ]; then
 fi
 
 if [ "$DO_BUILD" = 1 ]; then
-  PHPRT_HOME="$PHPRT_HOME" bash "$HERE/build.sh" "${BUILD_ARGS[@]}" \
+  PHPRT_HOME="$PHPRT_HOME" bash "$HERE/build.sh" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
     || bad "编译失败（见 $PHPRT_HOME/logs/）"
 else
   good "跳过编译（--force 可强编）"
-  # 入口可能没生成（比如上次失败），补一下
-  [ -x "$PHPRT_HOME/bin/myphp-$PHP_VERSION" ] || \
-    PHPRT_HOME="$PHPRT_HOME" bash "$HERE/build.sh" --set-default --only php \
-    || bad "生成入口失败"
+  [ -x "$PHPRT_HOME/php-$PHP_VERSION/bin/php" ] || bad "PHP 本体丢失: $PHPRT_HOME/php-$PHP_VERSION/bin/php"
 fi
 
 # 装完把解压的源码清掉（约占 1G；下载包和编译结果都保留）
@@ -322,21 +319,20 @@ fi
 
 # ------------------------------------------------------------- 8. 自检 ----
 say "自检"
-MYPHP="$PHPRT_HOME/bin/myphp-$PHP_VERSION"
-[ -x "$MYPHP" ] || bad "入口不存在: $MYPHP"
-"$MYPHP" -v | head -1 | sed 's/^/    /'
-ext_count="$("$MYPHP" -m | grep -c . || true)"
-printf '    扩展 %s 个\n' "$ext_count"
-
 if [ -f "$PROJECT/myphp" ]; then
-  ( cd "$PROJECT" && ./myphp -r 'echo "    ./myphp: PHP ", PHP_VERSION, "  ini=", php_ini_loaded_file(), "\n";' ) \
+  ( cd "$PROJECT" && ./myphp -r 'echo PHP_VERSION, "\n";' > /dev/null ) \
     || bad "./myphp 跑不起来"
+  ( cd "$PROJECT" && ./myphp -v | head -1 | sed 's/^/    /' )
+  ext_count="$( cd "$PROJECT" && ./myphp -m | grep -c . || true )"
+  printf '    扩展 %s 个\n' "$ext_count"
+  ( cd "$PROJECT" && ./myphp -r 'echo "    ini=", php_ini_loaded_file(), "\n";' )
+else
+  bash "$HERE/phprt" exec --php "$PHP_VERSION" -- -v | head -1 | sed 's/^/    /'
 fi
 
 printf '\n\033[1;32m完成\033[0m\n'
 printf '  安装根:  %s\n' "$PHPRT_HOME"
-printf '  入口:    %s\n' "$MYPHP"
-[ -f "$PROJECT/myphp" ] && printf '  项目:    %s/myphp\n' "$PROJECT"
-printf '\n  下一步:  ./myphp -v        （没有 ./myphp 就用 %s -v）\n' "$MYPHP"
+[ -f "$PROJECT/myphp" ] && printf '  项目入口: %s/myphp\n' "$PROJECT"
+printf '\n  下一步:  ./myphp -v\n'
 printf '  管理:    %s/phprt list\n' "$HERE"
 printf '\n'

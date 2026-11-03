@@ -40,9 +40,7 @@ cd ~/myproject && ~/src/phprt/install.sh
 
 ```
 ~/.phprt/
-├── bin/myphp-8.5.12        某个版本的入口（设好 PHPRC / LD_LIBRARY_PATH / extension_dir）
-├── bin/myphp               默认版本（软链）
-├── bin/composer.phar
+├── composer.phar           Composer（./myphp composer ... 用它）
 ├── ini/{default,dev,prod}.ini
 ├── php-8.5.12/             PHP 本体
 ├── deps/                   依赖库（openssl、zlib、sqlite… 跨版本共享）
@@ -53,24 +51,23 @@ cd ~/myproject && ~/src/phprt/install.sh
 └── config.conf             本安装根的完整配置（含 PHP 版本）
 ```
 
-项目里只有一个文件：
+项目里只有一个文件 `./myphp`，**自包含**——开头是固化的四行，后面是设置环境并 exec：
 
 ```bash
-# myphp —— 本项目固定的版本和 ini，改它就是改本项目的运行环境
-PHPRT_ROOT=/home/z/.phprt
-PHPRT_PHP=8.5.12
-PHPRT_INI=/home/z/.phprt/ini/dev.ini
-PHPRT_ARGS=(-d memory_limit=256M)
+PHPRT_ROOT=/home/z/.phprt     # 安装根（装到项目里时是 ./.phprt，相对路径）
+PHPRT_PHP=8.5.12              # 用哪个 PHP 版本
+PHPRT_INI=/home/z/.phprt/ini/dev.ini   # 用哪个 php.ini（留空=安装默认）
+PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 ```
 
-`myphp` 是普通文件（可以直接看、直接改）。也可以只用软链：`./phprt link 8.5.12`。
+依赖库（`deps/*/lib`）和扩展目录是**运行时用通配符找的**，所以重编 PHP、加减依赖都不需要重新生成这个文件。
 
 ## 日常命令
 
 ```bash
-./phprt list              # 已装版本 / 默认版本 / 当前项目用的是哪个
+./phprt list              # 已装版本 / 当前项目用的是哪个
 ./phprt init --ini dev    # 给当前目录生成 ./myphp
-./phprt link 8.5.12       # 建 ./myphp 软链
+./phprt exec -- -v        # 不建项目，直接跑一下 PHP
 ./phprt build             # 增量编译（--offline / --force / --only php）
 ./phprt verify            # 自检：扩展、动态库、搬迁测试
 ./phprt clean [--all]     # 清 build/（--all 连 downloads/）
@@ -84,8 +81,8 @@ PHPRT_ARGS=(-d memory_limit=256M)
 
 ```bash
 ./install.sh --php 8.6.0      # 装到同一个安装根，依赖和下载缓存全部复用
-./phprt link 8.6.0            # 项目切版本（只换软链 / 改 myphp 里的 PHPRT_PHP）
-rm -rf ~/.phprt/php-8.5.12 ~/.phprt/bin/myphp-8.5.12
+./phprt init --php 8.6.0 --force   # 项目切版本（重写 ./myphp 里的 PHPRT_PHP）
+rm -rf ~/.phprt/php-8.5.12
 ./build.sh --prune --yes      # 再把没人引用的依赖清掉
 ```
 
@@ -93,14 +90,13 @@ rm -rf ~/.phprt/php-8.5.12 ~/.phprt/bin/myphp-8.5.12
 
 ```
 install.sh          用户入口
-phprt               管理命令（list/init/link/build/verify/clean）
+phprt               管理命令（list/init/exec/build/verify/clean）
 build.sh            实际构建调度
 config.conf         开关与依赖版本（不含 PHP 版本）
 ini/                php.ini 预设
 lib/common.sh       路径、下载、stamp
 lib/modules/*.sh    每个依赖一个脚本
 lib/versions/       PHP 版本清单
-lib/myphp.tmpl      版本入口模板
 lib/myphp-project.tmpl  项目入口 ./myphp 的模板
 lib/verify.sh       自检
 downloads/          预下载包（不进 git，见里面的 README）
@@ -109,7 +105,8 @@ downloads/          预下载包（不进 git，见里面的 README）
 ## 几个说明
 
 - **不复制进安装根**：构建脚本只在仓库里，安装根里只有编译产物和生成出来的入口。
-- **可搬迁**：`myphp` 按自身位置算路径，整个安装根搬走后仍然能用（`phprt verify` 会测）。
-  `php-<版本>/bin/php` 单独拿出去不行，那个要用安装根里的 `bin/myphp` 或项目的 `./myphp` 起。
+- **可搬迁**：`./myphp` 按自身位置算路径，整个安装根搬走后仍然能用（`phprt verify` 会测）。
+- **安装根里没有入口脚本**：只有 PHP/依赖/下载包和 `composer.phar`；怎么跑一个 PHP 由项目里的
+  `./myphp` 决定。想在任意目录临时跑，用 `./phprt exec -- -v`。
 - **不碰系统**：没有 root，不写 `/usr/local`，不改 shell 配置；卸载就是删安装根。
 - **联网**：默认直连，失败自动走 `http://127.0.0.1:10808`（`PHPRT_PROXY=` 可改）。

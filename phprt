@@ -2,9 +2,9 @@
 # =============================================================================
 #  phprt —— 管理命令（装在仓库里，不复制进安装根）
 #
-#    phprt list                 已安装的 PHP 版本 + 默认版本 + 当前项目的入口
+#    phprt list                 已安装的 PHP 版本 + 当前项目用的入口
 #    phprt init                 在当前目录生成 ./myphp（版本 + php.ini 固化进去）
-#    phprt link [版本]           在当前目录建 ./myphp 软链（不想用生成脚本时）
+#    phprt exec -- <参数>        不建项目，直接跑一下 PHP
 #    phprt build [参数...]       编译/增量（参数见 ./build.sh --help）
 #    phprt verify               安装结果自检
 #    phprt clean [--all]        清 build/（--all 连 downloads/）
@@ -55,21 +55,18 @@ cmd_list() {
   if [ -z "$vers" ]; then
     printf '  还没有编译好的 PHP 版本\n'
   else
-    local def=""
-    [ -e "$h/bin/myphp" ] && def="$(basename "$(readlink -f "$h/bin/myphp")" | sed 's/^myphp-//')"
-    printf '\n%-12s %-10s %s\n' "版本" "默认" "路径"
-    local v mark
+    printf '\n%-12s %s\n' "版本" "路径"
+    local v
     while IFS= read -r v; do
       [ -n "$v" ] || continue
-      mark=""; [ "$v" = "$def" ] && mark="←"
-      printf '%-12s %-10s %s\n' "$v" "$mark" "$h/php-$v"
+      printf '%-12s %s\n' "$v" "$h/php-$v"
     done <<< "$vers"
     printf '\n'
   fi
 
   # 当前项目用什么（软链优先判断：-f 会跟随软链）
   if [ -L "$PWD/myphp" ]; then
-    printf '当前项目: ./myphp -> %s\n' "$(readlink "$PWD/myphp")"
+    printf '当前项目: ./myphp -> %s（旧式软链）\n' "$(readlink "$PWD/myphp")"
   elif [ -f "$PWD/myphp" ]; then
     printf '当前项目: %s/myphp\n' "$PWD"
     sed -n 's/^PHPRT_PHP=/  PHP=/p; s/^PHPRT_INI=/  ini=/p; s/^PHPRT_ROOT=/  root=/p' "$PWD/myphp"
@@ -126,7 +123,7 @@ cmd_init() {
 
   local app="$PWD/$name"
   if [ -L "$app" ]; then
-    [ "$force" = 1 ] || die "$app 是软链（可能来自 phprt link），先删掉或加 --force"
+    [ "$force" = 1 ] || die "$app 是个软链，先删掉或加 --force"
     rm -f "$app"
   elif [ -f "$app" ] && ! head -3 "$app" | grep -q '由 phprt 生成'; then
     [ "$force" = 1 ] || die "$app 已存在且不是 phprt 生成的（加 --force 覆盖）"
@@ -158,36 +155,58 @@ cmd_init() {
   printf '  用法: ./%s -v\n' "$name"
 }
 
-cmd_link() {
+cmd_exec() {
   local h; h="$(find_home)"
-  local ver="" name="myphp"
+  local ver="" ini=""
+
   while [ $# -gt 0 ]; do
     case "$1" in
-      --root)  h="${2:-}"; shift 2 ;;
+      --root)   h="${2:-}"; shift 2 ;;
       --root=*) h="${1#*=}"; shift ;;
-      --name)  name="${2:-}"; shift 2 ;;
-      --name=*) name="${1#*=}"; shift ;;
-      -*)      die "未知参数: $1" ;;
-      *)       ver="$1"; shift ;;
+      --php)    ver="${2:-}"; shift 2 ;;
+      --php=*)  ver="${1#*=}"; shift ;;
+      --ini)    ini="${2:-}"; shift 2 ;;
+      --ini=*)  ini="${1#*=}"; shift ;;
+      --)       shift; break ;;
+      -*)       die "未知参数: $1（php 自己的参数放在 -- 之后）" ;;
+      *)        break ;;
     esac
   done
+
   [ -d "$h" ] || die "安装根不存在: $h（先跑 install.sh）"
   [ -n "$ver" ] || ver="$(latest_installed "$h")"
-  [ -n "$ver" ] || die "$h 里没有编译好的 PHP"
+  [ -n "$ver" ] || die "$h 里没有编译好的 PHP（先跑 install.sh）"
+  local prefix="$h/php-$ver"
+  [ -x "$prefix/bin/php" ] || die "没装 PHP $ver（已装: $(installed_versions "$h" | tr '\n' ' ')）"
 
-  local target="$h/bin/myphp-$ver"
-  [ -x "$target" ] || die "没有 $target"
-  # 安装根在项目里就用相对目标
-  local link_target="$target"
-  case "$h/" in
-    "$PWD"/*) link_target="./${target#"$PWD"/}" ;;
+  case "$ini" in
+    "")             ;;
+    default)        ini="$h/ini/default.ini" ;;
+    dev|prod)       ini="$h/ini/$ini.ini" ;;
+    *)              [ -f "$ini" ] || die "ini 文件不存在: $ini" ;;
   esac
-  local out="$PWD/$name"
-  if [ -e "$out" ] && [ ! -L "$out" ]; then
-    die "$out 是个普通文件（可能是 phprt init 生成的），不覆盖"
+
+  local d ld="" ext=""
+  for d in "$h"/deps/*/lib; do [ -d "$d" ] && ld+="$d:"; done
+  for d in "$prefix"/lib/php/extensions/*/; do [ -d "$d" ] && { ext="${d%/}"; break; }; done
+
+  export PHPRC="${ini:-$prefix/etc/php.ini}"
+  export PHP_INI_SCAN_DIR="$prefix/etc/conf.d"
+  export LD_LIBRARY_PATH="${ld%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  for d in "$h"/deps/openssl-*/etc/ssl/openssl.cnf; do
+    [ -f "$d" ] && { export OPENSSL_CONF="$d"; break; }
+  done
+
+  local pargs=()
+  [ -n "$ext" ] && pargs=(-d "extension_dir=$ext")
+
+  if [ "${1:-}" = "composer" ]; then
+    shift
+    [ -f "$h/composer.phar" ] || die "Composer 未安装（先 phprt build）"
+    exec "$prefix/bin/php" ${pargs[@]+"${pargs[@]}"} "$h/composer.phar" "$@"
   fi
-  ln -sfn "$link_target" "$out"
-  good "$out -> $link_target"
+
+  exec "$prefix/bin/php" ${pargs[@]+"${pargs[@]}"} "$@"
 }
 
 cmd_build()   { PHPRT_HOME="$(find_home)" exec bash "$HERE/build.sh" "$@"; }
@@ -214,7 +233,7 @@ main() {
   case "$cmd" in
     list|ls)        cmd_list ;;
     init)           cmd_init "$@" ;;
-    link)           cmd_link "$@" ;;
+    exec)           cmd_exec "$@" ;;
     build)          cmd_build "$@" ;;
     verify)         cmd_verify "$@" ;;
     clean)          cmd_clean "$@" ;;

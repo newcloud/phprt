@@ -8,7 +8,7 @@
 #    安装根（PHPRT_HOME） 编译产物：~/.phprt 或 <项目>/.phprt，可挪可删
 #
 #  安装根布局：
-#    bin/                   入口 myphp-<版本>、默认 myphp、composer.phar
+#    composer.phar          Composer（项目里 ./myphp composer ... 用）
 #    ini/                   php.ini 预设（default / dev / prod）
 #    php-<版本>/             PHP 本体（每个 PHP 版本一套）
 #    deps/<名字>-<版本>/      依赖库，跨版本共享
@@ -32,7 +32,6 @@ case "$PHPRT_HOME" in
 esac
 PHPRT_HOME="${PHPRT_HOME%/}"
 
-BINDIR="$PHPRT_HOME/bin"
 INI_DIR="$PHPRT_HOME/ini"
 DEPS="$PHPRT_HOME/deps"
 TOOLS="$PHPRT_HOME/tools"
@@ -78,7 +77,7 @@ load_config() {
   [ -n "${PHP_VERSION:-}" ] || die "config.conf 里 PHP_VERSION 不能为空（见 lib/versions/）"
   PREFIX="$PHPRT_HOME/php-$PHP_VERSION"
   # 目录只在这里创建：早于 load_config 使用的函数都不该依赖它们是已存在的
-  mkdir -p "$BINDIR" "$INI_DIR" "$DEPS" "$TOOLS" "$DOWNLOADS" "$SRCDIR" "$PREFIX"
+  mkdir -p "$INI_DIR" "$DEPS" "$TOOLS" "$DOWNLOADS" "$SRCDIR" "$PREFIX"
   # verify.sh / --prune 不写日志，不该留下空日志目录
   [ "${PHPRT_NO_LOGS:-0}" = 1 ] || mkdir -p "$LOGS"
 }
@@ -153,7 +152,7 @@ dep_include_flags() { # dep_include_flags <名字...> -> "-I... -I..."
 stamp_file() { # stamp_file <模块名>
   case "$1" in
     php|redis) printf '%s/.phprt-stamp-%s\n' "$PREFIX" "$1" ;;
-    composer)  printf '%s/.phprt-stamp-composer\n' "$BINDIR" ;;
+    composer)  printf '%s/.phprt-stamp-composer\n' "$PHPRT_HOME" ;;
     perlshim)  printf '%s/.phprt-stamp-perlshim\n' "$(dep_dir_of perl5core)" ;;
     *)         printf '%s/.phprt-stamp-%s\n' "$(dep_dir_of "$1")" "$1" ;;
   esac

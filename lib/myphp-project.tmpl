@@ -3,23 +3,22 @@
 #  myphp —— 由 phprt 生成（模板：lib/myphp-project.tmpl）
 #
 #  这个文件就是「本项目的 PHP 运行环境」：版本、php.ini、额外参数全固化成
-#  明文，cat 一眼就能看见，可以跟着项目一起进 git。想换版本/换 ini 就改这里
-#  （或者重新跑 phprt init）。
+#  明文，cat 一眼就能看见，可以跟着项目一起进 git。
+#  依赖库和扩展目录是运行时用通配符找的，所以重编 PHP、加减依赖都不用改这里。
 #
 #    ./myphp -v
 #    ./myphp worker.php
 #    ./myphp composer install
+#    ./myphp --env              看它设了哪些环境变量
 # =============================================================================
 set -euo pipefail
 
-# 安装根（项目内安装时是相对路径，整个项目搬走也能用）
+# ------------------------------------------------------------- 固化信息 ----
 PHPRT_ROOT="@PHPRT_ROOT@"
 PHPRT_PHP="@PHP_VERSION@"
-
-# 本项目的 php.ini：留空则用安装根里的默认 php.ini
 PHPRT_INI="@PHP_INI@"
 
-# 额外的 php 参数，比如 -d memory_limit=512M / -c /some/php.ini
+# 额外的 php 参数，比如 -d memory_limit=512M（顺序在 -d extension_dir 之后）
 PHPRT_ARGS=(@PHP_ARGS@)
 
 APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -35,7 +34,60 @@ if [ -n "$PHPRT_INI" ]; then
     /*) ;;
     *)  PHPRT_INI="$APP_DIR/${PHPRT_INI#./}" ;;
   esac
-  export PHPRC="$PHPRT_INI"
 fi
 
-exec "$PHPRT_ROOT/bin/myphp-$PHPRT_PHP" ${PHPRT_ARGS[@]+"${PHPRT_ARGS[@]}"} "$@"
+PREFIX="$PHPRT_ROOT/php-$PHPRT_PHP"
+if [ ! -x "$PREFIX/bin/php" ]; then
+  echo "PHP 未安装: $PREFIX/bin/php" >&2
+  echo "（重跑 install.sh，或在 phprt 仓库里 phprt build）" >&2
+  exit 1
+fi
+
+# ------------------------------------------------------------- 环境设置 ----
+# myphp 里指定了 ini 就用它；没指定则沿用外部 PHPRC，再没有就用安装默认
+if [ -n "$PHPRT_INI" ]; then
+  export PHPRC="$PHPRT_INI"
+else
+  : "${PHPRC:=$PREFIX/etc/php.ini}"
+  export PHPRC
+fi
+: "${PHP_INI_SCAN_DIR:=$PREFIX/etc/conf.d}"
+export PHP_INI_SCAN_DIR
+export PATH="$PREFIX/bin:$PATH"
+
+# 依赖库：<安装根>/deps/<名字>-<版本>/lib，运行时发现，不写死版本
+_ld=""
+for _d in "$PHPRT_ROOT"/deps/*/lib; do
+  [ -d "$_d" ] && _ld+="$_d:"
+done
+export LD_LIBRARY_PATH="${_ld%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# 自编译的 OpenSSL 用它自己安装目录里的配置（install_ssldirs 装出来的）
+if [ -z "${OPENSSL_CONF:-}" ]; then
+  for _c in "$PHPRT_ROOT"/deps/openssl-*/etc/ssl/openssl.cnf; do
+    [ -f "$_c" ] && { export OPENSSL_CONF="$_c"; break; }
+  done
+fi
+
+# 扩展目录按当前实际位置算，覆盖 php.ini 里的绝对路径
+EXT_DIR=""
+for _c in "$PREFIX"/lib/php/extensions/*/; do
+  [ -d "$_c" ] && { EXT_DIR="${_c%/}"; break; }
+done
+PHP_ARGS=()
+[ -n "$EXT_DIR" ] && PHP_ARGS=(-d "extension_dir=$EXT_DIR")
+
+case "${1:-}" in
+  --env)
+    printf 'PHP=%s\nPHPRC=%s\nPHP_INI_SCAN_DIR=%s\nEXT_DIR=%s\nOPENSSL_CONF=%s\nLD_LIBRARY_PATH=%s\nPATH=%s\n' \
+      "$PREFIX/bin/php" "$PHPRC" "$PHP_INI_SCAN_DIR" "$EXT_DIR" "${OPENSSL_CONF:-}" \
+      "$LD_LIBRARY_PATH" "$PATH"
+    exit 0 ;;
+  composer)
+    shift
+    [ -f "$PHPRT_ROOT/composer.phar" ] || {
+      echo "Composer 尚未安装（需要 ENABLE_OPENSSL=1 且 ENABLE_COMPOSER=1）" >&2; exit 1; }
+    exec "$PREFIX/bin/php" "${PHP_ARGS[@]}" "$PHPRT_ROOT/composer.phar" "$@" ;;
+esac
+
+exec "$PREFIX/bin/php" "${PHP_ARGS[@]}" ${PHPRT_ARGS[@]+"${PHPRT_ARGS[@]}"} "$@"
