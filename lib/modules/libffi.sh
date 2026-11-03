@@ -35,7 +35,7 @@ fi
 
 cd "$SRC"
 log "configure + make -j$JOBS"
-./configure --prefix="$D" --disable-static > "$LOGS/libffi-configure.log" 2>&1 \
+./configure --prefix="$D" --libdir="$D/lib" --disable-static > "$LOGS/libffi-configure.log" 2>&1 \
   || { tail -20 "$LOGS/libffi-configure.log"; die "libffi configure 失败"; }
 make -j"$JOBS" > "$LOGS/libffi-make.log" 2>&1 \
   || { tail -20 "$LOGS/libffi-make.log"; die "libffi make 失败"; }

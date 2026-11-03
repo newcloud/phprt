@@ -59,9 +59,9 @@ fi
 export PHP_INI_SCAN_DIR
 export PATH="$PREFIX/bin:$PATH"
 
-# 依赖库：<安装根>/deps/<名字>-<版本>/lib，运行时发现，不写死版本
+# 依赖库：<安装根>/deps/<名字>-<版本>/lib（个别工程用 lib64），运行时发现，不写死版本
 _ld=""
-for _d in "$PHPRT_ROOT"/deps/*/lib; do
+for _d in "$PHPRT_ROOT"/deps/*/lib "$PHPRT_ROOT"/deps/*/lib64; do
   [ -d "$_d" ] && _ld+="$_d:"
 done
 export LD_LIBRARY_PATH="${_ld%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
