@@ -20,7 +20,8 @@ fi
 
 ensure_clean_target avif "$D"
 
-TAR="$(basename "$AVIF_URL")"
+# GitHub 的 tag 归档 URL 最后一段是 v1.3.0.tar.gz，缓存文件用可读的名字
+TAR="libavif-$AVIF_VERSION.tar.gz"
 fetch "$AVIF_URL" "$DOWNLOADS/$TAR" "${AVIF_SHA256:-}"
 
 SRC="$SRCDIR/libavif-$AVIF_VERSION"
