@@ -189,8 +189,8 @@ run_module() { # run_module <name>
   bash "$script"
 }
 
-# 模块顺序固定
-ALL_MODULES=(openssl zlib libxml2 sqlite curl oniguruma libzip php redis composer)
+# 模块顺序固定（名字 = lib/modules/<名字>.sh 的文件名）
+ALL_MODULES=(openssl zlib libxml2 sqlite libcurl oniguruma libzip php redis composer)
 
 enabled_module() { # enabled_module <name>
   case "$1" in
@@ -198,7 +198,7 @@ enabled_module() { # enabled_module <name>
     zlib)      [ "${ENABLE_ZLIB:-0}" = 1 ] ;;
     libxml2)   [ "${ENABLE_LIBXML2:-0}" = 1 ] ;;
     sqlite)    [ "${ENABLE_SQLITE:-0}" = 1 ] ;;
-    curl)      [ "${ENABLE_LIBCURL:-0}" = 1 ] ;;
+    libcurl)   [ "${ENABLE_LIBCURL:-0}" = 1 ] ;;
     oniguruma) [ "${ENABLE_ONIGURUMA:-0}" = 1 ] ;;
     libzip)    [ "${ENABLE_LIBZIP:-0}" = 1 ] ;;
     php)       : ;;
@@ -215,6 +215,8 @@ if [ -z "$ONLY" ]; then
     enabled_module "$m" && MODULES_TO_RUN+=("$m")
   done
 else
+  # curl 是 libcurl 的别名（依赖目录叫 curl-<版本>，模块脚本叫 libcurl.sh）
+  [ "$ONLY" = curl ] && ONLY=libcurl
   case " ${ALL_MODULES[*]} " in
     *" $ONLY "*) ;;
     *) die "未知模块: $ONLY（可用: ${ALL_MODULES[*]}）" ;;
