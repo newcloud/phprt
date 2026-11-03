@@ -123,14 +123,50 @@ PHPRT_ARGS=(-d memory_limit=256M)      # 额外 php 参数
 
 ## 多版本
 
-`lib/versions/` 里一个文件 = 一个可选版本。加 8.6.0 就在那儿放一份清单，然后：
+**一个 PHP 版本一份配置**，都放在安装根的 `configs/` 下：
+
+```
+<安装根>/configs/
+├── php-8.5.12.conf          # 版本 + 开关 + 依赖版本，完整一份
+├── php-8.6.0-dev.conf
+└── default -> php-8.5.12.conf
+```
+
+每个 `php-<版本>/` 目录里带着自己的 stamp、`etc/php.ini`、`extensions/*.so`；
+依赖库 `deps/` 跨版本共享（目录名带版本），ini 是 `php<版本>_{default,dev,prod}.ini`。
+**装新版本不会影响旧版本**。
 
 ```bash
-./install.sh --php 8.6.0      # 装到同一个安装根，依赖和下载缓存全部复用
-./phprt init --php 8.6.0 --force   # 项目切版本（重写 ./myphp 里的 PHPRT_PHP）
-rm -rf ~/.phprt/php-8.5.12 ~/.phprt/php8.5.12_*.ini
-./build.sh --prune --yes      # 再把没人引用的依赖清掉
+./install.sh --php 8.6.0 --profile minimal   # 只写 configs/php-8.6.0.conf
+./install.sh --php 8.6.0 --set-default       # 顺便把 default 指过去
+phprt build --php 8.6.0                      # 只构建这个版本
+phprt verify --php 8.6.0
+phprt list                                   # 每版一行：占用、开关数、默认标记
+
+cd myproject && phprt init --php 8.6.0       # 项目切版本（重写 ./myphp 里的 PHPRT_PHP）
+rm -rf <安装根>/php-8.5.12 <安装根>/php8.5.12_*.ini <安装根>/configs/php-8.5.12.conf
+phprt build --prune --yes                    # 清掉没人引用的依赖
 ```
+
+**配置解析顺序**（`lib/common.sh: resolve_config`）：
+
+```
+PHPRT_CONFIG=<文件>  >  --php <版本>（configs/php-<版本>.conf）  >  configs/default  >  config.conf（旧布局）
+```
+
+老安装第一次跑 `install.sh` 会自动迁移：`config.conf` → `configs/php-<旧版本>.conf`，
+`config.conf` 留成指向 `configs/default` 的软链，原有命令不受影响。
+
+**当前可用的版本文件**（`lib/versions/`）：
+
+| 文件 | 版本 | 说明 |
+| --- | --- | --- |
+| `php-8.5.12.conf` | 8.5.12 | php.net 正式包，完整档 |
+| `php-8.6.0-dev.conf` | 8.6.0-dev | GitHub `PHP-8.6` 开发分支，仅供验证多版本（`--profile minimal`） |
+
+8.6 正式包发布后，加一个 `lib/versions/php-8.6.0.conf`（4 行：版本 / URL / SHA256 / 标签）就能装，
+脚本不用改。从 git 分支/归档构建时源码里没有 `configure`，`php.sh` 会自动补 autoconf + re2c
+并跑 `buildconf`。
 
 ## 目录说明
 

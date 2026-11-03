@@ -114,7 +114,7 @@ do_prune() {
   local -a keep=() cand=()
   local d f n hit
   # 当前 config.conf 会用到的依赖与构建工具
-  for n in openssl zlib libxml2 sqlite curl oniguruma libzip icu autoconf perl5core; do
+  for n in openssl zlib libxml2 sqlite curl oniguruma libzip icu autoconf perl5core re2c; do
     keep+=("$(dep_dir_of "$n")")
   done
   keep+=("$PREFIX")
