@@ -78,7 +78,7 @@ write_home_readme() {
 这是 phprt 的安装根，脚本本身在源码仓库里（不在这个目录）。
 
 composer.phar Composer（项目的 ./myphp composer ... 用它）
-ini/          php.ini 预设：default / dev / prod
+php<版本>_*.ini  php.ini（default / dev / prod，每个版本一套）
 php-<版本>/    PHP 本体（每个版本一套，互不干扰）
 deps/         依赖库，跨版本共享
 tools/        构建工具（autoconf、perl 核心模块）
@@ -88,7 +88,7 @@ logs/         每次构建一个目录（latest 指向最近一次）+ history.l
 config.conf   本安装根使用的完整配置（含 PHP 版本）
 
 清理： ./build.sh --clean-build        只删 build/
-       ./build.sh --prune [--yes]      删没被任何 PHP 版本引用的 deps/tools/php-*
+       ./build.sh --prune [--yes]      删没被任何 PHP 版本引用的 deps/tools/php-*/php*_*.ini
 EOF
 }
 
