@@ -160,7 +160,17 @@ cmd_init() {
 
 cmd_link() {
   local h; h="$(find_home)"
-  local ver="${1:-}"
+  local ver="" name="myphp"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --root)  h="${2:-}"; shift 2 ;;
+      --root=*) h="${1#*=}"; shift ;;
+      --name)  name="${2:-}"; shift 2 ;;
+      --name=*) name="${1#*=}"; shift ;;
+      -*)      die "未知参数: $1" ;;
+      *)       ver="$1"; shift ;;
+    esac
+  done
   [ -d "$h" ] || die "安装根不存在: $h（先跑 install.sh）"
   [ -n "$ver" ] || ver="$(latest_installed "$h")"
   [ -n "$ver" ] || die "$h 里没有编译好的 PHP"
@@ -172,11 +182,12 @@ cmd_link() {
   case "$h/" in
     "$PWD"/*) link_target="./${target#"$PWD"/}" ;;
   esac
-  if [ -e "$PWD/myphp" ] && [ ! -L "$PWD/myphp" ]; then
-    die "$PWD/myphp 是个普通文件，不覆盖"
+  local out="$PWD/$name"
+  if [ -e "$out" ] && [ ! -L "$out" ]; then
+    die "$out 是个普通文件（可能是 phprt init 生成的），不覆盖"
   fi
-  ln -sfn "$link_target" "$PWD/myphp"
-  good "$PWD/myphp -> $link_target"
+  ln -sfn "$link_target" "$out"
+  good "$out -> $link_target"
 }
 
 cmd_build()   { PHPRT_HOME="$(find_home)" exec bash "$HERE/build.sh" "$@"; }
