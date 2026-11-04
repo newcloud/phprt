@@ -195,19 +195,18 @@ CFG_DIR="$PHPRT_HOME/configs"
 CFG="$CFG_DIR/php-$PHP_VERSION.conf"
 mkdir -p "$CFG_DIR"
 
-# 旧布局（单个 config.conf）自动迁移，并把 config.conf 留成指向 default 的软链
+# 旧布局（单个 config.conf）自动迁移到 configs/php-<版本>.conf
 if [ ! -e "$CFG_DIR/default" ] && [ -f "$PHPRT_HOME/config.conf" ] && [ ! -L "$PHPRT_HOME/config.conf" ]; then
   old_ver="$(sed -n 's/^PHP_VERSION=//p' "$PHPRT_HOME/config.conf" | tr -d '"' | head -1)"
   old_ver="${old_ver:-unknown}"
   mv -f "$PHPRT_HOME/config.conf" "$CFG_DIR/php-$old_ver.conf"
   ln -sfn "php-$old_ver.conf" "$CFG_DIR/default"
-  ln -sfn "configs/default" "$PHPRT_HOME/config.conf"
-  good "旧配置已迁移到 configs/php-$old_ver.conf（config.conf 现在指向 default）"
+  good "旧配置已迁移到 configs/php-$old_ver.conf"
 fi
 
 say "写配置 -> $CFG（$PROFILE）"
 {
-  printf '# 由 install.sh 生成：lib/versions/%s + config.conf（%s 档）\n' "$(basename "$V_FILE")" "$PROFILE"
+  printf '# 由 install.sh 生成：lib/versions/%s + 仓库 config.conf（%s 档）\n' "$(basename "$V_FILE")" "$PROFILE"
   cat "$V_FILE"
   printf '\n'
   if [ "$PROFILE" = minimal ]; then
@@ -223,7 +222,6 @@ if [ "$SET_DEFAULT" = 1 ] || [ ! -e "$CFG_DIR/default" ]; then
   ln -sfn "php-$PHP_VERSION.conf" "$CFG_DIR/default"
   good "默认版本 -> $PHP_VERSION"
 fi
-[ -e "$PHPRT_HOME/config.conf" ] || ln -sfn "configs/default" "$PHPRT_HOME/config.conf"
 good "PHP $PHP_VERSION（$PROFILE 档），其它版本不受影响"
 
 # ------------------------------------------------------ 5. 预下载包播种 ----

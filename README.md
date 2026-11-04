@@ -215,11 +215,11 @@ phprt build --prune --yes                    # 清没人引用的依赖
 配置解析顺序（`lib/common.sh: resolve_config`）：
 
 ```
-PHPRT_CONFIG=<文件> > --php <版本>（configs/php-<版本>.conf） > configs/default > config.conf（旧布局）
+PHPRT_CONFIG=<文件> > --php <版本>（configs/php-<版本>.conf） > configs/default
 ```
 
-老安装第一次跑 `install.sh` 会自动迁移：`config.conf` → `configs/php-<旧版本>.conf`，
-`config.conf` 留成指向 `configs/default` 的软链，原有命令不受影响。
+老安装第一次跑 `install.sh` 会自动迁移：旧的 `config.conf` → `configs/php-<旧版本>.conf`，
+并建好 `configs/default`，原有命令不受影响。
 
 | 版本文件 | 版本 | 说明 |
 | --- | --- | --- |
@@ -284,7 +284,6 @@ phprt home                           # 打印当前安装根
 ```
 ~/.phprt/
 ├── composer.phar              Composer（./myphp composer ... 用它）
-├── config.conf -> configs/default
 ├── configs/
 │   ├── php-8.5.12.conf        一个版本一份：版本 + 开关 + 依赖版本
 │   ├── php-8.6.0-dev.conf
@@ -305,7 +304,7 @@ phprt home                           # 打印当前安装根
 install.sh              用户入口
 phprt                   管理命令
 build.sh                构建调度
-config.conf             开关与依赖版本
+config.conf             开关与依赖版本的模板（install.sh 合并进安装根）
 ini/                    php.ini 预设
 lib/versions/           PHP 版本清单
 lib/modules/*.sh        每个依赖一个脚本

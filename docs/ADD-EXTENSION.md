@@ -23,7 +23,7 @@
 
 ```
 phprt/
-├── config.conf              开关 + 依赖版本（用户改这里）
+├── configs/php-<版本>.conf   一个版本一份：版本 + 开关 + 依赖版本（用户改这里）
 ├── lib/common.sh            路径、下载、stamp、dep_dir_of、enabled_dep_names、php_sig
 ├── lib/modules/<名字>.sh     每个「模块」一个脚本（模块名 = 文件名）
 ├── lib/modules/php.sh       PHP 本体的 configure 参数
@@ -71,7 +71,7 @@ phprt/
 
 ## 4. 模板 A：PECL 扩展（以 msgpack 为例）
 
-### 4.1 `config.conf`
+### 4.1 仓库的 `config.conf`（模板）
 
 ```conf
 ENABLE_MSGPACK=1

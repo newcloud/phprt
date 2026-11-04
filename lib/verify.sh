@@ -80,7 +80,7 @@ done
 log "4) 已加载扩展"
 run_php -m | tr '\n' ' ' | sed 's/  */ /g' | fold -w 100 | sed 's/^/    /'; echo
 
-log "5) 按 config.conf 核对开关对应的扩展"
+log "5) 按 configs/php-<版本>.conf 核对开关对应的扩展"
 check_ext() { # check_ext <ext> <开关值>
   local ext="$1" on="$2"
   [ "$on" = 1 ] || return 0

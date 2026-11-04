@@ -176,7 +176,7 @@ CA_LINES="; 没找到系统 CA 包，需要 https 时手动设置 openssl.cafile
 curl.cainfo = \"$CA\""
 
 cat > "$PREFIX/etc/php.ini" <<EOF
-; 由 phprt 生成（版本与开关见 phprt/config.conf）
+; 由 phprt 生成（版本与开关见安装根 configs/php-<版本>.conf）
 [PHP]
 date.timezone = Asia/Shanghai
 memory_limit = 256M

@@ -3,7 +3,7 @@
 #  phprt 构建脚本（内部实现；日常用 install.sh / phprt）
 #
 #  用法:
-#    ./build.sh                  按 <安装根>/config.conf 编译（已装且配置未变则跳过）
+#    ./build.sh                  按 <安装根>/configs/default 编译（已装且配置未变则跳过）
 #    ./build.sh --offline        只用 downloads/ 里的包，缺包直接报错
 #    ./build.sh --rebuild        复用解压好的源码重跑 configure + make
 #    ./build.sh --force          清掉各模块安装目录后重来（下载保留）
@@ -18,7 +18,7 @@
 #    ./build.sh --prefix DIR     换一个安装根（等价 PHPRT_HOME=DIR）
 #    ./build.sh --php 8.6.0-dev  指定要构建的 PHP 版本（读 configs/php-<版本>.conf）
 #
-#  开关与版本/下载地址都在 config.conf 和 lib/versions/，本文件只做解析与调度。
+#  开关与下载地址在仓库 config.conf，版本清单在 lib/versions/，本文件只做解析与调度。
 # =============================================================================
 set -euo pipefail
 
@@ -90,7 +90,7 @@ tools/        构建工具（autoconf、perl 核心模块）
 downloads/    下载的源码包 + SHA256SUMS —— 建议保留，删了下次要重下
 build/        解压后的源码与中间产物 —— 可以删
 logs/         每次构建一个目录（latest 指向最近一次）+ history.log
-config.conf   本安装根使用的完整配置（含 PHP 版本）
+configs/      一个版本一份配置：php-<版本>.conf + default
 
 清理： ./build.sh --clean-build        只删 build/
        ./build.sh --prune [--yes]      删没被任何 PHP 版本引用的 deps/tools/php-*/php*_*.ini
@@ -113,7 +113,7 @@ do_clean_build() {
 do_prune() {
   local -a keep=() cand=()
   local d f n hit
-  # 当前 config.conf 会用到的依赖与构建工具
+  # 当前配置会用到的依赖与构建工具
   for n in openssl zlib libxml2 sqlite curl oniguruma libzip icu autoconf perl5core re2c; do
     keep+=("$(dep_dir_of "$n")")
   done
@@ -152,7 +152,7 @@ do_prune() {
     return 0
   fi
 
-  log "以下目录/文件没有被 config.conf 或任何 php-*/ 引用："
+  log "以下目录/文件没有被配置或任何 php-*/ 引用："
   for d in "${cand[@]}"; do
     printf '    %-40s %s\n' "$(short "$d")" "$(du -sh "$d" 2>/dev/null | cut -f1)"
   done

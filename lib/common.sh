@@ -39,7 +39,7 @@ DOWNLOADS="$PHPRT_HOME/downloads"
 SRCDIR="$PHPRT_HOME/build"
 LOGS_DIR="$PHPRT_HOME/logs"
 # 一个 PHP 版本一份配置：<安装根>/configs/php-<版本>.conf
-# 优先级：PHPRT_CONFIG > PHPRT_PHP_VERSION > configs/default > 旧布局 config.conf
+# 优先级：PHPRT_CONFIG > PHPRT_PHP_VERSION > configs/default
 resolve_config() {
   local c
   if [ -n "${PHPRT_CONFIG:-}" ]; then printf '%s\n' "$PHPRT_CONFIG"; return; fi
@@ -50,7 +50,7 @@ resolve_config() {
     c="$(readlink -f "$PHPRT_HOME/configs/default")"
     [ -n "$c" ] && { printf '%s\n' "$c"; return; }
   fi
-  printf '%s/config.conf\n' "$PHPRT_HOME"
+  printf '%s/configs/default\n' "$PHPRT_HOME"
 }
 CONFIG="$(resolve_config)"
 
@@ -89,7 +89,7 @@ load_config() {
   （先运行 ./install.sh；多版本时用 --php <版本>，或用 phprt build --php <版本>）"
   # shellcheck disable=SC1090
   . "$CONFIG"
-  [ -n "${PHP_VERSION:-}" ] || die "config.conf 里 PHP_VERSION 不能为空（见 lib/versions/）"
+  [ -n "${PHP_VERSION:-}" ] || die "配置文件里 PHP_VERSION 不能为空（见 lib/versions/）"
   PREFIX="$PHPRT_HOME/php-$PHP_VERSION"
   # 目录只在这里创建：早于 load_config 使用的函数都不该依赖它们是已存在的
   mkdir -p "$DEPS" "$TOOLS" "$DOWNLOADS" "$SRCDIR" "$PREFIX"
@@ -152,7 +152,7 @@ ca_ini_lines() {
   return 0
 }
 
-# 按 config.conf 开关列出本次启用且确实存在的依赖库目录（顺序固定）
+# 按配置里的开关列出本次启用且确实存在的依赖库目录（顺序固定）
 enabled_dep_names() {
   [ "${ENABLE_OPENSSL:-0}" = 1 ]   && echo openssl
   [ "${ENABLE_ZLIB:-0}" = 1 ]      && echo zlib
