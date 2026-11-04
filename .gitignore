@@ -7,10 +7,11 @@ downloads/*
 !downloads/SHA256SUMS
 
 # 构建/缓存产物（正常情况下不会出现在仓库里，防手滑）
-build/
-logs/
-php-*/
-deps/
-tools/
-bin/
+# 这些目录只可能出现在安装根；用 / 锚定，别误伤 lib/modules/{deps,tools}
+/build/
+/logs/
+/php-*/
+/deps/
+/tools/
+/bin/
 config.local.conf
