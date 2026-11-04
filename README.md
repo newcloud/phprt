@@ -5,13 +5,14 @@ phprt 类似于 uv 可以指定 Python 版本，有独立的动态库版本，�
 **示例：**
 
 ```console
-$ cd blog && phprt init local 8.5.12
+$ cd blog && phprt init local 8.5.12 --ini dev
 $ ls -a
-.phprt      # 目录有 php8.5 与依赖的动态库文件，与 php.ini 配置
-myphp       # 配置指定 php 版本路径、php.ini 路径，配置动态库 ld_xx 环境变量
+.phprt      # php-8.5.12/、deps/（动态库）、php8.5.12_dev.ini
+myphp       # 指定 PHP 版本和 ini 路径，运行时设好 LD_LIBRARY_PATH
 
 $ ./myphp worker.php
-# 等于运行 ./.phprt/php-8.5.12/bin/php --ini php-dev.ini worker.php
+# 等价于：设好 LD_LIBRARY_PATH=./.phprt/deps/*/lib，再执行
+#   ./.phprt/php-8.5.12/bin/php -c ./.phprt/php8.5.12_dev.ini worker.php
 ```
 
 ---
