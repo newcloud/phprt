@@ -1,12 +1,13 @@
 # phprt
 
-phprt 用来装一套独立的 PHP 环境：不依赖系统里的 PHP 和库，不会改动系统，扩展自己选。
+phprt 跟 nvm、uv 是一类工具，管的是 PHP：在项目目录里装一套独立的环境，不依赖系统里的
+PHP 和库，扩展自己选。
 
 **示例：**
 
 ```console
 $ cd blog
-$ ~/src/phprt/phprt init --php 8.6.0-dev    # 在项目里生成 ./myphp
+$ ~/src/phprt/phprt init --php 8.6.0-dev    # 环境装在 ./.phprt/，项目里只多一个 ./myphp
 $ ./myphp -v
 PHP 8.6.0-dev (cli) (built: Nov  4 2026 13:28:58) (NTS)
 
