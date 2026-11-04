@@ -1,11 +1,18 @@
 # phprt
 
-类似 uv 管 Python、nvm 管 Node：PHP 环境装在项目里，不依赖系统装的那套。
+在命令行里安装和使用不同版本的 PHP。PHP 和它依赖的库都放在项目目录里，不跟着系统走。
 
-```bash
-./myphp -v                      # PHP 8.5.12 / 8.6.0-dev，随项目走
-./myphp worker.php              # 跑常驻 worker（RoadRunner / Swoole）
-./myphp composer install        # Composer 用的也是这一套 PHP
+**示例：**
+
+```console
+$ ./myphp -v
+PHP 8.6.0-dev (cli) (built: Nov  4 2026 13:28:58) (NTS)
+
+$ phprt exec --php 8.5.12 -- -v
+PHP 8.5.12 (cli) (built: Nov  4 2026 13:34:28) (NTS)
+
+$ ./myphp composer --version
+Composer version 2.11.1 2026-10-30 14:52:10
 ```
 
 装在哪儿：
