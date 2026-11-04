@@ -1,17 +1,10 @@
-# 仓库里只有代码，编译产物和下载包都不进 git
+# 仓库里只有代码；编译产物和源码包都不进 git
 *.log
 
-# 下载包：目录保留（放 README 和校验清单），里面的 tarball 不进 git
-downloads/*
+# 源码包：downloads/ 只保留说明和校验清单
+downloads/**
 !downloads/README.md
 !downloads/SHA256SUMS
 
-# 构建/缓存产物（正常情况下不会出现在仓库里，防手滑）
-# 这些目录只可能出现在安装根；用 / 锚定，别误伤 lib/modules/{deps,tools}
-/build/
-/logs/
-/php-*/
-/deps/
-/tools/
-/bin/
-config.local.conf
+# 在仓库根直接跑 phprt 时可能生成的项目目录
+/.phprt/

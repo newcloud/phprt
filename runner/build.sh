@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# phprt：解析选择 -> deps -> php -> ext，每步按签名跳过
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck disable=SC1091
+. "$HERE/common.sh"
+
+BUNDLE=""
+TREE=""
+EXTS=""
+PLAN="${PHPRT_PLAN:-0}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --bundle) BUNDLE="${2:-}"; shift 2 ;;
+    --tree)   TREE="${2:-}"; shift 2 ;;
+    --exts)   EXTS="${2:-}"; shift 2 ;;
+    --plan)   PLAN=1; shift ;;
+    *) die "未知参数: $1" ;;
+  esac
+done
+[ -n "$BUNDLE" ] && [ -d "$BUNDLE" ] || die "缺少 bundle"
+[ -n "$TREE" ] || die "缺少 tree"
+
+# shellcheck disable=SC1090
+. "$BUNDLE/bundle.conf"
+
+export BUNDLE TREE
+export PREFIX="$TREE"
+export SELECTED_EXTS="$EXTS"
+export DEPS="$TREE/deps"
+export SRCDIR="$PHPRT_HOME/build"
+export LOGS="$PHPRT_HOME/logs"
+export JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+export PHPRT_RUNNER="$PHPRT_HOME/bin/runner"
+export VENDOR="$PHPRT_HOME/bin/runner/vendor"
+[ -d "$VENDOR" ] || VENDOR="$PHPRT_HOME/vendor"
+
+# 默认复用已解压源码；只有 --clean-src 才清空
+export REBUILD="${REBUILD:-1}"
+if [ "${PHPRT_CLEAN_SRC:-0}" = 1 ]; then
+  export REBUILD=0
+  rm -rf "$SRCDIR"
+  rm -rf "$TREE/.phprt-state"
+fi
+
+BUILTIN_ORDER="openssl zlib libxml2 curl sqlite mysqli mbstring intl zip gd ffi"
+
+# ---------------------------------------------------------------- 解析 ----
+BUILTINS=""
+PECL=""
+for e in $EXTS; do
+  if [ -f "$BUNDLE/builtin/$e.sh" ]; then
+    BUILTINS+=" $e"
+  elif [ -f "$BUNDLE/ext/$e.sh" ]; then
+    PECL+=" $e"
+  else
+    die "未知扩展: $e（既不是 builtin 也不是 ext）"
+  fi
+done
+
+# 先设置内置开关，builtin/*.sh 的 --needs/--flags 依赖它们
+for e in $BUILTIN_ORDER; do
+  f="$BUNDLE/builtin/$e.sh"
+  [ -f "$f" ] || continue
+  sw="$(sed -n 's/^# *phprt:.*[[:space:]]switch=\([^[:space:]]*\).*/\1/p' "$f" | head -1)"
+  [ -n "$sw" ] || continue
+  if printf ' %s ' "$BUILTINS" | grep -q " $e "; then v=1; else v=0; fi
+  printf -v "$sw" '%s' "$v"
+  export "${sw?}"
+done
+
+ALL_DEPS=""
+PHP_DEPS=""
+append_dep() {
+  local list="$1" n="$2"
+  case " $list " in *" $n "*) printf '%s' "$list" ;; *) printf '%s %s' "$list" "$n" ;; esac
+}
+add_dep() {
+  local n="$1" x
+  for x in $(module_needs "$n"); do add_dep "$x"; done
+  ALL_DEPS="$(append_dep "$ALL_DEPS" "$n")"
+}
+add_php_dep() {
+  local n="$1" x
+  for x in $(module_needs "$n"); do add_php_dep "$x"; done
+  PHP_DEPS="$(append_dep "$PHP_DEPS" "$n")"
+  ALL_DEPS="$(append_dep "$ALL_DEPS" "$n")"
+}
+
+for e in $BUILTINS; do
+  for n in $(bash "$BUNDLE/builtin/$e.sh" --needs); do add_php_dep "$n"; done
+done
+for e in $PECL; do
+  for n in $(module_needs "$e"); do add_dep "$n"; done
+done
+
+mkdir -p "$TREE" "$DEPS" "$SRCDIR" "$LOGS"
+
+if [ "$PLAN" = 1 ]; then
+  printf 'PHP %s\n' "$PHP_VERSION"
+  printf '  deps: %s\n' "${ALL_DEPS:-（无）}"
+  printf '  php\n'
+  printf '  ext:  %s\n' "${PECL:-（无）}"
+  exit 0
+fi
+
+: > "$LOGS/build.log"
+printf 'building\n' > "$TREE/BUILD-STATUS"
+printf '%s\n' "$SELECTED_EXTS" > "$TREE/.build-exts"
+
+cat > "$TREE/BUILD-PLAN" <<EOF
+PHP_VERSION=$PHP_VERSION
+PHP_URL="$PHP_URL"
+PHP_SHA256="$PHP_SHA256"
+EXTENSIONS="$SELECTED_EXTS"
+EOF
+
+{
+  for d in $ALL_DEPS; do printf 'deps/%s\n' "$d"; done
+  printf 'php\n'
+  for e in $PECL; do printf 'ext/%s\n' "$e"; done
+} > "$TREE/BUILD-ORDER"
+
+log "PHP $PHP_VERSION"
+log "deps:  ${ALL_DEPS:-（无）}"
+log "php"
+log "ext:   ${PECL:-（无）}"
+
+# ---------------------------------------------------------------- deps ----
+for d in $ALL_DEPS; do
+  ensure_dep "$d"
+done
+
+# ----------------------------------------------------------------- php ----
+PHP_SIG="$(
+  {
+    bash "$BUNDLE/php.sh" --flags
+    printf 'php=%s\n' "$PHP_VERSION"
+    cat "$BUNDLE/php.sh" "$BUNDLE"/builtin/*.sh 2>/dev/null
+    for d in $PHP_DEPS; do
+      printf 'dep=%s:%s:%s\n' "$d" "$(dep_dir_of "$d")" "$(state_get "deps/$d")"
+    done
+    printf 'env=%s\n' "${CFLAGS:-} ${CPPFLAGS:-} ${LDFLAGS:-}"
+  } | hash_sig
+)"
+
+# 显式 --recompile：先清 PHP 状态，失败后重试不会误判为已完成
+if [ "${PHPRT_FORCE_PHP:-0}" = 1 ]; then
+  rm -f "$(state_file php)"
+fi
+
+if [ "${PHPRT_FORCE_PHP:-0}" != 1 ] && state_ok php "$PHP_SIG" && [ -x "$TREE/bin/php" ]; then
+  log "跳过 php（configure 和依赖都没变）"
+else
+  log "执行 php"
+  bash "$BUNDLE/php.sh" 2>&1 | tee -a "$LOGS/build.log"
+  state_set php "$PHP_SIG"
+fi
+
+# ----------------------------------------------------------------- ext ----
+for e in $PECL; do
+  sig="$(ext_sig "$e")"
+  mod="$(ext_modules "$e" | awk '{print $1}')"
+  extdir="$(ext_dir_of "$TREE" 2>/dev/null || true)"
+  if state_ok "ext/$e" "$sig" && [ -n "$extdir" ] && [ -f "$extdir/$mod.so" ]; then
+    log "跳过 ext/$e（签名未变）"
+    continue
+  fi
+  log "执行 ext/$e"
+  rm -f "$PHPRT_HOME/conf.d/20-$e.ini"
+  bash "$BUNDLE/ext/$e.sh" 2>&1 | tee -a "$LOGS/build.log"
+  state_set "ext/$e" "$sig"
+done
+
+[ -x "$TREE/bin/php" ] || die "构建完成但没有 $TREE/bin/php"
+
+log "整理运行时库（hash SONAME + \$ORIGIN rpath）"
+wheelize_tree "$TREE"
+
+# OpenSSL 的配置文件也收进树里：运行时只认 $PREFIX/etc/ssl，
+# 不用再去 deps/ 里按目录名找（搬目录后仍有效）
+for d in "$TREE"/deps/openssl-*/etc/ssl; do
+  [ -d "$d" ] || continue
+  mkdir -p "$TREE/etc"
+  rm -rf "$TREE/etc/ssl"
+  cp -a "$d" "$TREE/etc/ssl"
+  break
+done
+
+{
+  printf 'built_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+  [ -f "$TREE/.configure-line" ] && cat "$TREE/.configure-line"
+  env -u LD_LIBRARY_PATH "$TREE/bin/php" -v | head -2
+} > "$TREE/BUILD-INFO"
+
+printf 'ok\n' > "$TREE/BUILD-STATUS"
+ok "PHP $PHP_VERSION -> $TREE"
