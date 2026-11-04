@@ -4,7 +4,6 @@
 #
 #    phprt list                 已安装的 PHP 版本 + 当前项目用的入口
 #    phprt init                 在当前目录生成 ./myphp（版本 + php.ini 固化进去）
-#    phprt init --sandbox --rw var   同上，并默认在 bwrap 沙箱里跑（var 可写）
 #    phprt exec -- <参数>        不建项目，直接跑一下 PHP
 #    phprt build [参数...]       编译/增量（参数见 ./build.sh --help）
 #    phprt verify               安装结果自检
@@ -94,15 +93,13 @@ cmd_list() {
   return 0
 }
 
-render_app() { # render_app <out> <root> <php> <ini> <args> [sandbox] [可写目录...]
-  local out="$1" tpl sandbox="${6:-off}" rw="${7:-var}"
+render_app() { # render_app <out> <root> <php> <ini> <args>
+  local out="$1" tpl
   tpl="$(cat "$HERE/lib/myphp-project.tmpl")"
   tpl="${tpl//@PHPRT_ROOT@/$2}"
   tpl="${tpl//@PHP_VERSION@/$3}"
   tpl="${tpl//@PHP_INI@/$4}"
   tpl="${tpl//@PHP_ARGS@/$5}"
-  tpl="${tpl//@SANDBOX@/$sandbox}"
-  tpl="${tpl//@RW_DIRS@/$rw}"
   printf '%s\n' "$tpl" > "$out.tmp"
   chmod +x "$out.tmp"
   mv -f "$out.tmp" "$out"
@@ -111,7 +108,6 @@ render_app() { # render_app <out> <root> <php> <ini> <args> [sandbox] [可写目
 cmd_init() {
   local h; h="$(find_home)"
   local ver="" ini="default" ini_local=0 name="myphp" force=0
-  local sandbox="off" rw_list="var" r
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -124,20 +120,10 @@ cmd_init() {
       --name=*)    name="${1#*=}"; shift ;;
       --root)      h="${2:-}"; shift 2 ;;
       --root=*)    h="${1#*=}"; shift ;;
-      --sandbox)   sandbox=on; shift ;;
-      --no-sandbox) sandbox=off; shift ;;
-      --rw)        rw_list="$rw_list ${2//,/ }"; shift 2 ;;
-      --rw=*)      rw_list="$rw_list ${1#*=}"; rw_list="${rw_list//,/ }"; shift ;;
       --force)     force=1; shift ;;
       *) die "未知参数: $1" ;;
     esac
   done
-  # 去重 + 规范化（var var var/log -> var var/log）
-  local -a _rw=()
-  for r in $rw_list; do
-    case " ${_rw[*]} " in *" $r "*) ;; *) _rw+=("$r") ;; esac
-  done
-  rw_list="${_rw[*]}"
 
   [ -d "$h" ] || die "安装根不存在: $h（先跑 install.sh）"
   local vers; vers="$(installed_versions "$h")"
@@ -188,12 +174,8 @@ cmd_init() {
     esac
   fi
 
-  render_app "$app" "$root_value" "$ver" "$ini_value" "" "$sandbox" "$rw_list"
+  render_app "$app" "$root_value" "$ver" "$ini_value" ""
   good "$app  PHP=$ver ${ini_value:+ini=$ini_value}"
-  if [ "$sandbox" = on ]; then
-    good "沙箱: on（项目只读，可写: $rw_list）"
-    printf '  自检: ./%s --sandbox-check\n' "$name"
-  fi
   printf '  用法: ./%s -v\n' "$name"
 }
 

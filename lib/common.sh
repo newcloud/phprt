@@ -259,56 +259,6 @@ php_is_current() {
   done < "$PREFIX/.phprt-deps"
 }
 
-# ------------------------------------------------------------- 沙箱 ------
-# 沙箱（./myphp --sandbox）里允许出现的系统文件清单，按版本各一份。
-# 内容 = ldd 扫 php + 全部扩展后落在安装根之外的路径（基本都是 glibc 家族）
-#        + ldd 看不到、但运行时 dlopen 才会要的东西（NSS 模块、gconv、locale）。
-sandbox_libs_file() { printf '%s/sandbox.libs\n' "$PREFIX"; }
-
-gen_sandbox_libs() {
-  [ -x "$PREFIX/bin/php" ] || return 0
-  local out tmp body n d f
-  out="$(sandbox_libs_file)"; tmp="$out.tmp"; body="$out.body"
-
-  # 生成时要给出和运行时一样的库搜索路径，否则 ldd 找不到 deps 里的库
-  local ld=""
-  while IFS= read -r n; do
-    [ -n "$n" ] || continue
-    d="$(dep_dir_of "$n")"
-    [ -d "$d/lib" ] && ld+="$d/lib:"
-    [ -d "$d/lib64" ] && ld+="$d/lib64:"
-  done < <(enabled_dep_names)
-
-  {
-    LD_LIBRARY_PATH="${ld%:}" ldd "$PREFIX/bin/php" "$PREFIX"/lib/php/extensions/*/*.so 2>/dev/null \
-      | awk '
-          /=>[[:space:]]*\// { print $3; next }   # libfoo.so.1 => /path/libfoo.so.1
-          /^[[:space:]]*\//  { print $1; next }   # /lib64/ld-linux-x86-64.so.2
-        ' \
-      | grep -v "^$PHPRT_HOME/" || true
-
-    # dlopen 才会用到，ldd 里看不到：NSS（DNS / 用户查询）、gconv（iconv）、locale
-    for f in \
-      /usr/lib64/gconv /usr/lib/gconv \
-      /usr/lib64/libnss_files.so.2 /usr/lib64/libnss_dns.so.2 /usr/lib64/libnss_compat.so.2 \
-      /usr/lib/x86_64-linux-gnu/gconv \
-      /usr/lib/x86_64-linux-gnu/libnss_files.so.2 /usr/lib/x86_64-linux-gnu/libnss_dns.so.2 \
-      /usr/lib/locale/locale-archive ; do
-      [ -e "$f" ] && printf '%s\n' "$f"
-    done
-  } | grep -v '^[[:space:]]*$' | sort -u > "$body"
-
-  {
-    printf '# 由 phprt 自动生成（phprt build）。沙箱（./myphp --sandbox）里允许出现的系统文件。\n'
-    printf '# = ldd 扫 php 与全部扩展后落在安装根之外的路径 + NSS/gconv/locale 这些 dlopen 的依赖。\n'
-    printf '# 想额外放行：在项目里设 PHPRT_SANDBOX_LIBS="/路径 ..."，不要手改这个文件。\n'
-    cat "$body"
-  } > "$tmp"
-  rm -f "$body"
-  mv -f "$tmp" "$out"
-  ok "沙箱白名单 $(short "$out")：$(grep -c -v '^#' "$out" || true) 项系统文件"
-}
-
 # ---------------------------------------------------------------- 下载 ------
 _dl_once() { # _dl_once <url> <dest> <proxy|"">
   local url="$1" dest="$2" proxy="$3" pargs=()

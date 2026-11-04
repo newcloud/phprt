@@ -1,12 +1,12 @@
 # phprt
 
-**免 root、可离线、可沙箱的 PHP 工具链。** 从源码编一套 PHP，装进一个目录
+**免 root、可离线、可搬迁的 PHP 工具链。** 从源码编一套 PHP，装进一个目录
 （`~/.phprt` 或项目内的 `./.phprt`），项目里只保留一个自包含的 `./myphp`。
 
 ```bash
 ./myphp -v                      # PHP 8.5.12 / 8.6.0-dev，随项目走
 ./myphp worker.php              # 跑常驻 worker（RoadRunner / Swoole）
-./myphp --sandbox worker.php    # 同一个命令，跑进 bwrap 沙箱
+./myphp composer install        # Composer 用的也是这一套 PHP
 ```
 
 不写 `/usr/local`、不改 shell 配置、不需要 root；卸载就是 `rm -rf` 那个目录。
@@ -19,8 +19,7 @@
 - [特性](#特性)
 - [快速开始](#快速开始)
 - [项目里的 `./myphp`](#项目里的-myphp)
-- [沙箱（bwrap）](#沙箱bwrap)
-  - [完整例子：RoadRunner 博客](#完整例子roadrunner-博客)
+- [在真实项目里用：RoadRunner](#在真实项目里用roadrunner)
 - [多版本](#多版本)
 - [扩展](#扩展)
 - [命令参考](#命令参考)
@@ -41,7 +40,6 @@ phprt 装的是「项目的 PHP」：
 | 系统升级影响 | 换 libcurl/libssl 就可能变行为 | 无（除非 glibc ABI 变化） |
 | 多版本 | 一般只能一个默认版本 | 8.5 / 8.6 并存，项目级切换 |
 | 回滚 | 动系统仓库 | 改 `./myphp` 一行 + 重启进程 |
-| 隔离 | 能读 `$HOME`、`/etc/shadow`、别的项目 | 可选 bwrap 沙箱，只留 glibc 白名单 |
 | 卸载 | 卸载包 | `rm -rf ~/.phprt` |
 | 代价 | 随发行版更新 | 自己编（约 20 分钟）、每版 100–200MB |
 
@@ -54,7 +52,6 @@ phprt 装的是「项目的 PHP」：
 - **多版本并存**：一个 PHP 版本一份 `configs/php-<版本>.conf`，互不影响
 - **可搬迁**：整个安装根搬走，`./myphp` 照样能跑（`phprt verify` 会真的拷贝一份来测）
 - **可离线**：`downloads/` 放好源码包，`--offline` 全程不联网
-- **可选沙箱**：bubblewrap，空根 + 系统库白名单 + 项目只读，只放开指定目录
 - **构建可增量**：改了开关只重编影响的模块；`--only php` 单步重编
 - **给 agent 的说明书**：加扩展的完整步骤在 [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md)
 
@@ -62,17 +59,17 @@ phprt 装的是「项目的 PHP」：
 
 ### 0. 前置
 
-需要 C/C++ 工具链（编 PHP 用），沙箱还需要 bubblewrap：
+需要 C/C++ 工具链（编 PHP 用）：
 
 ```bash
 # Fedora
-sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config bison perl tar xz unzip curl bubblewrap
+sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config bison perl tar xz unzip curl
 
 # Debian / Ubuntu
-sudo apt install build-essential cmake pkg-config bison perl tar xz-utils unzip curl bubblewrap
+sudo apt install build-essential cmake pkg-config bison perl tar xz-utils unzip curl
 ```
 
-macOS / Windows 没测过（脚本依赖 Linux 的 `flock`、`/proc`、bwrap）。
+macOS / Windows 没测过（脚本依赖 Linux 的 `flock`、`/proc`）。
 
 ### 1. 装
 
@@ -94,7 +91,6 @@ cd ~/myproject && ~/src/phprt/install.sh
 ./install.sh --global --php 8.5.12 --ini dev
 ./install.sh --local --ini-local --no-entry         # 装进 ./.phprt，ini 放项目里
 ./install.sh --offline                              # 只用 downloads/ 里的包
-./install.sh --sandbox --rw var                     # 生成的 ./myphp 默认进沙箱
 ./install.sh --profile minimal                      # 只编零依赖部分（验证/最小环境用）
 ```
 
@@ -119,78 +115,28 @@ PHPRT_ROOT="./.phprt"                        # 安装根（在项目里就是相
 PHPRT_PHP="8.6.0-dev"                        # 用哪个版本
 PHPRT_INI="./.phprt/php8.6.0-dev_dev.ini"    # 用哪个 php.ini
 PHPRT_ARGS=()
-
-PHPRT_SANDBOX="${PHPRT_SANDBOX:-on}"         # off | on
-PHPRT_RW_DIRS="${PHPRT_RW_DIRS:-var var/log}"  # 沙箱里可写的目录
-PHPRT_SANDBOX_OPTS="${PHPRT_SANDBOX_OPTS:-}"   # 追加给 bwrap 的参数
-PHPRT_SANDBOX_LIBS="${PHPRT_SANDBOX_LIBS:-}"   # 额外放行的系统库
 ```
 
 依赖库（`deps/*/lib`）和扩展目录是**运行时用通配符找的**，所以重编 PHP、加减依赖
-都不需要重新生成这个文件。三个 `PHPRT_*` 变量都能被同名环境变量临时覆盖。
+都不需要重新生成这个文件。
 
 ```bash
 ./myphp --env                 # 看它设了哪些环境变量
-./myphp --sandbox-check       # 沙箱自检
-./myphp --no-sandbox -v       # 这次不进沙箱
 ```
 
-## 沙箱（bwrap）
+## 在真实项目里用：RoadRunner
 
-`./myphp` 可以在 [bubblewrap](https://github.com/containers/bubblewrap) 里跑。
-目标很朴素：**这个 PHP 只依赖 glibc，那就让它在沙箱里也只看得见 glibc。**
+`phprt` 不限定应用服务器：`myphp` 只是一个 `exec php` 的入口，
+RoadRunner / Swoole / `php-fpm` 都能直接调它。
 
-```bash
-./myphp --sandbox worker.php                  # 这一次
-phprt init --sandbox --rw var                 # 固化进 ./myphp（服务的配置文件不用改）
-phprt init --sandbox --rw var --rw var/log    # 可写目录可以列多个
-./myphp --sandbox-check                       # 自检
-```
-
-沙箱里的世界：
-
-| 项 | 说明 |
-| --- | --- |
-| 根目录 | **空的**（`--tmpfs /`）：`/home`、`/root`、`/etc` 其余部分、别的项目都不存在 |
-| `/usr` | 只读；`/bin /sbin /lib /lib64` 按宿主是软链还是真目录原样处理 |
-| 系统库 | `/usr/lib64` **清空后按白名单回填**，系统 `libcurl/libssl/libicu` 直接消失 |
-| 项目 | 整体只读（`myphp`、`vendor/`、`.git/` 都改不了） |
-| 可写 | 只有 `PHPRT_RW_DIRS` 里的目录（默认 `var`），安装根永远只读 |
-| `/tmp`、`/home` | 独立 tmpfs，进程结束即消失 |
-| 进程 | 独立 PID 命名空间（PHP 看到自己是 pid 2），看不到宿主进程 |
-| 网络 | 默认共享（服务要 bind 端口）；`--no-net` 用 `--unshare-net` |
-
-白名单由 `phprt build` 自动生成到 `<安装根>/php-<版本>/sandbox.libs`
-（`ldd` 扫 php + 全部扩展，取安装根之外的路径，再补 NSS / gconv / locale 这些
-`ldopen` 才用到的文件），加减依赖会自动跟着变：
+实测项目（不在本仓库）：RoadRunner 3（Go 写的应用服务器）+ Slim 4 + SQLite，
+4 个常驻 PHP worker，通过 pipe 通信。
 
 ```
-/lib64/ld-linux-x86-64.so.2     /lib64/libc.so.6
-/lib64/libm.so.6                /lib64/libgcc_s.so.1
-/usr/lib64/gconv                /usr/lib64/libnss_{files,dns,compat}.so.2
-/usr/lib/locale/locale-archive
+浏览器 ──HTTP──▶ RoadRunner :8080 ──pipes──▶ PHP worker（Slim 4）──▶ var/blog.sqlite
 ```
 
-效果是**强制**的：某个扩展如果偷偷链了系统库，沙箱里会当场
-`error while loading shared libraries: libxxx`，而不是悄悄跑起来。
-
-```
-$ ./myphp --sandbox -r 'echo file_exists("/usr/lib64/libcurl.so.4") ? "可见" : "已挡住";'
-已挡住
-```
-
-完整参数、逃生口、排错见 **[docs/SANDBOX.md](docs/SANDBOX.md)**。
-
-### 完整例子：RoadRunner 博客
-
-一个真实在跑的项目：RoadRunner 3（Go 写的应用服务器）+ Slim 4 + SQLite，
-4 个常驻 PHP worker。**RoadRunner 在沙箱外，worker 在沙箱里**，两者用 pipe 通信。
-
-```
-浏览器 ──HTTP──▶ RoadRunner :8080 ──pipes──▶ PHP worker（bwrap 内，Slim 4）──▶ var/blog.sqlite
-```
-
-`.rr.yaml`（`server.env` 里的就是沙箱参数）：
+`.rr.yaml` 里只需要把 `server.command` 指向项目入口：
 
 ```yaml
 version: '3'
@@ -199,21 +145,16 @@ rpc:
   listen: tcp://127.0.0.1:6001
 
 server:
-  command: "./myphp worker.php"     # 项目入口，沙箱由它自己套
+  command: "./myphp worker.php"     # 项目入口：版本 / php.ini 都固化在里面
   relay: pipes
   env:
     - APP_ENV: dev
-    # ---- 沙箱参数 ----
-    - PHPRT_SANDBOX: on                    # on | off
-    - PHPRT_RW_DIRS: "var var/log"         # 只有这两个目录可写
-    - PHPRT_SANDBOX_OPTS: ""               # 追加 bwrap 参数
-    - PHPRT_SANDBOX_LIBS: ""               # 额外放行的系统库
 
 http:
   address: 127.0.0.1:8080
   access_logs: true                  # 每个请求一行访问日志
   pool:
-    num_workers: 4
+    num_workers: 4                   # 4 个 worker 共享一个常驻进程池
 
 logs:
   level: info
@@ -224,35 +165,25 @@ logs:
 
 ```bash
 systemd-run --user --unit=blog-rr --collect \
-  --working-directory=/home/z/testphp/blog \
-  /home/z/testphp/blog/bin/rr serve -c /home/z/testphp/blog/.rr.yaml
+  --working-directory=/path/to/blog \
+  /path/to/blog/bin/rr serve -c /path/to/blog/.rr.yaml
 
-systemctl --user restart blog-rr     # 改完代码重启 worker
+systemctl --user restart blog-rr     # 改完代码重启 worker（worker 是常驻的）
 systemctl --user stop blog-rr
 pgrep -x rr                          # 或者按进程名手动 kill（别用 pkill -f）
 ```
 
-验证它真的在沙箱里：
+进程树就是 RR 管着 4 个 PHP：
 
 ```bash
-$ curl -s localhost:8080/health
-{"status":"ok","php":"8.6.0-dev","pid":2,"worker":"c012d2","sandbox":true,"posts":2}
-#                          ^ 命名空间里的 pid                        ^ pid 1 是 bwrap
-
 $ pstree -p $(systemctl --user show -p MainPID --value blog-rr)
-rr(2881291)─┬─bwrap(2881308)───bwrap(2881348)───php(2881352)
-            ├─bwrap(2881309)───bwrap(2881351)───php(2881355)
-            ├─bwrap(2881310)───bwrap(2881352)───php(2881356)
-            └─bwrap(2881311)───bwrap(2881353)───php(2881357)
+rr(208495)─┬─php(208511)
+           ├─php(208512)
+           ├─php(208513)
+           └─php(208514)
 ```
 
-`.rr.yaml` 里的环境变量优先于 `./myphp` 里的固化值，所以调沙箱只改配置 + 重启：
-
-| 改动 | 结果 |
-| --- | --- |
-| `PHPRT_RW_DIRS: "var/log"` | `GET /` 200，`POST /post` 500（SQLite 只读，写不进去） |
-| `PHPRT_SANDBOX: off` | `/health` → `"pid":2878290,"sandbox":false`（回到宿主 pid） |
-| 改回来 + 重启 | `"pid":2,"sandbox":true` |
+`./myphp --env` 可以核对它实际用的 PHP 版本、php.ini、扩展目录和库搜索路径。
 
 ## 多版本
 
@@ -333,17 +264,15 @@ autoconf + re2c 并跑 `buildconf`。
 - **PECL 扩展**：照 `lib/modules/redis.sh` 抄 —— 下载 tgz → `phpize` → `configure
   --with-php-config` → `make install` → 往 `php-<版本>/etc/conf.d/` 写一行。
 
-沙箱白名单会自动跟着重编更新（`phprt build` 重新扫 `ldd`），不用手工加。
-
 ## 命令参考
 
 ```bash
 phprt list                           # 已装版本：占用、开关数、默认标记、当前项目用的入口
-phprt init [--php 版本] [--ini dev] [--sandbox] [--rw DIR] [--force]
+phprt init [--php 版本] [--ini dev] [--force] [--name 入口名]
                                      # 在当前目录生成 ./myphp
 phprt exec [--php 版本] -- -v        # 不建项目，直接跑一下 PHP
 phprt build [--php 版本] [--only php] [--force] [--offline] [--prune] [--jobs N]
-phprt verify [--php 版本]            # 自检：结构、依赖记录、ldd、扩展、ini、搬迁、沙箱
+phprt verify [--php 版本]            # 自检：结构、依赖记录、ldd、扩展、ini、搬迁
 phprt clean [--all]                  # 清 build/（--all 连 downloads/）
 phprt home                           # 打印当前安装根
 ```
@@ -360,7 +289,7 @@ phprt home                           # 打印当前安装根
 │   ├── php-8.5.12.conf        一个版本一份：版本 + 开关 + 依赖版本
 │   ├── php-8.6.0-dev.conf
 │   └── default
-├── php-8.5.12/                PHP 本体（bin/ lib/ etc/ sandbox.libs .phprt-deps）
+├── php-8.5.12/                PHP 本体（bin/ lib/ etc/ .phprt-deps）
 ├── php-8.6.0-dev/
 ├── php8.5.12_{default,dev,prod}.ini
 ├── deps/                      依赖库，跨版本共享（openssl-3.5.9/ icu-79.1/ …）
@@ -381,9 +310,9 @@ ini/                    php.ini 预设
 lib/versions/           PHP 版本清单
 lib/modules/*.sh        每个依赖一个脚本
 lib/myphp-project.tmpl  项目入口 ./myphp 的模板
-lib/common.sh           路径、下载、stamp、沙箱白名单生成
+lib/common.sh           路径、下载、stamp、依赖记录
 lib/verify.sh           自检
-docs/                   ADD-EXTENSION.md / SANDBOX.md
+docs/                   ADD-EXTENSION.md
 downloads/              预下载包（不进 git）
 ```
 
@@ -404,18 +333,11 @@ downloads/              预下载包（不进 git）
 **能同时跑两个版本吗？** 能。版本之间只共享 `deps/`，每个 `php-<版本>` 独立；
 不同项目各自的 `./myphp` 指向不同版本即可。
 
-**沙箱里缺库怎么办？** 先看 `./myphp --sandbox-check` 和 `phprt verify` 的 ldd 段。
-正确做法是把库编进 `deps/`；临时可以用 `PHPRT_SANDBOX_LIBS=/usr/lib64/libxxx.so.N` 放行。
-
-**为什么沙箱里 `getmypid()` 总是 2？** 每个 worker 有独立 PID 命名空间，
-`pid 1` 是 bwrap，PHP 就是 2。要区分 worker 用业务层的 id（示例 `/health` 里是 `worker` 字段）。
-
 **会碰系统吗？** 不会。没有 root，不写 `/usr/local`，不改 shell 配置；
 `install.sh` 只在安装根和当前目录写文件。
 
 ## 文档
 
-- [`docs/SANDBOX.md`](docs/SANDBOX.md) —— 沙箱：挂载表、参数、逃生口、排错
 - [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md) —— 给 agent 的加扩展手册
 
 ## License
