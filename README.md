@@ -1,10 +1,6 @@
 # phprt
 
-给 PHP 建一个项目自己的环境。和 uv 管 Python、nvm 管 Node 一样：用哪个 PHP 版本、
-开哪些扩展，项目自己决定，跟系统里装的那套没关系。
-
-PHP 从源码编。openssl、curl、icu、libzip 这些库也一起编，全部放在一个目录里。
-项目里只留一个 `./myphp`，跑脚本、起 worker、用 Composer 都通过它。
+类似 uv 管 Python、nvm 管 Node：PHP 环境装在项目里，不依赖系统装的那套。
 
 ```bash
 ./myphp -v                      # PHP 8.5.12 / 8.6.0-dev，随项目走
@@ -12,15 +8,10 @@ PHP 从源码编。openssl、curl、icu、libzip 这些库也一起编，全部�
 ./myphp composer install        # Composer 用的也是这一套 PHP
 ```
 
-环境里的 openssl 是 3.5.9、libzip 是 1.12.1，都是 phprt 编的。系统里装的是哪个
-版本不影响它，phprt 也不会往系统里装东西。系统升级换掉 libssl，这里不受影响。
-
-目录放哪里自己选：
+装在哪儿：
 
 - `<项目>/.phprt`：一个项目一套，一般加进 `.gitignore`
-- `~/.phprt`：几个项目共用一套
-
-共用一个目录时，每个项目的 `./myphp` 仍然指向自己要用的 PHP 版本。
+- `~/.phprt`：几个项目共用一套，每个项目的 `./myphp` 仍指向自己的 PHP 版本
 
 ---
 
@@ -40,10 +31,11 @@ PHP 从源码编。openssl、curl、icu、libzip 这些库也一起编，全部�
 
 ## 和系统里的 PHP 有什么区别
 
-系统包管理器装的 PHP 链接系统的 libcurl、libssl、libicu。系统升级后，扩展的行为可能
-跟着变；默认版本通常只有一个，换版本要动系统仓库。
+用系统包，或者 phpbrew、php-build 这类源码工具装 PHP，openssl、libzip、icu 要先装到
+系统里，PHP 链接的是系统那一份。系统里是 OpenSSL 3.2、项目要 3.5，就得升级系统包；
+升级又可能影响机器上别的程序。两个项目需要不同版本时，基本没法同时满足。
 
-phprt 编出来的 PHP 链接安装根里 `deps/` 下的库，版本由项目的配置决定：
+phprt 把这些库编在项目目录里，版本由项目配置决定，不往系统里装，也不受系统升级影响。
 
 | | `dnf/apt install php` | phprt |
 | --- | --- | --- |
@@ -58,14 +50,13 @@ phprt 编出来的 PHP 链接安装根里 `deps/` 下的库，版本由项目的
 
 ## 特性
 
-- **项目级环境**：PHP 版本、php.ini、扩展开关都在项目配置里；`./myphp` 是入口，可以放进 git
-- **库也跟着项目走**：openssl、curl、icu、libzip 由 phprt 编译，不跟随发行版的版本
-- **一个项目一套，或几个项目共用**：装到 `<项目>/.phprt` 或 `~/.phprt`
-- **多版本并存**：一个 PHP 版本一份 `configs/php-<版本>.conf`，互不影响
-- **可搬迁**：整个安装根搬到别的路径，`./myphp` 照样能用（`phprt verify` 会真的拷贝一份来测）
-- **可离线**：`downloads/` 放好源码包，`--offline` 全程不联网
-- **构建可增量**：改了开关只重编影响的模块；`--only php` 单步重编
-- **给 agent 的说明书**：加扩展的完整步骤在 [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md)
+- PHP 版本、php.ini、扩展开关都在项目配置里；`./myphp` 是入口，可以放进 git
+- openssl、curl、icu、libzip 由 phprt 编译，不跟随发行版的版本
+- 8.5 / 8.6 可以同时装，项目级切换
+- 可搬迁：整个安装根搬到别的路径，`./myphp` 照样能用（`phprt verify` 会真的拷贝一份来测）
+- 可离线：`downloads/` 放好源码包，`--offline` 全程不联网
+- 构建可增量：改了开关只重编影响的模块；`--only php` 单步重编
+- 加扩展的完整步骤在 [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md)
 
 ## 快速开始
 
