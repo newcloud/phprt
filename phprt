@@ -4,7 +4,7 @@
 #
 #    phprt list                 已安装的 PHP 版本 + 当前项目用的入口
 #    phprt modules              节点清单：类别 / 开关 / 依赖 / 状态
-#    phprt init                 在当前目录生成 ./myphp（版本 + php.ini 固化进去）
+#    phprt init [local] [版本]  在当前目录生成 ./myphp；local = 安装根用 ./.phprt
 #    phprt exec -- <参数>        不建项目，直接跑一下 PHP
 #    phprt build [参数...]       编译/增量（参数见 ./build.sh --help）
 #    phprt verify               安装结果自检
@@ -109,6 +109,7 @@ render_app() { # render_app <out> <root> <php> <ini> <args>
 cmd_init() {
   local h; h="$(find_home)"
   local ver="" ini="default" ini_local=0 name="myphp" force=0
+  local local_root=0 root_set=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -119,12 +120,19 @@ cmd_init() {
       --ini-local) ini_local=1; shift ;;
       --name)      name="${2:-}"; shift 2 ;;
       --name=*)    name="${1#*=}"; shift ;;
-      --root)      h="${2:-}"; shift 2 ;;
-      --root=*)    h="${1#*=}"; shift ;;
+      --root)      h="${2:-}"; root_set=1; shift 2 ;;
+      --root=*)    h="${1#*=}"; root_set=1; shift ;;
       --force)     force=1; shift ;;
+      local)       local_root=1; shift ;;
+      [0-9]*)      ver="$1"; shift ;;
       *) die "未知参数: $1" ;;
     esac
   done
+
+  # phprt init local <版本>：安装根固定用项目里的 ./.phprt
+  if [ "$local_root" = 1 ] && [ "$root_set" = 0 ]; then
+    h="$PWD/.phprt"
+  fi
 
   [ -d "$h" ] || die "安装根不存在: $h（先跑 install.sh）"
   local vers; vers="$(installed_versions "$h")"
