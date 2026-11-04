@@ -1,7 +1,10 @@
 # phprt
 
-**免 root、可离线、可搬迁的 PHP 工具链。** 从源码编一套 PHP，装进一个目录
-（`~/.phprt` 或项目内的 `./.phprt`），项目里只保留一个自包含的 `./myphp`。
+给 PHP 建一个项目自己的环境。和 uv 管 Python、nvm 管 Node 一样：用哪个 PHP 版本、
+开哪些扩展，项目自己决定，跟系统里装的那套没关系。
+
+PHP 从源码编。openssl、curl、icu、libzip 这些库也一起编，全部放在一个目录里。
+项目里只留一个 `./myphp`，跑脚本、起 worker、用 Composer 都通过它。
 
 ```bash
 ./myphp -v                      # PHP 8.5.12 / 8.6.0-dev，随项目走
@@ -9,13 +12,21 @@
 ./myphp composer install        # Composer 用的也是这一套 PHP
 ```
 
-不写 `/usr/local`、不改 shell 配置、不需要 root；卸载就是 `rm -rf` 那个目录。
+环境里的 openssl 是 3.5.9、libzip 是 1.12.1，都是 phprt 编的。系统里装的是哪个
+版本不影响它，phprt 也不会往系统里装东西。系统升级换掉 libssl，这里不受影响。
+
+目录放哪里自己选：
+
+- `<项目>/.phprt`：一个项目一套，一般加进 `.gitignore`
+- `~/.phprt`：几个项目共用一套
+
+共用一个目录时，每个项目的 `./myphp` 仍然指向自己要用的 PHP 版本。
 
 ---
 
 ## 目录
 
-- [为什么不用系统里的 PHP](#为什么不用系统里的-php)
+- [和系统里的 PHP 有什么区别](#和系统里的-php-有什么区别)
 - [特性](#特性)
 - [快速开始](#快速开始)
 - [项目里的 `./myphp`](#项目里的-myphp)
@@ -27,30 +38,31 @@
 - [常见问题](#常见问题)
 - [文档](#文档)
 
-## 为什么不用系统里的 PHP
+## 和系统里的 PHP 有什么区别
 
-系统包管理器装的 PHP 是「系统的 PHP」：它链接系统里的 libcurl / libssl / libicu，
-系统一升级，扩展行为可能跟着变；通常只能有一个默认版本；换版本要动系统仓库。
+系统包管理器装的 PHP 链接系统的 libcurl、libssl、libicu。系统升级后，扩展的行为可能
+跟着变；默认版本通常只有一个，换版本要动系统仓库。
 
-phprt 装的是「项目的 PHP」：
+phprt 编出来的 PHP 链接安装根里 `deps/` 下的库，版本由项目的配置决定：
 
 | | `dnf/apt install php` | phprt |
 | --- | --- | --- |
-| 依赖来源 | 全部来自系统 | 只有 glibc（`libc/libm/libgcc_s`），其余都在 `deps/` |
-| 系统升级影响 | 换 libcurl/libssl 就可能变行为 | 无（除非 glibc ABI 变化） |
+| 依赖来源 | 发行版仓库 | phprt 自己编，放在 `deps/` |
+| 系统升级影响 | 换 libcurl/libssl 就可能变行为 | 项目里的库不变 |
 | 多版本 | 一般只能一个默认版本 | 8.5 / 8.6 并存，项目级切换 |
 | 回滚 | 动系统仓库 | 改 `./myphp` 一行 + 重启进程 |
 | 卸载 | 卸载包 | `rm -rf ~/.phprt` |
 | 代价 | 随发行版更新 | 自己编（约 20 分钟）、每版 100–200MB |
 
-可审计性也是卖点：`ldd` 出来的外部依赖就 4 行，`phprt verify` 会逐条核对。
+`phprt verify` 会核对扩展有没有加载、库有没有从系统借。
 
 ## 特性
 
-- **免 root / 不污染系统**：所有产物都在安装根；不写 `/usr`，不改 `~/.bashrc`
-- **一个项目一个入口**：`./myphp` 自包含，版本和 php.ini 固化成明文，可以进 git
+- **项目级环境**：PHP 版本、php.ini、扩展开关都在项目配置里；`./myphp` 是入口，可以放进 git
+- **库也跟着项目走**：openssl、curl、icu、libzip 由 phprt 编译，不跟随发行版的版本
+- **一个项目一套，或几个项目共用**：装到 `<项目>/.phprt` 或 `~/.phprt`
 - **多版本并存**：一个 PHP 版本一份 `configs/php-<版本>.conf`，互不影响
-- **可搬迁**：整个安装根搬走，`./myphp` 照样能跑（`phprt verify` 会真的拷贝一份来测）
+- **可搬迁**：整个安装根搬到别的路径，`./myphp` 照样能用（`phprt verify` 会真的拷贝一份来测）
 - **可离线**：`downloads/` 放好源码包，`--offline` 全程不联网
 - **构建可增量**：改了开关只重编影响的模块；`--only php` 单步重编
 - **给 agent 的说明书**：加扩展的完整步骤在 [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md)
@@ -340,8 +352,8 @@ downloads/              预下载包（不进 git）
 **能同时跑两个版本吗？** 能。版本之间只共享 `deps/`，每个 `php-<版本>` 独立；
 不同项目各自的 `./myphp` 指向不同版本即可。
 
-**会碰系统吗？** 不会。没有 root，不写 `/usr/local`，不改 shell 配置；
-`install.sh` 只在安装根和当前目录写文件。
+**会碰系统吗？** 不会。安装时只写安装根和当前目录，不写 `/usr`，也不改 shell 配置。
+不要了，`rm -rf` 那个目录即可。
 
 ## 文档
 
