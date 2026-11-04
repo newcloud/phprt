@@ -2,10 +2,10 @@
 # =============================================================================
 #  redis 扩展（PECL 源码 + phpize 编译，产物是 PHP 目录里的 extensions/.../redis.so）
 #  源码目录按 PHP 版本分开: build/redis-<版本>-php-<PHP 版本>/
-#  可单独执行: lib/modules/redis.sh
+#  可单独执行: lib/modules/ext/redis.sh
 # =============================================================================
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc make tar
@@ -43,11 +43,11 @@ fi
 # phpize 需要 autoconf（没有就装到 tools/）
 if [ ! -x "$AC_DIR/bin/autoconf" ]; then
   log "编译 redis 需要 autoconf，先安装"
-  bash "$MODULES/autoconf.sh"
+  bash "$(module_sh autoconf)"
 fi
 # 精简系统上 phpize/configure 会缺 perl 核心模块
 if [ ! -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ]; then
-  bash "$MODULES/perlshim.sh"
+  bash "$(module_sh perlshim)"
 fi
 
 LIB_DIRS="$(dep_lib_dirs $(enabled_dep_names) | tr '\n' ':' | sed 's/:$//')"

@@ -2,10 +2,10 @@
 # =============================================================================
 #  protobuf 扩展（PECL 源码 + phpize）—— Google Protocol Buffers 的 C 运行时
 #  纯 C，自带精简版 upb，不依赖外部 libprotobuf，也不需要重编 PHP
-#  可单独执行: lib/modules/protobuf.sh
+#  可单独执行: lib/modules/ext/protobuf.sh
 # =============================================================================
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc make tar
@@ -42,7 +42,7 @@ fi
 
 if [ ! -x "$AC_DIR/bin/autoconf" ]; then
   log "编译 PECL 扩展需要 autoconf，先安装"
-  bash "$MODULES/autoconf.sh"
+  bash "$(module_sh autoconf)"
 fi
 
 # PHP 8.6 移除了 zval_dtor()（8.3 起弃用），等价替换为 zval_ptr_dtor()；
@@ -53,7 +53,7 @@ if grep -rqs 'zval_dtor(' "$SRC" --include='*.c' --include='*.h'; then
     | while IFS= read -r f; do sed -i 's/\bzval_dtor(/zval_ptr_dtor(/g' "$f"; done
 fi
 if [ ! -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ]; then
-  bash "$MODULES/perlshim.sh"
+  bash "$(module_sh perlshim)"
 fi
 
 LIB_DIRS="$(dep_lib_dirs $(enabled_dep_names) | tr '\n' ':' | sed 's/:$//')"

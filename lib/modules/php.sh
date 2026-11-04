@@ -129,9 +129,9 @@ if [ ! -x "$SRC/configure" ]; then
   AC_DIR="$(dep_dir_of autoconf)"
   RE2C_DIR="$(dep_dir_of re2c)"
   PERL_DIR="$(dep_dir_of perl5core)"
-  [ -x "$AC_DIR/bin/autoconf" ] || bash "$MODULES/autoconf.sh"
-  [ -x "$RE2C_DIR/bin/re2c" ]   || bash "$MODULES/re2c.sh"
-  [ -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ] || bash "$MODULES/perlshim.sh"
+  [ -x "$AC_DIR/bin/autoconf" ] || bash "$(module_sh autoconf)"
+  [ -x "$RE2C_DIR/bin/re2c" ]   || bash "$(module_sh re2c)"
+  [ -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ] || bash "$(module_sh perlshim)"
   # 注意要 export：后面的 configure / make 也要能找到 re2c
   export PATH="$AC_DIR/bin:$RE2C_DIR/bin:$PREFIX/bin:$PATH"
   export PERL5LIB="$PERL_DIR/share/perl5core${PERL5LIB:+:$PERL5LIB}"

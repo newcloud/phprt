@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  yaml 扩展（PECL 源码 + phpize，依赖 libyaml）
-#  可单独执行: lib/modules/yaml.sh
+#  phprt: needs=libyaml
+#  可单独执行: lib/modules/ext/yaml.sh
 # =============================================================================
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc make tar
@@ -20,6 +21,9 @@ SIG="yaml=$YAML_EXT_VERSION;libyaml=$LIBYAML_VERSION;$(php_sig)"
 if [ "$FORCE" != 1 ] && stamp_ok yaml "$SIG" && [ -f "$PREFIX/etc/conf.d/26-yaml.ini" ]; then
   ok "yaml 扩展已装，跳过"; exit 0
 fi
+
+ensure_needs yaml
+dep_env yaml
 
 TAR="$(basename "$YAML_EXT_URL")"
 fetch "$YAML_EXT_URL" "$DOWNLOADS/$TAR" "${YAML_EXT_SHA256:-}"
@@ -41,10 +45,10 @@ fi
 
 if [ ! -x "$AC_DIR/bin/autoconf" ]; then
   log "编译 PECL 扩展需要 autoconf，先安装"
-  bash "$MODULES/autoconf.sh"
+  bash "$(module_sh autoconf)"
 fi
 if [ ! -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ]; then
-  bash "$MODULES/perlshim.sh"
+  bash "$(module_sh perlshim)"
 fi
 
 LIB_DIRS="$(dep_lib_dirs $(enabled_dep_names) | tr '\n' ':' | sed 's/:$//')"

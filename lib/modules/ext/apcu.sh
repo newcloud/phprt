@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  apcu 扩展（PECL 源码 + phpize）—— 进程内共享内存缓存，常驻 worker 里很有用
-#  可单独执行: lib/modules/apcu.sh
+#  可单独执行: lib/modules/ext/apcu.sh
 # =============================================================================
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc make tar
@@ -40,10 +40,10 @@ fi
 
 if [ ! -x "$AC_DIR/bin/autoconf" ]; then
   log "编译 PECL 扩展需要 autoconf，先安装"
-  bash "$MODULES/autoconf.sh"
+  bash "$(module_sh autoconf)"
 fi
 if [ ! -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ]; then
-  bash "$MODULES/perlshim.sh"
+  bash "$(module_sh perlshim)"
 fi
 
 LIB_DIRS="$(dep_lib_dirs $(enabled_dep_names) | tr '\n' ':' | sed 's/:$//')"

@@ -23,7 +23,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"   # 仓库的 lib/
 REPO="$(cd "$HERE/.." && pwd)"                                          # 仓库根
 VENDOR="$HERE/vendor"
+# 模块按产物类别分目录（目录即类别）：
+#   deps/   独立库   -> <安装根>/deps/<名字>-<版本>/
+#   ext/    PHP 扩展 -> <安装根>/php-<版本>/
+#   tools/  构建工具 -> <安装根>/tools/<名字>-<版本>/（无开关，谁需要谁拉起）
+# 顶层只放两个特例：php.sh（本体）、composer.sh（phar）
 MODULES="$HERE/modules"
+MODULES_DEPS="$MODULES/deps"
+MODULES_EXT="$MODULES/ext"
+MODULES_TOOLS="$MODULES/tools"
 
 # 安装根：install.sh 会传绝对路径；手动用时默认 ~/.phprt
 PHPRT_HOME="${PHPRT_HOME:-$HOME/.phprt}"
@@ -196,6 +204,54 @@ dep_include_flags() { # dep_include_flags <名字...> -> "-I... -I..."
     [ -d "$d/include" ] && out+="-I$d/include "
   done
   printf '%s\n' "${out% }"
+}
+
+dep_build_flags() { # dep_build_flags <名字...> -> "-L... -Wl,-rpath,..."
+  local n d out=""
+  for n in "$@"; do
+    d="$(dep_dir_of "$n")"
+    [ -d "$d/lib" ]   && out+="-L$d/lib -Wl,-rpath,$d/lib "
+    [ -d "$d/lib64" ] && out+="-L$d/lib64 -Wl,-rpath,$d/lib64 "
+  done
+  printf '%s\n' "${out% }"
+}
+
+# ------------------------------------------------- 模块（deps/ext/tools） ------
+module_sh() { # module_sh <名字> -> 模块脚本的绝对路径
+  local n="$1" d
+  for d in "$MODULES_EXT" "$MODULES_DEPS" "$MODULES_TOOLS" "$MODULES"; do
+    [ -f "$d/$n.sh" ] && { printf '%s\n' "$d/$n.sh"; return 0; }
+  done
+  die "没有模块 $n（lib/modules/{ext,deps,tools}/ 里都没找到）"
+}
+
+module_needs() { # module_needs <名字> -> 空格分隔的依赖名（读模块头部的 # phprt: needs=）
+  sed -n 's/^# *phprt:.*[[:space:]]needs=\([^[:space:]]*\).*/\1/p' "$(module_sh "$1")" \
+    | head -1 | tr ',' ' '
+}
+
+dep_env() { # dep_env <模块名>：把 needs 的 include/lib/rpath/pkgconfig 放进环境
+  local names pc cpp ld
+  names="$(module_needs "$1")"
+  [ -n "$names" ] || return 0
+  cpp="$(dep_include_flags $names)"
+  ld="$(dep_build_flags $names)"
+  pc="$(dep_pc_path $names)"
+  [ -n "$cpp" ] && export CPPFLAGS="$cpp${CPPFLAGS:+ $CPPFLAGS}"
+  [ -n "$ld" ]  && export LDFLAGS="$ld${LDFLAGS:+ $LDFLAGS}"
+  [ -n "$pc" ]  && export PKG_CONFIG_PATH="$pc${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  return 0
+}
+
+ensure_needs() { # ensure_needs <模块名>：needs 里缺的库先构建（perlshim 同款，不碰 PHP 开关）
+  local n d
+  for n in $(module_needs "$1"); do
+    d="$(dep_dir_of "$n")"
+    [ -d "$d" ] && [ -f "$(stamp_file "$n")" ] && continue
+    log "$1 需要 $n 共享库，先构建"
+    bash "$(module_sh "$n")"
+  done
+  return 0
 }
 
 # 签名文件放在被描述的那个安装目录里（删目录 = 签名一起没了 = 会重装）

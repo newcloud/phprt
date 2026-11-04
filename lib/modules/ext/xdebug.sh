@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  xdebug 扩展（PECL 源码 + phpize）
+#  phprt: needs=zlib
 #  默认 xdebug.mode=off，不拖慢运行；调试时 export XDEBUG_MODE=debug 即可
-#  可单独执行: lib/modules/xdebug.sh
+#  可单独执行: lib/modules/ext/xdebug.sh
 # =============================================================================
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc make tar
@@ -15,11 +16,15 @@ PHP="$PREFIX/bin/php"
 
 AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
-SIG="xdebug=$XDEBUG_VERSION;$(php_sig)"
+SIG="xdebug=$XDEBUG_VERSION;$(php_sig);rpath=1"
 
 if [ "$FORCE" != 1 ] && stamp_ok xdebug "$SIG" && [ -f "$PREFIX/etc/conf.d/30-xdebug.ini" ]; then
   ok "xdebug 已装，跳过"; exit 0
 fi
+
+# xdebug 的 profiler 压缩走 pkg-config 找 zlib；不注入的话会拿系统的
+ensure_needs xdebug
+dep_env xdebug
 
 TAR="$(basename "$XDEBUG_URL")"
 fetch "$XDEBUG_URL" "$DOWNLOADS/$TAR" "${XDEBUG_SHA256:-}"
@@ -42,10 +47,10 @@ fi
 # phpize 需要 autoconf / perl 核心模块（精简系统可能缺）
 if [ ! -x "$AC_DIR/bin/autoconf" ]; then
   log "编译 PECL 扩展需要 autoconf，先安装"
-  bash "$MODULES/autoconf.sh"
+  bash "$(module_sh autoconf)"
 fi
 if [ ! -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ]; then
-  bash "$MODULES/perlshim.sh"
+  bash "$(module_sh perlshim)"
 fi
 
 LIB_DIRS="$(dep_lib_dirs $(enabled_dep_names) | tr '\n' ':' | sed 's/:$//')"

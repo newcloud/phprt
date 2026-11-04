@@ -7,8 +7,9 @@
 #    ./build.sh --offline        只用 downloads/ 里的包，缺包直接报错
 #    ./build.sh --rebuild        复用解压好的源码重跑 configure + make
 #    ./build.sh --force          清掉各模块安装目录后重来（下载保留）
-#    ./build.sh --only php       只跑某个模块（openssl/zlib/libxml2/sqlite/libcurl/
+#    ./build.sh --only php       只跑某个模块（openssl/zlib/libxml2/sqlite/curl/
 #                                oniguruma/libzip/php/redis/composer）
+#                                硬依赖（模块头部 needs=）会自动先构建
 #                                重编 php 时会自动补跑 redis/composer（它们依赖 PHP）
 #    ./build.sh --skip redis     跳过某个模块（可重复）
 #    ./build.sh --verify         只做安装结果自检
@@ -193,31 +194,32 @@ run_module() { # run_module <name>
   for s in ${SKIP_LIST[@]+"${SKIP_LIST[@]}"}; do
     [ "$s" = "$name" ] && { warn "跳过模块 $name（--skip）"; return 0; }
   done
-  local script="$MODULES/$name.sh"
-  [ -f "$script" ] || die "开关打开了 $name，但模块脚本不存在: $script"
+  local script; script="$(module_sh "$name")"
   log "模块: $name"
   bash "$script"
 }
 
-# 模块顺序固定（名字 = lib/modules/<名字>.sh 的文件名）
-ALL_MODULES=(openssl zlib libxml2 sqlite libcurl oniguruma libzip
-             icu libpng jpeg freetype libwebp libaom libavif libffi libyaml
-             php redis protobuf xdebug apcu yaml swoole composer)
+# 模块顺序固定：库 -> PHP 本体 -> 扩展 -> phar
+# 名字 = lib/modules/<类别>/<名字>.sh；依赖名与模块名一致（curl/webp/aom/avif 已统一）
+LIB_MODULES=(openssl zlib libxml2 sqlite curl oniguruma libzip
+             icu libpng jpeg freetype webp aom avif libffi libyaml)
+EXT_MODULES=(redis protobuf xdebug apcu yaml swoole)
+ALL_MODULES=("${LIB_MODULES[@]}" php "${EXT_MODULES[@]}" composer)
 
-enabled_module() { # enabled_module <name>
+enabled_module() { # enabled_module <name>：只看开关，expand_needs 再补硬依赖
   case "$1" in
     openssl)   [ "${ENABLE_OPENSSL:-0}" = 1 ] ;;
     zlib)      [ "${ENABLE_ZLIB:-0}" = 1 ] ;;
     libxml2)   [ "${ENABLE_LIBXML2:-0}" = 1 ] ;;
     sqlite)    [ "${ENABLE_SQLITE:-0}" = 1 ] ;;
-    libcurl)   [ "${ENABLE_LIBCURL:-0}" = 1 ] ;;
+    curl)      [ "${ENABLE_LIBCURL:-0}" = 1 ] ;;
     oniguruma) [ "${ENABLE_ONIGURUMA:-0}" = 1 ] ;;
     libzip)    [ "${ENABLE_LIBZIP:-0}" = 1 ] ;;
     php)       : ;;
     icu)       [ "${ENABLE_ICU:-0}" = 1 ] ;;
     libpng|jpeg|freetype) [ "${ENABLE_GD:-0}" = 1 ] ;;
-    libwebp)   [ "${ENABLE_WEBP:-0}" = 1 ] ;;
-    libaom|libavif) [ "${ENABLE_AVIF:-0}" = 1 ] ;;
+    webp)      [ "${ENABLE_WEBP:-0}" = 1 ] ;;
+    aom|avif)  [ "${ENABLE_AVIF:-0}" = 1 ] ;;
     libffi)    [ "${ENABLE_FFI:-0}" = 1 ] ;;
     libyaml)   [ "${ENABLE_YAML:-0}" = 1 ] ;;
     redis)     [ "${ENABLE_REDIS:-0}" = 1 ] ;;
@@ -231,30 +233,61 @@ enabled_module() { # enabled_module <name>
   esac
 }
 
-MODULES_TO_RUN=()
+WANT=()
+want_add() { # want_add <name>
+  local x
+  for x in ${WANT[@]+"${WANT[@]}"}; do [ "$x" = "$1" ] && return 0; done
+  WANT+=("$1")
+}
+
+expand_needs() { # 反复展开模块头部 needs=，直到不再增加（zlib 可能只为 swoole 而构建）
+  local m d x changed=1
+  while [ "$changed" = 1 ]; do
+    changed=0
+    for m in ${WANT[@]+"${WANT[@]}"}; do
+      for d in $(module_needs "$m"); do
+        [ -f "$MODULES_DEPS/$d.sh" ] || continue
+        for x in ${WANT[@]+"${WANT[@]}"}; do [ "$x" = "$d" ] && continue 2; done
+        WANT+=("$d"); changed=1
+      done
+    done
+  done
+}
+
 if [ -z "$ONLY" ]; then
   for m in "${ALL_MODULES[@]}"; do
-    enabled_module "$m" && MODULES_TO_RUN+=("$m")
+    enabled_module "$m" && want_add "$m"
   done
 else
-  # curl 是 libcurl 的别名（依赖目录叫 curl-<版本>，模块脚本叫 libcurl.sh）
-  [ "$ONLY" = curl ] && ONLY=libcurl
+  # 旧写法兼容（模块已改名：libcurl -> curl 等）
+  case "$ONLY" in
+    libcurl)  ONLY=curl ;;
+    libwebp)  ONLY=webp ;;
+    libaom)   ONLY=aom ;;
+    libavif)  ONLY=avif ;;
+  esac
   case " ${ALL_MODULES[*]} " in
     *" $ONLY "*) ;;
     *) die "未知模块: $ONLY（可用: ${ALL_MODULES[*]}）" ;;
   esac
-  MODULES_TO_RUN=("$ONLY")
+  want_add "$ONLY"
   if [ "$ONLY" = php ]; then
     # redis.so / composer.phar 都装在 PHP 目录或依赖 PHP 版本，PHP 一变就得跟着重来
-    [ "${ENABLE_REDIS:-0}" = 1 ]    && MODULES_TO_RUN+=(redis)
-    [ "${ENABLE_PROTOBUF:-0}" = 1 ] && MODULES_TO_RUN+=(protobuf)
-    [ "${ENABLE_XDEBUG:-0}" = 1 ]   && MODULES_TO_RUN+=(xdebug)
-    [ "${ENABLE_APCU:-0}" = 1 ]     && MODULES_TO_RUN+=(apcu)
-    [ "${ENABLE_YAML:-0}" = 1 ]     && MODULES_TO_RUN+=(yaml)
-    [ "${ENABLE_SWOOLE:-0}" = 1 ]   && MODULES_TO_RUN+=(swoole)
-    [ "${ENABLE_COMPOSER:-0}" = 1 ] && MODULES_TO_RUN+=(composer)
+    [ "${ENABLE_REDIS:-0}" = 1 ]    && want_add redis
+    [ "${ENABLE_PROTOBUF:-0}" = 1 ] && want_add protobuf
+    [ "${ENABLE_XDEBUG:-0}" = 1 ]   && want_add xdebug
+    [ "${ENABLE_APCU:-0}" = 1 ]     && want_add apcu
+    [ "${ENABLE_YAML:-0}" = 1 ]     && want_add yaml
+    [ "${ENABLE_SWOOLE:-0}" = 1 ]   && want_add swoole
+    [ "${ENABLE_COMPOSER:-0}" = 1 ] && want_add composer
   fi
 fi
+expand_needs
+MODULES_TO_RUN=()
+for m in "${ALL_MODULES[@]}"; do
+  printf '%s\n' "${WANT[@]}" | grep -qx "$m" || continue
+  MODULES_TO_RUN+=("$m")
+done
 
 # 依赖没开时给个提醒（不阻止构建，用户可能就想那样）
 [ "${ENABLE_LIBCURL:-0}" = 1 ] && [ "${ENABLE_OPENSSL:-0}" != 1 ] && \

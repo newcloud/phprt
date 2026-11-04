@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  swoole 扩展（PECL 源码 + phpize）—— 需要 C++ 编译器（g++）
-#  可单独执行: lib/modules/swoole.sh
+#  phprt: needs=openssl,zlib
+#  可单独执行: lib/modules/ext/swoole.sh
 # =============================================================================
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc g++ make tar
@@ -15,11 +16,16 @@ PHP="$PREFIX/bin/php"
 AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
 D_OPENSSL="$(dep_dir_of openssl)"
-SIG="swoole=$SWOOLE_VERSION;$(php_sig)"
+SIG="swoole=$SWOOLE_VERSION;$(php_sig);rpath=1"
 
 if [ "$FORCE" != 1 ] && stamp_ok swoole "$SIG" && [ -f "$PREFIX/etc/conf.d/27-swoole.ini" ]; then
   ok "swoole 已装，跳过"; exit 0
 fi
+
+# 硬依赖：swoole 无条件 --enable-openssl，并且 configure 里的 AC_CHECK_LIB(z)
+# 没有 -L 参数，只能靠这里注入；缺库就先构建（不碰 PHP 的 zlib 扩展开关）
+ensure_needs swoole
+dep_env swoole
 
 TAR="$(basename "$SWOOLE_URL")"
 fetch "$SWOOLE_URL" "$DOWNLOADS/$TAR" "${SWOOLE_SHA256:-}"
@@ -41,10 +47,10 @@ fi
 
 if [ ! -x "$AC_DIR/bin/autoconf" ]; then
   log "编译 PECL 扩展需要 autoconf，先安装"
-  bash "$MODULES/autoconf.sh"
+  bash "$(module_sh autoconf)"
 fi
 if [ ! -f "$PERL_DIR/share/perl5core/IPC/Cmd.pm" ]; then
-  bash "$MODULES/perlshim.sh"
+  bash "$(module_sh perlshim)"
 fi
 
 LIB_DIRS="$(dep_lib_dirs $(enabled_dep_names) | tr '\n' ':' | sed 's/:$//')"
