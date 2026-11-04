@@ -8,6 +8,46 @@ phprt 类似 Python 的 uv，用一条命令为 PHP 项目配置一套隔离系�
 都是项目私有的，不往系统目录写文件，不同项目互不影响。运行时不需要设置任何环境变量，
 整个 `.phprt` 可以跟着项目一起搬走。
 
+## 前置依赖
+
+构建是源码编译，需要系统里有这些命令。缺少时 `phprt` 会在用到的那一步报
+`缺少命令: xxx`。
+
+| 命令 | Fedora / RHEL 包 | 用途 |
+| --- | --- | --- |
+| `gcc`、`g++` | `gcc`、`gcc-c++` | 编译 PHP、依赖库和扩展（ICU、swoole、re2c 等是 C++） |
+| `make` | `make` | 所有构建阶段 |
+| `cmake` | `cmake` | libzip、libjpeg-turbo、libwebp、libaom、libavif |
+| `pkg-config` | `pkgconf-pkg-config` | libavif、freetype 探测依赖 |
+| `patchelf` | `patchelf` | 收尾时改 SONAME / `DT_NEEDED` / RPATH，缺它无法完成构建 |
+| `sha256sum` | `coreutils`（系统自带） | 算内容 hash（库改名）和校验源码包 |
+| `tar`、`xz`、`unzip` | `tar`、`xz`、`unzip` | 解压 `.tar.gz` / `.tar.xz` / `.zip` |
+| `ar` | `binutils` | SQLite 静态库 |
+| `m4`、`perl` | `m4`、`perl-interpreter` | 构建 OpenSSL、autoconf |
+| `curl` | `curl` | 仅在 `downloads/` 和缓存里都找不到源码包时才联网下载 |
+
+一次装齐：
+
+```bash
+# Fedora / RHEL
+sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config patchelf \
+    tar xz unzip binutils m4 perl-interpreter curl
+
+# Debian / Ubuntu
+sudo apt install build-essential cmake pkg-config patchelf \
+    tar xz-utils unzip binutils m4 perl curl
+
+# Arch
+sudo pacman -S base-devel cmake pkgconf patchelf \
+    tar xz unzip binutils m4 perl curl
+```
+
+`patchelf` 和 `sha256sum` 是每次成功构建都要用的，不是可选项。
+`tools/` 里的 autoconf、re2c、perl 核心模块会在需要时自动装到 `.phprt/tools/`，
+不用手工准备，但它们的构建本身仍依赖上表的 `gcc` / `make` / `m4` / `perl`。
+
+> **注意**：目前只在 Fedora 43 上测试过，其他发行版和版本没有测试；也没在正式生产环境用过。
+
 ## 使用示例
 
 ```bash
@@ -67,3 +107,13 @@ phprt set 8.5.12 --clean-src
 - [从 v1 重构到 v2](docs/REFACTOR-V1-TO-V2.md)
 - [项目本地自包含模型](docs/PROJECT-LOCAL.md)
 - [多 PHP 版本的配置组织](docs/PHP-VERSIONS.md)
+
+## 开发说明
+
+项目由 newcloud 与 AI 助手 DeepSeek V4.1 Flash 协作完成：需求、设计和验收由 newcloud 主导，
+代码、文档与实测由双方交替完成。
+
+## 协议
+
+[Mozilla Public License 2.0](LICENSE) © 2026 newcloud
+
