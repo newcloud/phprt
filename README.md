@@ -7,8 +7,8 @@ phprt 类似于 uv 可以指定 Python 版本，有独立的动态库版本，�
 ```console
 $ cd blog && phprt init local 8.5.12 --ini dev
 $ ls -a
-.phprt      # php-8.5.12/、deps/（动态库）、php8.5.12_dev.ini
-myphp       # 指定 PHP 版本和 ini 路径，运行时设好 LD_LIBRARY_PATH
+.phprt      # 目录中有 php-8.5.12/、deps/（动态库）、php8.5.12_dev.ini
+myphp       # 一个脚本指定 PHP 版本和 ini 路径，运行时设好 LD_LIBRARY_PATH
 
 $ ./myphp worker.php
 # 等价于：设好 LD_LIBRARY_PATH=./.phprt/deps/*/lib，再执行
@@ -45,8 +45,8 @@ $ ./myphp worker.php
 ## 和系统里的 PHP 有什么区别
 
 用系统包，或者 phpbrew、php-build 这类源码工具装 PHP，openssl、libzip、icu 要先装到
-系统里，PHP 链接的是系统那一份。系统里是 OpenSSL 3.2、项目要 3.5，就得升级系统包；
-升级又可能影响机器上别的程序。两个项目需要不同版本时，基本没法同时满足。
+系统里，PHP 链接的是系统那一份。如果系统里的 OpenSSL 版本和 PHP 需要的版本或配置不
+一致，升级系统包会影响 SSH、nginx 等软件。两个项目需要不同版本时，基本没法同时满足。
 
 phprt 把这些库编在项目目录里，版本由项目配置决定，不往系统里装，也不受系统升级影响。
 
