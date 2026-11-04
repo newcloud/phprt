@@ -1,31 +1,24 @@
 # phprt
 
-在命令行里安装和使用不同版本的 PHP。PHP 和它依赖的库都放在项目目录里，不跟着系统走。
+phprt 用来装一套独立的 PHP 环境：不依赖系统里的 PHP 和库，不会改动系统，扩展自己选。
 
 **示例：**
 
 ```console
+$ cd blog
+$ ~/src/phprt/phprt init --php 8.6.0-dev    # 在项目里生成 ./myphp
 $ ./myphp -v
 PHP 8.6.0-dev (cli) (built: Nov  4 2026 13:28:58) (NTS)
 
-$ phprt exec --php 8.5.12 -- -v
-PHP 8.5.12 (cli) (built: Nov  4 2026 13:34:28) (NTS)
-
-$ ./myphp composer --version
-Composer version 2.11.1 2026-10-30 14:52:10
+$ ./myphp worker.php             # RoadRunner 用这套 PHP 起 worker
 ```
-
-装在哪儿：
-
-- `<项目>/.phprt`：一个项目一套，一般加进 `.gitignore`
-- `~/.phprt`：几个项目共用一套，每个项目的 `./myphp` 仍指向自己的 PHP 版本
 
 ---
 
 ## 目录
 
+- [特点](#特点)
 - [和系统里的 PHP 有什么区别](#和系统里的-php-有什么区别)
-- [特性](#特性)
 - [快速开始](#快速开始)
 - [项目里的 `./myphp`](#项目里的-myphp)
 - [在真实项目里用：RoadRunner](#在真实项目里用roadrunner)
@@ -35,6 +28,17 @@ Composer version 2.11.1 2026-10-30 14:52:10
 - [安装根布局](#安装根布局)
 - [常见问题](#常见问题)
 - [文档](#文档)
+
+## 特点
+
+- 每个项目一个 `./myphp`，版本、php.ini、扩展开关都写在项目里
+- openssl、curl、icu、libzip 由 phprt 编译，不跟随系统版本
+- 一个项目一套（`<项目>/.phprt`），或几个项目共用（`~/.phprt`）
+- 8.5 / 8.6 可以同时装，项目级切换
+- 可搬迁：整个安装根搬到别的路径，`./myphp` 照样能用
+- 可离线：`downloads/` 放好源码包，`--offline` 全程不联网
+- 构建可增量：改了开关只重编影响的模块
+- 加扩展的完整步骤在 [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md)
 
 ## 和系统里的 PHP 有什么区别
 
@@ -54,16 +58,6 @@ phprt 把这些库编在项目目录里，版本由项目配置决定，不往�
 | 代价 | 随发行版更新 | 自己编（约 20 分钟）、每版 100–200MB |
 
 `phprt verify` 会核对扩展有没有加载、库有没有从系统借。
-
-## 特性
-
-- PHP 版本、php.ini、扩展开关都在项目配置里；`./myphp` 是入口，可以放进 git
-- openssl、curl、icu、libzip 由 phprt 编译，不跟随发行版的版本
-- 8.5 / 8.6 可以同时装，项目级切换
-- 可搬迁：整个安装根搬到别的路径，`./myphp` 照样能用（`phprt verify` 会真的拷贝一份来测）
-- 可离线：`downloads/` 放好源码包，`--offline` 全程不联网
-- 构建可增量：改了开关只重编影响的模块；`--only php` 单步重编
-- 加扩展的完整步骤在 [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md)
 
 ## 快速开始
 
