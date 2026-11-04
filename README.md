@@ -1,18 +1,25 @@
 # phprt
 
-phprt 是一个 PHP 版本管理工具，用法类似 nvm、uv：PHP 装在项目目录里，不依赖系统里的
-PHP 和库，扩展可以自己选。
+phprt 像 uv 可以指定 Python 版本一样，可以指定项目用哪个 PHP 版本。PHP 依赖的动态库
+也单独装一份，不依赖系统上的库，也不会影响它们。
 
 **示例：**
 
 ```console
 $ cd blog
-$ ~/src/phprt/phprt init --php 8.6.0-dev    # 环境装在 ./.phprt/，项目里只多一个 ./myphp
-$ ./myphp -v
-PHP 8.6.0-dev (cli) (built: Nov  4 2026 13:28:58) (NTS)
-
-$ ./myphp worker.php             # RoadRunner 用这套 PHP 起 worker
+$ ~/src/phprt/phprt init --php 8.5.12    # 安装根是 ./.phprt
+$ ls -a
+.  ..  .phprt  myphp  ...
 ```
+
+`.phprt/` 里是 `php-8.5.12/`、`deps/`（openssl、icu 这些动态库）和 php.ini。
+`myphp` 写着 PHP 和 ini 的路径，运行时把 `LD_LIBRARY_PATH` 指到 `.phprt/deps/*/lib`。
+
+```console
+$ ./myphp worker.php
+```
+
+实际执行的是 `.phprt/php-8.5.12/bin/php`，带上 `.phprt` 里的 ini 和库路径。
 
 ---
 
