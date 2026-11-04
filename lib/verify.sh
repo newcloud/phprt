@@ -139,7 +139,7 @@ needs_artifact() { # needs_artifact <模块> -> 产物 .so（没装则输出空�
   fi
   return 0
 }
-for m in $(grep -l 'phprt: needs=' "$MODULES"/*/*.sh 2>/dev/null | sed 's|.*/||; s|\.sh$||' | sort); do
+for m in $(grep -l '^# *phprt:.*needs=' "$MODULES"/*/*.sh 2>/dev/null | sed 's|.*/||; s|\.sh$||' | sort); do
   needs="$(module_needs "$m")"
   so="$(needs_artifact "$m")"
   [ -n "$so" ] || continue                       # 没装的模块不检查
@@ -155,6 +155,31 @@ for m in $(grep -l 'phprt: needs=' "$MODULES"/*/*.sh 2>/dev/null | sed 's|.*/||;
     printf '    ✓ %-8s %s\n' "$m" "$(printf '%s' "$needs" | tr ' ' ',')"
   fi
 done
+
+log "5d) 开关归属（config.conf 的每个 ENABLE_ 都要有一个文件认领）"
+declared="$(for f in "$MODULES_BUILTIN"/*.sh "$MODULES_EXT"/*.sh "$MODULES_DEPS"/*.sh "$MODULES/composer.sh"; do
+  [ -f "$f" ] || continue
+  s="$(sed -n 's/^# *phprt:.*[[:space:]]switch=\([^[:space:]]*\).*/\1/p' "$f" | head -1)"
+  [ -n "$s" ] && printf '%s %s\n' "$s" "${f#"$MODULES"/}"
+done)"
+actual="$(grep -oE '^ENABLE_[A-Z0-9_]+' "$CONFIG" | sort)"
+n_actual="$(printf '%s\n' "$actual" | grep -c . || true)"
+n_declared="$(printf '%s\n' "$declared" | grep -c . || true)"
+unclaimed=""; orphans=""
+while IFS= read -r s; do
+  [ -n "$s" ] || continue
+  printf '%s\n' "$declared" | grep -q "^$s " || unclaimed+=" $s"
+done <<< "$actual"
+while read -r s f; do
+  [ -n "$s" ] || continue
+  printf '%s\n' "$actual" | grep -qx "$s" || orphans+=" $s($f)"
+done <<< "$declared"
+if [ -z "$unclaimed" ] && [ -z "$orphans" ]; then
+  printf '    ✓ %s 个开关全部被认领（%s 个文件）\n' "$n_actual" "$n_declared"
+else
+  [ -n "$unclaimed" ] && { printf '    ✗ 没有文件认领:%s\n' "$unclaimed"; fail=1; }
+  [ -n "$orphans" ]   && { printf '    ✗ 文件声明了但配置里没有:%s\n' "$orphans"; fail=1; }
+fi
 
 log "6) php.ini"
 run_php --ini | sed -n '1,3p' | sed 's/^/    /'

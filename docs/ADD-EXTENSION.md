@@ -13,9 +13,10 @@
 | 类型 | 特征 | 处理方式 | 例子 |
 | --- | --- | --- | --- |
 | **PECL 扩展** | 独立的 `.so`，用 `phpize` 编译，不改 PHP 本体 | 照 §4 写一个模块，**不用重编 PHP**（~1 分钟） | redis、xdebug、apcu、yaml、swoole、imagick、mongodb |
-| **编译期扩展** | 必须作为 configure 参数编进 PHP 本体，或依赖某个 C 库 | 照 §5：写依赖库模块 + 改 `php.sh` + 重编 PHP（~3 分钟） | intl、gd、pgsql、gmp、sodium、xsl、tidy |
+| **内置扩展** | 必须作为 configure 参数编进 PHP 本体（`--with-*` / `--enable-*`） | 照 §5.2 写 `builtin/<扩展>.sh`，重编 PHP（~3 分钟） | zlib、intl、gd、sqlite、curl、mbstring |
+| **依赖库** | 不是 PHP 扩展，只是某个扩展/库需要的 C 库 | 照 §5.1 / §5.3 写 `deps/<库>.sh`，由消费者的 `needs` 拉起 | gmp、libpq、sodium、tidy |
 
-判断依据：PHP 源目录里 `ext/<名字>/config.m4` 能不能单独 `phpize`。能独立编的都能走 PECL 路线（哪怕它在 PHP 源码里，也能用 `phpize` 编）；必须改 `--with-*` 的只能走编译期。
+判断依据：PHP 源目录里 `ext/<名字>/config.m4` 能不能单独 `phpize`。能独立编的走 PECL（哪怕它在 PHP 源码里，也能用 `phpize` 编）；只能改 `--with-*` 的走 `builtin/`；两者都不是、只是 C 库的走 `deps/`。
 
 ---
 
@@ -27,6 +28,7 @@ phprt/
 ├── lib/common.sh            路径、下载、stamp、dep_dir_of、enabled_dep_names、php_sig
 ├── lib/modules/deps/*.sh    独立库（安装到 <安装根>/deps/）
 ├── lib/modules/ext/*.sh     PECL 扩展（安装到 php-<版本>/）
+├── lib/modules/builtin/*.sh PHP 内置扩展：开关 + configure 参数 + 依赖（php.sh 收集）
 ├── lib/modules/tools/*.sh   构建工具（autoconf / re2c / perl 核心模块）
 ├── lib/modules/php.sh       PHP 本体的 configure 参数
 ├── lib/verify.sh            自检（扩展有没有真的加载）
@@ -41,8 +43,10 @@ phprt/
 └── php<版本>_{default,dev,prod}.ini
 ```
 
-- **目录即类别**：`deps/` 产库、`ext/` 产 PHP 扩展、`tools/` 产构建工具（都没有开关，
-  谁需要谁拉起）；模块名 = 文件名，`build.sh` 用 `module_sh()` 在三个目录里找。
+- **目录即类别**：`deps/` 产库、`ext/` 产 PECL 扩展、`builtin/` 只是内置扩展的
+  声明（不产 `.so`，由 `php.sh` 收集参数）、`tools/` 产构建工具。
+- **一个 `ENABLE_*` 开关必须恰好被一个文件认领**，`phprt verify` 的 5d 会检查：
+  有开关没文件、或有文件没开关都会报错。归属关系用 `phprt modules` 看。
 - **硬依赖写在模块头部**：`#  phprt: needs=zlib`（逗号分隔，写依赖名，不写 `libz`）。
   缺库时 `ensure_needs` 会先构建它，`dep_env` 自动注入 `-I` / `-L` / `-rpath` /
   `PKG_CONFIG_PATH`。只有「上游没给关闭或指路参数」的库才登记
@@ -56,23 +60,47 @@ phprt/
 
 ## 3. 需要同步修改的地方（清单）
 
-加 **PECL 扩展** 只改 4 处；加 **编译期扩展/依赖库** 还要多改 2 处：
+先确定要加的是哪一类；三类改法不同。
 
-| # | 文件 | 改什么 | PECL | 编译期 |
-| --- | --- | --- | :-: | :-: |
-| 1 | `config.conf` | 开关 `ENABLE_XXX=1` + `XXX_VERSION/URL/SHA256` | ✅ | ✅ |
-| 2 | `lib/modules/ext/<名字>.sh`（PECL）或 `lib/modules/deps/<名字>.sh`（库） | 新建模块脚本；硬依赖加 `#  phprt: needs=` | ✅ | ✅ |
-| 3 | `build.sh` → `ALL_MODULES` | 加模块名（依赖库要排在 `php` 之前） | ✅ | ✅ |
-| 4 | `build.sh` → `enabled_module()` | 开关 → 模块名 | ✅ | ✅ |
-| 5 | `lib/common.sh` → `dep_dir_of()` | 依赖库的目录名 | — | ✅ |
-| 6 | `lib/common.sh` → `enabled_dep_names()` | 让依赖目录进 `LD_LIBRARY_PATH`/rpath | — | ✅ |
-| 7 | `lib/common.sh` → `php_sig()` | 开关变了要触发 PHP 重编 | — | ✅ |
-| 8 | `lib/common.sh` → `stamp_file()` | 新 PECL 名放进 `php\|redis\|...` 那行 | ✅ | — |
-| 9 | `build.sh` → `--only php` 的补充列表 | PHP 重编后跟着重编的扩展 | ✅ | — |
-| 10 | `lib/verify.sh` → `check_ext` | 新增一行，自检会验证真的加载了 | ✅ | ✅ |
-| 11 | `README.md` 扩展清单 | 记账 | ✅ | ✅ |
+### 3.1 加一个 PECL 扩展（要下载源码、`phpize`）
 
-> 少改 8 会导致「PHP 变了但扩展还是旧 ABI」；少改 9 会导致 `--only php` 之后扩展消失。
+| # | 文件 | 改什么 |
+| --- | --- | --- |
+| 1 | `config.conf` | 开关 `ENABLE_X=1` + `X_VERSION/URL/SHA256` + 行尾归属注释 |
+| 2 | `lib/modules/ext/x.sh` | 新建模块脚本（头部 `#  phprt: switch=ENABLE_X needs=...`） |
+| 3 | `build.sh` → `EXT_MODULES` | 加模块名 |
+| 4 | `build.sh` → `enabled_module()` | 开关 → 模块名 |
+| 5 | `lib/common.sh` → `stamp_file()` | 新名字放进 `php\|redis\|...` 那行 |
+| 6 | `build.sh` → `--only php` 补充列表 | PHP 重编后跟着重编 |
+| 7 | `lib/verify.sh` → `check_ext` | 自检确认真的加载 |
+| 8 | `README.md` 扩展清单 | 记账 |
+
+### 3.2 加一个内置扩展（PHP 源码自带，编进 php 本体）
+
+| # | 文件 | 改什么 |
+| --- | --- | --- |
+| 1 | `config.conf` | 开关 `ENABLE_X=1` + 行尾归属注释 |
+| 2 | `lib/modules/builtin/x.sh` | 开关 + 正负向 configure 参数 + `--needs` |
+| 3 | `lib/common.sh` → `builtin_order()` | 加进固定顺序（只影响参数顺序） |
+| 4 | `lib/verify.sh` → `check_ext` | 自检确认真的加载 |
+| 5 | `README.md` | 记账 |
+
+**不用改**：`php.sh`（只收集参数）、`php_sig()`（内置文件哈希自动进签名）、
+`enabled_dep_names()`（从 `--needs` 派生）。
+
+### 3.3 加一个依赖库
+
+| # | 文件 | 改什么 |
+| --- | --- | --- |
+| 1 | `config.conf` | 版本 / URL / SHA256（有开关就写开关；没有就由消费者的 `needs` 拉起） |
+| 2 | `lib/modules/deps/x.sh` | 新建模块脚本；它自己的依赖写 `#  phprt: needs=` |
+| 3 | `build.sh` → `LIB_MODULES` | 加名字（必须排在 `php` 之前） |
+| 4 | `lib/common.sh` → `dep_dir_of()` | 依赖目录名 |
+| 5 | `build.sh` → `enabled_module()` | 只有“有开关的库”才需要 |
+| 6 | `lib/verify.sh` | 5c 自动检查（头部有 `needs=` 就会被扫到） |
+
+> 少改 5 会导致「PHP 变了但扩展还是旧 ABI」；少改 3.1 的第 6 项会导致
+> `--only php` 之后扩展消失。
 
 ---
 
@@ -228,23 +256,47 @@ cmake --build "$SRC/build" --parallel "$JOBS" > "$LOGS/xxx-make.log" 2>&1 || { .
 cmake --install "$SRC/build" >> "$LOGS/xxx-make.log" 2>&1
 ```
 
-### 5.2 `lib/modules/php.sh` 里加 configure 参数
+### 5.2 内置扩展：`lib/modules/builtin/x.sh`
+
+内置扩展没有独立源码包，只需声明「开关 → configure 参数 → 依赖」：
 
 ```bash
-D_GMP="$(dep_dir_of gmp)"
-[ "${ENABLE_GMP:-0}" = 1 ] && ARGS+=(--with-gmp="$D_GMP")
+#!/usr/bin/env bash
+#  PHP 内置扩展：xml（以 libxml2 为例）
+#  phprt: builtin=xml switch=ENABLE_XML
+set -euo pipefail
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
+load_config
+
+case "${1:-}" in
+  --flags)
+    if [ "${ENABLE_XML:-0}" = 1 ]; then
+      printf '%s\n' "--with-libxml=$(dep_dir_of libxml2)"
+    else
+      printf '%s\n' --without-libxml      # 关掉时也要给负向参数，否则会探测系统库
+    fi ;;
+  --needs)
+    if [ "${ENABLE_XML:-0}" = 1 ]; then printf '%s\n' libxml2; fi ;;
+  *) die "由 php.sh 调用: $0 --flags | --needs" ;;
+esac
 ```
 
-### 5.3 `lib/common.sh` 三处
+加完再往 `builtin_order()` 里补一个名字（决定 configure 参数顺序），
+`php.sh` 完全不用动；改这个文件会自动触发 PHP 重编。
+
+### 5.3 `lib/common.sh` / `build.sh`（依赖库）
 
 ```bash
-dep_dir_of()  { ... gmp) dep_dir gmp "$GMP_VERSION" ;; ... }
-enabled_dep_names() { ... [ "${ENABLE_GMP:-0}" = 1 ] && echo gmp ... }
-php_sig()     { ... s+=";gmp=${ENABLE_GMP:-0}:$GMP_VERSION" ... }
+dep_dir_of()     { ... gmp) dep_dir gmp "$GMP_VERSION" ;; ... }
+# build.sh
+LIB_MODULES=(... gmp ...)                 # 必须排在 php 之前
+enabled_module() { ... gmp) [ "${ENABLE_GMP:-0}" = 1 ] ;; ... }   # 有开关才需要
 ```
 
-`enabled_dep_names` 的输出会进 PHP 的 rpath 和项目入口的 `LD_LIBRARY_PATH`，
-**漏了它**就会出现「编译能过、运行时找不到 so」。
+`enabled_dep_names()` **不用改**：它现在从各节点的 `needs` / `--needs` 派生，
+消费者（`builtin/*.sh`、`deps/*.sh`、`ext/*.sh`）谁声明了 `needs=gmp` 就自动进
+rpath 和 `LD_LIBRARY_PATH`。`php_sig()` 也不用再为内置扩展手工加一项
+（文件的代码指纹已经进签名）。
 
 ---
 
@@ -300,6 +352,11 @@ phprt verify                  # 自检：加载情况 + 动态库 + 搬迁测试
     （没有 `--with-x-dir`），`LD_LIBRARY_PATH` 对链接器无效，会悄悄链上系统库。
     在模块头写 `#  phprt: needs=x` 并 `dep_env` 注入 `-L`/`-rpath`；
     改完记得在签名里加个标记（如 `;rpath=1`），否则 stamp 命中会跳过重编。
+13. **内置扩展关闭时必须给负向参数**：`--without-zlib` / `--without-openssl` 这类
+    不能省。PHP 的 configure 在两者都不给时会自动探测系统库，悄悄链上系统的。
+    默认就关闭的扩展（mbstring/intl/zip/ffi）可以只写正向参数。
+14. **改 `builtin/*.sh` 会自动重编 PHP**：`php_sig()` 里带了这些文件的代码指纹；
+    不需要手动改签名。
 
 ---
 

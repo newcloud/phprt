@@ -264,6 +264,8 @@ autoconf + re2c 并跑 `buildconf`。
   依赖脚本 + `lib/modules/php.sh` 加 configure 参数，然后 `install.sh`（只有 PHP 重编）。
 - **PECL 扩展**：照 `lib/modules/ext/redis.sh` 抄 —— 下载 tgz → `phpize` → `configure
   --with-php-config` → `make install` → 往 `php-<版本>/etc/conf.d/` 写一行。
+- **PHP 内置扩展**（zlib/gd/intl 这类）：在 `lib/modules/builtin/<扩展>.sh` 里写
+  开关、正负向 configure 参数和 `--needs`；`php.sh` 只负责收集，不再写 if 判断。
 
 ## 命令参考
 
@@ -273,6 +275,7 @@ phprt init [--php 版本] [--ini dev] [--force] [--name 入口名]
                                      # 在当前目录生成 ./myphp
 phprt exec [--php 版本] -- -v        # 不建项目，直接跑一下 PHP
 phprt build [--php 版本] [--only php] [--force] [--offline] [--prune] [--jobs N]
+phprt modules                        # 节点清单：类别 / 开关 / 依赖 / 状态
 phprt verify [--php 版本]            # 自检：结构、依赖记录、ldd、扩展、ini、搬迁
 phprt clean [--all]                  # 清 build/（--all 连 downloads/）
 phprt home                           # 打印当前安装根
@@ -310,6 +313,7 @@ ini/                    php.ini 预设
 lib/versions/           PHP 版本清单
 lib/modules/deps/*.sh   独立库（装到 <安装根>/deps/）
 lib/modules/ext/*.sh    PECL 扩展（装到 php-<版本>/）
+lib/modules/builtin/*.sh PHP 内置扩展：开关 + configure 参数 + 依赖（php.sh 收集）
 lib/modules/tools/*.sh  构建工具（autoconf / re2c / perl 核心模块）
 lib/modules/php.sh      PHP 本体
 lib/myphp-project.tmpl  项目入口 ./myphp 的模板
