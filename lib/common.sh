@@ -201,7 +201,7 @@ dep_include_flags() { # dep_include_flags <名字...> -> "-I... -I..."
 # 签名文件放在被描述的那个安装目录里（删目录 = 签名一起没了 = 会重装）
 stamp_file() { # stamp_file <模块名>
   case "$1" in
-    php|redis|xdebug|apcu|yaml|swoole) printf '%s/.phprt-stamp-%s\n' "$PREFIX" "$1" ;;
+    php|redis|protobuf|xdebug|apcu|yaml|swoole) printf '%s/.phprt-stamp-%s\n' "$PREFIX" "$1" ;;
     composer)  printf '%s/.phprt-stamp-composer\n' "$PHPRT_HOME" ;;
     perlshim)  printf '%s/.phprt-stamp-perlshim\n' "$(dep_dir_of perl5core)" ;;
     *)         printf '%s/.phprt-stamp-%s\n' "$(dep_dir_of "$1")" "$1" ;;

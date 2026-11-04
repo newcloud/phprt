@@ -202,7 +202,7 @@ run_module() { # run_module <name>
 # 模块顺序固定（名字 = lib/modules/<名字>.sh 的文件名）
 ALL_MODULES=(openssl zlib libxml2 sqlite libcurl oniguruma libzip
              icu libpng jpeg freetype libwebp libaom libavif libffi libyaml
-             php redis xdebug apcu yaml swoole composer)
+             php redis protobuf xdebug apcu yaml swoole composer)
 
 enabled_module() { # enabled_module <name>
   case "$1" in
@@ -221,6 +221,7 @@ enabled_module() { # enabled_module <name>
     libffi)    [ "${ENABLE_FFI:-0}" = 1 ] ;;
     libyaml)   [ "${ENABLE_YAML:-0}" = 1 ] ;;
     redis)     [ "${ENABLE_REDIS:-0}" = 1 ] ;;
+    protobuf)  [ "${ENABLE_PROTOBUF:-0}" = 1 ] ;;
     xdebug)    [ "${ENABLE_XDEBUG:-0}" = 1 ] ;;
     apcu)      [ "${ENABLE_APCU:-0}" = 1 ] ;;
     yaml)      [ "${ENABLE_YAML:-0}" = 1 ] ;;
@@ -246,6 +247,7 @@ else
   if [ "$ONLY" = php ]; then
     # redis.so / composer.phar 都装在 PHP 目录或依赖 PHP 版本，PHP 一变就得跟着重来
     [ "${ENABLE_REDIS:-0}" = 1 ]    && MODULES_TO_RUN+=(redis)
+    [ "${ENABLE_PROTOBUF:-0}" = 1 ] && MODULES_TO_RUN+=(protobuf)
     [ "${ENABLE_XDEBUG:-0}" = 1 ]   && MODULES_TO_RUN+=(xdebug)
     [ "${ENABLE_APCU:-0}" = 1 ]     && MODULES_TO_RUN+=(apcu)
     [ "${ENABLE_YAML:-0}" = 1 ]     && MODULES_TO_RUN+=(yaml)

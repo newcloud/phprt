@@ -138,7 +138,7 @@ make install >> "$LOGS/msgpack-make.log" 2>&1
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir)"
 [ -f "$EXT_DIR/msgpack.so" ] || die "没找到 $EXT_DIR/msgpack.so"
 
-# ini 编号约定：20-redis / 24-msgpack / 25-apcu / 26-yaml / 27-swoole / 30-xdebug
+# ini 编号约定：20-redis / 23-protobuf / 24-msgpack / 25-apcu / 26-yaml / 27-swoole / 30-xdebug
 cat > "$INI" <<EOF
 ; 由 phprt 生成（msgpack $MSGPACK_VERSION）
 extension=msgpack.so
@@ -286,6 +286,9 @@ phprt verify                  # 自检：加载情况 + 动态库 + 搬迁测试
    （`PHPRT_PROXY=` 可改）；`curl` 手工下时加 `-x`。
 10. **`--force` 的语义**：只清「这个模块自己的目录」，不会动别的模块；
     但会连带 `--rebuild`（复用源码重编）。
+11. **PHP 8.6 移除了 `zval_dtor()`**（8.3 起弃用）：老 PECL 扩展会报
+    `implicit declaration of function 'zval_dtor'`。等价替换成 `zval_ptr_dtor()` 即可
+    （`lib/modules/protobuf.sh` 里有现成的幂等补丁）。
 
 ---
 

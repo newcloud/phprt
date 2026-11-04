@@ -246,6 +246,7 @@ autoconf + re2c 并跑 `buildconf`。
 | 扩展 | 说明 | ini |
 | --- | --- | --- |
 | `redis` | Redis 客户端 | `conf.d/20-redis.ini` |
+| `protobuf` | Protocol Buffers C 运行时（自带 upb） | `conf.d/23-protobuf.ini` |
 | `apcu` | 进程内共享内存缓存（常驻 worker 友好） | `conf.d/25-apcu.ini` |
 | `yaml` | YAML 解析（依赖 libyaml） | `conf.d/26-yaml.ini` |
 | `swoole` | 协程/网络框架（C++，需要 g++） | `conf.d/27-swoole.ini` |
