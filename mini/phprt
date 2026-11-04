@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# phprt mini 入口。仓库里运行，或复制到 <项目>/.phprt/bin/phprt 后运行。
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+RUNNER="$HERE/runner"
+[ -d "$RUNNER" ] || RUNNER="$HERE"
+
+# 复制到项目后，.phprt/config 记录原始仓库位置
+if [ -f "$HERE/../config" ] && [ -z "${PHPRT_REPO:-}" ]; then
+  # shellcheck disable=SC1091
+  . "$HERE/../config"
+fi
+
+# 只有仓库根才带 bundles/；复制后的 runner 依赖 PHPRT_REPO
+if [ -d "$HERE/bundles" ]; then
+  MINI_ROOT="$HERE"
+fi
+export MINI_ROOT="${MINI_ROOT:-}"
+
+# shellcheck disable=SC1091
+. "$RUNNER/common.sh"
+# shellcheck disable=SC1091
+. "$RUNNER/commands.sh"
+
+main "$@"

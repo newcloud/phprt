@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# 由 phprt mini 生成：本项目的 PHP 入口。
+# 版本切换只改 .phprt/current 符号链接，这个文件不用动。
+set -euo pipefail
+
+PHPRT_ROOT=".phprt"
+PHPRT_INI=".phprt/php.ini"
+
+APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+case "$PHPRT_ROOT" in
+  /*) ;;
+  *)  PHPRT_ROOT="$APP_DIR/${PHPRT_ROOT#./}" ;;
+esac
+case "$PHPRT_INI" in
+  /*) ;;
+  *)  PHPRT_INI="$APP_DIR/${PHPRT_INI#./}" ;;
+esac
+
+PREFIX="$PHPRT_ROOT/current"
+if [ ! -x "$PREFIX/bin/php" ]; then
+  echo "PHP 未安装: $PREFIX/bin/php" >&2
+  echo "（先跑 phprt set <版本>）" >&2
+  exit 1
+fi
+
+[ -f "$PHPRT_INI" ] || PHPRT_INI="$PREFIX/etc/php.ini"
+export PHPRC="$PHPRT_INI"
+export PHP_INI_SCAN_DIR="$PREFIX/etc/conf.d:$PHPRT_ROOT/conf.d"
+export PATH="$PREFIX/bin:$PATH"
+
+EXT_DIR=""
+for d in "$PREFIX"/lib/php/extensions/*/; do
+  [ -d "$d" ] && { EXT_DIR="${d%/}"; break; }
+done
+
+_ld=""
+for d in "$PREFIX"/lib "$PREFIX"/deps/*/lib "$PREFIX"/deps/*/lib64; do
+  [ -d "$d" ] && _ld+="$d:"
+done
+export LD_LIBRARY_PATH="${_ld%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+if [ -z "${OPENSSL_CONF:-}" ]; then
+  for f in "$PREFIX"/deps/openssl-*/etc/ssl/openssl.cnf; do
+    [ -f "$f" ] && { export OPENSSL_CONF="$f"; break; }
+  done
+fi
+
+ARGS=()
+[ -n "$EXT_DIR" ] && ARGS=(-d "extension_dir=$EXT_DIR")
+
+case "${1:-}" in
+  --env)
+    printf 'PHP=%s\nPHPRC=%s\nPHP_INI_SCAN_DIR=%s\nEXT_DIR=%s\nLD_LIBRARY_PATH=%s\n' \
+      "$PREFIX/bin/php" "$PHPRC" "$PHP_INI_SCAN_DIR" "$EXT_DIR" "$LD_LIBRARY_PATH"
+    exit 0 ;;
+esac
+
+exec "$PREFIX/bin/php" "${ARGS[@]}" "$@"

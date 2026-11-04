@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  内置扩展：curl（HTTP 客户端，库由 deps/curl 提供）
+#  phprt: builtin=curl switch=ENABLE_LIBCURL
+#  由 php.sh 调用，不单独构建：
+#    --flags  输出 php configure 参数（一行一个；开关关闭时输出负向参数）
+#    --needs  输出依赖的库（空格分隔，随开关变化）
+# =============================================================================
+set -euo pipefail
+source "${PHPRT_RUNNER:?}/common.sh"
+load_config
+
+case "${1:-}" in
+  --flags)
+    if [ "${ENABLE_LIBCURL:-0}" = 1 ]; then
+      printf '%s\n' "--with-curl=$(dep_dir_of curl)"
+    else
+      printf '%s\n' "--without-curl"
+    fi ;;
+  --needs)
+    if [ "${ENABLE_LIBCURL:-0}" = 1 ]; then printf '%s\n' curl; fi ;;
+  *) die "由 php.sh 调用: $0 --flags | --needs" ;;
+esac
