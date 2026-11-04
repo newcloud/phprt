@@ -10,7 +10,63 @@ load_config
 
 need_cmds gcc make bison tar xz
 
+# ------------------------------------------------------------- 参数 ------
+# 内置扩展的开关 / configure 参数 / 依赖都在 lib/modules/builtin/<扩展>.sh，
+# 这里只按固定顺序收集，外加不依赖外部库的公共扩展和依赖库 rpath。
+php_build_args() {
+  ARGS=(
+    --prefix="$PREFIX"
+    --with-config-file-path="$PREFIX/etc"
+    --with-config-file-scan-dir="$PREFIX/etc/conf.d"
+    --enable-cli --disable-cgi
+    --without-pear
+    --enable-phar --enable-filter --enable-fileinfo
+    --enable-opcache
+  )
+
+  local e f a
+  for e in $(builtin_order); do
+    f="$(builtin_sh "$e")"
+    [ -n "$f" ] || continue
+    while IFS= read -r a; do ARGS+=("$a"); done < <(bash "$f" --flags)
+  done
+
+  # 常用内置扩展（不依赖外部库，全开）
+  ARGS+=(
+    --enable-bcmath --enable-calendar --enable-exif
+    --enable-pcntl --enable-posix --enable-sockets
+    --enable-shmop --enable-sysvmsg --enable-sysvsem --enable-sysvshm
+  )
+
+  # 依赖库全在 deps/<名字>-<版本>/，链接时把每个 lib 都写进 rpath；
+  # myphp 运行时还会设 LD_LIBRARY_PATH，所以整个安装根搬走也能用。
+  mapfile -t LIB_DIRS < <(dep_lib_dirs $(enabled_dep_names))
+  LDFLAGS=""
+  CPPFLAGS=""
+  local d rpath="" pc=""
+  for d in ${LIB_DIRS[@]+"${LIB_DIRS[@]}"}; do
+    LDFLAGS+="-L$d "
+    rpath+="$d:"
+    CPPFLAGS+="-I$(dirname "$d")/include "
+    [ -d "$d/pkgconfig" ] && pc+="$d/pkgconfig:"
+  done
+  rpath="${rpath%:}"
+  export PKG_CONFIG_PATH="${pc%:}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  [ -n "$rpath" ] && LDFLAGS+="-Wl,-rpath,$rpath -Wl,--enable-new-dtags"
+  return 0
+}
+
+php_build_args
 SIG="$(php_sig)"
+
+# ./build.sh --show-args：只打印最终 configure 行，不编译
+if [ "${PHPRT_SHOW_ARGS:-0}" = 1 ]; then
+  printf 'CPPFLAGS=%q LDFLAGS=%q\n' "$CPPFLAGS" "$LDFLAGS"
+  printf './configure'
+  printf ' %q' "${ARGS[@]}"
+  printf '\n'
+  exit 0
+fi
 
 if [ "$FORCE" != 1 ] && [ "$REBUILD" != 1 ] && php_is_current; then
   ok "PHP 已安装且编译配置未变（--rebuild 可重编）"
@@ -37,89 +93,6 @@ else
     [ -n "$SRC" ] && [ -d "$SRC" ] || die "解压后没找到 PHP 源码目录（src/ 里没有 configure）"
   fi
 fi
-
-D_OPENSSL="$(dep_dir_of openssl)"
-D_ZLIB="$(dep_dir_of zlib)"
-D_LIBXML2="$(dep_dir_of libxml2)"
-D_SQLITE="$(dep_dir_of sqlite)"
-D_CURL="$(dep_dir_of curl)"
-D_ONIG="$(dep_dir_of oniguruma)"
-D_ICU="$(dep_dir_of icu)"
-D_LIBZIP="$(dep_dir_of libzip)"
-D_ICU="$(dep_dir_of icu)"
-D_LIBPNG="$(dep_dir_of libpng)"
-D_JPEG="$(dep_dir_of jpeg)"
-D_FREETYPE="$(dep_dir_of freetype)"
-D_LIBFFI="$(dep_dir_of libffi)"
-D_WEBP="$(dep_dir_of webp)"
-D_AVIF="$(dep_dir_of avif)"
-
-# ------------------------------------------------------------------ 参数 ----
-ARGS=(
-  --prefix="$PREFIX"
-  --with-config-file-path="$PREFIX/etc"
-  --with-config-file-scan-dir="$PREFIX/etc/conf.d"
-  --enable-cli --disable-cgi
-  --without-pear
-  --enable-phar --enable-filter --enable-fileinfo
-  --enable-opcache
-)
-
-if [ "${ENABLE_OPENSSL:-0}" = 1 ]; then ARGS+=(--with-openssl="$D_OPENSSL"); else ARGS+=(--without-openssl); fi
-if [ "${ENABLE_ZLIB:-0}" = 1 ]; then ARGS+=(--with-zlib="$D_ZLIB"); else ARGS+=(--without-zlib); fi
-if [ "${ENABLE_LIBXML2:-0}" = 1 ]; then
-  ARGS+=(--with-libxml --enable-dom --enable-xml --enable-simplexml --enable-xmlreader --enable-xmlwriter --enable-soap)
-else
-  ARGS+=(--without-libxml --disable-dom --disable-xml --disable-simplexml \
-         --disable-xmlreader --disable-xmlwriter --disable-soap)
-fi
-if [ "${ENABLE_LIBCURL:-0}" = 1 ]; then ARGS+=(--with-curl="$D_CURL"); else ARGS+=(--without-curl); fi
-if [ "${ENABLE_SQLITE:-0}" = 1 ]; then
-  ARGS+=(--with-sqlite3="$D_SQLITE" --with-pdo-sqlite="$D_SQLITE")
-else
-  ARGS+=(--without-sqlite3 --without-pdo-sqlite)
-fi
-if [ "${ENABLE_MYSQLI:-0}" = 1 ]; then
-  # mysqlnd 是 PHP 自带的原生驱动，不需要 libmysqlclient
-  ARGS+=(--with-mysqli=mysqlnd --with-pdo-mysql=mysqlnd)
-else
-  ARGS+=(--without-mysqli --without-pdo-mysql)
-fi
-[ "${ENABLE_ONIGURUMA:-0}" = 1 ] && ARGS+=(--enable-mbstring)
-[ "${ENABLE_INTL:-0}" = 1 ] && [ "${ENABLE_ICU:-0}" = 1 ] && ARGS+=(--enable-intl --with-icu-dir="$D_ICU")
-[ "${ENABLE_LIBZIP:-0}" = 1 ] && ARGS+=(--with-zip="$D_LIBZIP")
-if [ "${ENABLE_GD:-0}" = 1 ]; then
-  ARGS+=(--enable-gd --with-jpeg="$D_JPEG" --with-freetype="$D_FREETYPE")
-  [ "${ENABLE_WEBP:-0}" = 1 ] && ARGS+=(--with-webp="$D_WEBP")
-  [ "${ENABLE_AVIF:-0}" = 1 ] && ARGS+=(--with-avif="$D_AVIF")
-else
-  ARGS+=(--disable-gd)
-fi
-[ "${ENABLE_FFI:-0}" = 1 ] && ARGS+=(--with-ffi="$D_LIBFFI")
-
-# 常用内置扩展（不依赖外部库，全开）
-ARGS+=(
-  --enable-bcmath --enable-calendar --enable-exif
-  --enable-pcntl --enable-posix --enable-sockets
-  --enable-shmop --enable-sysvmsg --enable-sysvsem --enable-sysvshm
-)
-
-# 依赖库全在 deps/<名字>-<版本>/，链接时把每个 lib 都写进 rpath；
-# myphp 运行时还会设 LD_LIBRARY_PATH，所以整个安装根搬走也能用。
-mapfile -t LIB_DIRS < <(dep_lib_dirs $(enabled_dep_names))
-LDFLAGS=""
-CPPFLAGS=""
-RPATH=""
-PC_PATH=""
-for d in ${LIB_DIRS[@]+"${LIB_DIRS[@]}"}; do
-  LDFLAGS+="-L$d "
-  RPATH+="$d:"
-  CPPFLAGS+="-I$(dirname "$d")/include "
-  [ -d "$d/pkgconfig" ] && PC_PATH+="$d/pkgconfig:"
-done
-RPATH="${RPATH%:}"
-export PKG_CONFIG_PATH="${PC_PATH%:}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-[ -n "$RPATH" ] && LDFLAGS+="-Wl,-rpath,$RPATH -Wl,--enable-new-dtags"
 
 # ------------------------------------------------------------------ 编译 ----
 cd "$SRC"
@@ -156,10 +129,10 @@ make install > "$LOGS/php-install.log" 2>&1 \
 
 # ------------------------------------------------------- 依赖记录 + ini ------
 # 记录本 PHP 实际链接的依赖目录：跳过判断与 --prune 都靠它
-: > "$PREFIX/.phprt-deps"
+# （同一个依赖可能同时有 lib 和 lib64，按目录名去重）
 for d in ${LIB_DIRS[@]+"${LIB_DIRS[@]}"}; do
-  printf '%s\n' "$(dirname "$d")" >> "$PREFIX/.phprt-deps"
-done
+  printf '%s\n' "$(dirname "$d")"
+done | awk '!seen[$0]++' > "$PREFIX/.phprt-deps"
 
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir 2>/dev/null || true)"
 mkdir -p "$PREFIX/etc/conf.d" "$EXT_DIR"

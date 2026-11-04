@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  yaml 扩展（PECL 源码 + phpize，依赖 libyaml）
-#  phprt: needs=libyaml
+#  phprt: switch=ENABLE_YAML needs=libyaml
 #  可单独执行: lib/modules/ext/yaml.sh
 # =============================================================================
 set -euo pipefail

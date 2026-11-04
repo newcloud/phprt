@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
+#  phprt: switch=ENABLE_REDIS
 #  redis 扩展（PECL 源码 + phpize 编译，产物是 PHP 目录里的 extensions/.../redis.so）
 #  源码目录按 PHP 版本分开: build/redis-<版本>-php-<PHP 版本>/
 #  可单独执行: lib/modules/ext/redis.sh

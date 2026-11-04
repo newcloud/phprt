@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
+#  phprt: switch=ENABLE_PROTOBUF
 #  protobuf 扩展（PECL 源码 + phpize）—— Google Protocol Buffers 的 C 运行时
 #  纯 C，自带精简版 upb，不依赖外部 libprotobuf，也不需要重编 PHP
 #  可单独执行: lib/modules/ext/protobuf.sh

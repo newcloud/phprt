@@ -13,6 +13,8 @@
 #                                重编 php 时会自动补跑 redis/composer（它们依赖 PHP）
 #    ./build.sh --skip redis     跳过某个模块（可重复）
 #    ./build.sh --verify         只做安装结果自检
+#    ./build.sh --show-args      只打印 PHP 的 configure 参数（不编译）
+#    ./build.sh --modules        列出模块节点 / 开关 / 依赖 / 状态
 #    ./build.sh --clean-build    删掉解压出的源码（build/），保留 downloads
 #    ./build.sh --prune          删除没有任何 PHP 版本引用的依赖/工具目录（--yes 免确认）
 #    ./build.sh --jobs 8         指定并行度（默认 nproc）
@@ -42,6 +44,8 @@ SKIP_LIST=()
 DO_VERIFY=0
 DO_CLEAN_BUILD=0
 DO_PRUNE=0
+DO_MODULES=0
+SHOW_ARGS=0
 ASSUME_YES=0
 SPEC="$*"
 [ -n "$SPEC" ] || SPEC="（无参数）"
@@ -57,6 +61,8 @@ while [ $# -gt 0 ]; do
     --rebuild) export REBUILD=1; shift ;;
     --force)   export FORCE=1; export REBUILD=1; shift ;;
     --verify)  DO_VERIFY=1; shift ;;
+    --modules) DO_MODULES=1; shift ;;
+    --show-args) SHOW_ARGS=1; shift ;;
     --clean-build|--clean-cache) DO_CLEAN_BUILD=1; shift ;;
     --prune)   DO_PRUNE=1; shift ;;
     --yes)     ASSUME_YES=1; shift ;;
@@ -73,6 +79,14 @@ done
 if [ "$DO_VERIFY" = 1 ]; then
   export PHPRT_HOME
   exec "$HERE/verify.sh"
+fi
+if [ "$DO_MODULES" = 1 ]; then
+  export PHPRT_HOME
+  exec bash "$HERE/modules-list.sh"
+fi
+if [ "$SHOW_ARGS" = 1 ]; then
+  export PHPRT_HOME PHPRT_SHOW_ARGS=1
+  exec bash "$(module_sh php)"
 fi
 
 mkdir -p "$PHPRT_HOME"
@@ -216,7 +230,6 @@ enabled_module() { # enabled_module <name>：只看开关，expand_needs 再补�
     oniguruma) [ "${ENABLE_ONIGURUMA:-0}" = 1 ] ;;
     libzip)    [ "${ENABLE_LIBZIP:-0}" = 1 ] ;;
     php)       : ;;
-    icu)       [ "${ENABLE_ICU:-0}" = 1 ] ;;
     libpng|jpeg|freetype) [ "${ENABLE_GD:-0}" = 1 ] ;;
     webp)      [ "${ENABLE_WEBP:-0}" = 1 ] ;;
     aom|avif)  [ "${ENABLE_AVIF:-0}" = 1 ] ;;

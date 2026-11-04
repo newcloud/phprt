@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  xdebug 扩展（PECL 源码 + phpize）
-#  phprt: needs=zlib
+#  phprt: switch=ENABLE_XDEBUG needs=zlib
 #  默认 xdebug.mode=off，不拖慢运行；调试时 export XDEBUG_MODE=debug 即可
 #  可单独执行: lib/modules/ext/xdebug.sh
 # =============================================================================

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
+#  phprt: switch=ENABLE_COMPOSER
 #  Composer（单文件 phar，放到 <安装根>/composer.phar；由 ./myphp composer 调用）
 #  phar 与 PHP 版本无关，所以和 myphp 放在一起共享
 #  可单独执行: lib/modules/composer.sh

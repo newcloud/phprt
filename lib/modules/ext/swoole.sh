@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  swoole 扩展（PECL 源码 + phpize）—— 需要 C++ 编译器（g++）
-#  phprt: needs=openssl,zlib
+#  phprt: switch=ENABLE_SWOOLE needs=openssl,zlib
 #  可单独执行: lib/modules/ext/swoole.sh
 # =============================================================================
 set -euo pipefail

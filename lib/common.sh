@@ -32,6 +32,8 @@ MODULES="$HERE/modules"
 MODULES_DEPS="$MODULES/deps"
 MODULES_EXT="$MODULES/ext"
 MODULES_TOOLS="$MODULES/tools"
+# PHP 内置扩展：不是可构建模块，只声明开关 / configure 参数 / 依赖（php.sh 收集）
+MODULES_BUILTIN="$MODULES/builtin"
 
 # 安装根：install.sh 会传绝对路径；手动用时默认 ~/.phprt
 PHPRT_HOME="${PHPRT_HOME:-$HOME/.phprt}"
@@ -160,22 +162,21 @@ ca_ini_lines() {
   return 0
 }
 
-# 按配置里的开关列出本次启用且确实存在的依赖库目录（顺序固定）
+# 本次构建要进 rpath / LD_LIBRARY_PATH 的依赖库名（顺序固定）
+# 来源：内置扩展的 --needs（php.sh 的依赖）+ 已启用 PECL 扩展的 needs=
+# 不再手写清单：开关变了，这里跟着变
 enabled_dep_names() {
-  [ "${ENABLE_OPENSSL:-0}" = 1 ]   && echo openssl
-  [ "${ENABLE_ZLIB:-0}" = 1 ]      && echo zlib
-  [ "${ENABLE_LIBXML2:-0}" = 1 ]   && echo libxml2
-  [ "${ENABLE_SQLITE:-0}" = 1 ]    && echo sqlite
-  [ "${ENABLE_LIBCURL:-0}" = 1 ]   && echo curl
-  [ "${ENABLE_ONIGURUMA:-0}" = 1 ] && echo oniguruma
-  [ "${ENABLE_LIBZIP:-0}" = 1 ]    && echo libzip
-  [ "${ENABLE_ICU:-0}" = 1 ]       && echo icu
-  [ "${ENABLE_GD:-0}" = 1 ]        && echo libpng && echo jpeg && echo freetype
-  [ "${ENABLE_WEBP:-0}" = 1 ]      && echo webp
-  [ "${ENABLE_AVIF:-0}" = 1 ]      && echo aom && echo avif
-  [ "${ENABLE_FFI:-0}" = 1 ]       && echo libffi
-  [ "${ENABLE_YAML:-0}" = 1 ]      && echo libyaml
-  return 0
+  {
+    enabled_builtin_needs
+    local m var
+    for m in redis protobuf xdebug apcu yaml swoole; do
+      var="ENABLE_$(printf '%s' "$m" | tr 'a-z' 'A-Z')"
+      if [ "${!var:-0}" = 1 ]; then module_needs "$m"; fi
+    done
+    # 纯库开关（不产生扩展，只被某个扩展可选用到）
+    if [ "${ENABLE_WEBP:-0}" = 1 ]; then printf '%s\n' webp; fi
+    if [ "${ENABLE_AVIF:-0}" = 1 ]; then printf '%s\n' aom avif; fi
+  } | tr ' ' '\n' | awk 'NF && !seen[$0]++'
 }
 
 dep_lib_dirs() { # dep_lib_dirs <名字...>  -> 存在的 <dep>/lib（个别工具会装到 lib64）
@@ -225,9 +226,43 @@ module_sh() { # module_sh <名字> -> 模块脚本的绝对路径
   die "没有模块 $n（lib/modules/{ext,deps,tools}/ 里都没找到）"
 }
 
-module_needs() { # module_needs <名字> -> 空格分隔的依赖名（读模块头部的 # phprt: needs=）
+module_needs() { # module_needs <名字> -> 空格分隔的依赖名
+  if [ "$1" = php ]; then enabled_builtin_needs; return 0; fi
   sed -n 's/^# *phprt:.*[[:space:]]needs=\([^[:space:]]*\).*/\1/p' "$(module_sh "$1")" \
     | head -1 | tr ',' ' '
+}
+
+# ------------------------------------------------------ 内置扩展（builtin/） --
+# 这些文件不是模块：不产 .so、没有 stamp，只供 php.sh 收集 configure 参数
+builtin_order() { # 固定顺序 = 历史 configure 参数顺序（改了会让 Configure Command 变）
+  printf '%s\n' openssl zlib libxml2 curl sqlite mysqli mbstring intl zip gd ffi
+}
+
+builtin_sh() { # builtin_sh <扩展名> -> 文件路径（不存在则输出空）
+  local f="$MODULES_BUILTIN/$1.sh"
+  [ -f "$f" ] && printf '%s\n' "$f"
+  return 0
+}
+
+builtin_switch() { # builtin_switch <扩展名> -> 开关名
+  local f; f="$(builtin_sh "$1")"
+  [ -n "$f" ] || return 0
+  sed -n 's/^# *phprt:.*[[:space:]]switch=\([^[:space:]]*\).*/\1/p' "$f" | head -1
+}
+
+enabled_builtin_needs() { # 所有已启用内置扩展需要的库（去重保序）
+  local e f n
+  for e in $(builtin_order); do
+    f="$(builtin_sh "$e")"
+    [ -n "$f" ] || continue
+    n="$(bash "$f" --needs)"
+    [ -n "$n" ] && printf '%s\n' $n
+  done | awk '!seen[$0]++'
+}
+
+builtin_code_sig() { # 内置扩展声明文件的代码指纹（忽略注释；改了就让 PHP 重编）
+  [ -d "$MODULES_BUILTIN" ] || return 0
+  grep -hv '^[[:space:]]*#' "$MODULES_BUILTIN"/*.sh 2>/dev/null | sha256sum | cut -c1-16
 }
 
 dep_env() { # dep_env <模块名>：把 needs 的 include/lib/rpath/pkgconfig 放进环境
@@ -294,13 +329,15 @@ php_sig() {
   s+=";sqlite=${ENABLE_SQLITE:-0}:$SQLITE_VERSION"
   s+=";curl=${ENABLE_LIBCURL:-0}:$LIBCURL_VERSION"
   s+=";oniguruma=${ENABLE_ONIGURUMA:-0}:$ONIGURUMA_VERSION"
-  s+=";icu=${ENABLE_ICU:-0}:$ICU_VERSION"
+  s+=";icu=$ICU_VERSION"
   s+=";libzip=${ENABLE_LIBZIP:-0}:$LIBZIP_VERSION"
   s+=";mysqli=${ENABLE_MYSQLI:-0}"
   s+=";gd=${ENABLE_GD:-0}:$LIBPNG_VERSION/$JPEG_VERSION/$FREETYPE_VERSION"
   s+=";webp=${ENABLE_WEBP:-0}:$WEBP_VERSION"
   s+=";avif=${ENABLE_AVIF:-0}:$AOM_VERSION/$AVIF_VERSION"
   s+=";ffi=${ENABLE_FFI:-0}:$LIBFFI_VERSION"
+  # 内置扩展的声明文件改了（参数/依赖）也要重编 PHP，否则改动静默不生效
+  s+=";builtin=$(builtin_code_sig)"
   printf '%s\n' "$s"
 }
 

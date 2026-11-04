@@ -3,6 +3,7 @@
 #  phprt —— 管理命令（装在仓库里，不复制进安装根）
 #
 #    phprt list                 已安装的 PHP 版本 + 当前项目用的入口
+#    phprt modules              节点清单：类别 / 开关 / 依赖 / 状态
 #    phprt init                 在当前目录生成 ./myphp（版本 + php.ini 固化进去）
 #    phprt exec -- <参数>        不建项目，直接跑一下 PHP
 #    phprt build [参数...]       编译/增量（参数见 ./build.sh --help）
@@ -275,6 +276,7 @@ main() {
   [ $# -gt 0 ] && shift
   case "$cmd" in
     list|ls)        cmd_list ;;
+    modules)        PHPRT_HOME="$(find_home)" exec bash "$HERE/lib/modules-list.sh" ;;
     init)           cmd_init "$@" ;;
     exec)           cmd_exec "$@" ;;
     build)          cmd_build "$@" ;;
