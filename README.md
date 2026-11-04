@@ -195,6 +195,14 @@ v2 改成项目自包含，两者不兼容：
 - 旧项目的 `.phprt` 不能复用，重新 `phprt set <版本>` 即可（源码缓存会复用 `downloads/`）；
 - 旧版本代码留在 `v1-legacy` 标签上：`git checkout v1-legacy`。
 
+## 文档
+
+- `docs/WHEEL-LIBS.md`：运行时库怎么加 hash、改 SONAME、设 `$ORIGIN` rpath
+- `docs/REFACTOR-V1-TO-V2.md`：从旧安装根模型迁到项目本地模型的完整记录
+- `docs/ADD-EXTENSION.md`：给 bundle 加依赖库、内置扩展、PECL 扩展
+- `docs/PROJECT-LOCAL.md`：项目本地自包含模型的设计说明
+- `docs/PHP-VERSIONS.md`：多 PHP 版本的配置组织方案
+
 ## 限制
 
 - 内置扩展多数是静态编入，`remove ext` 只能从项目 ini 移除，不能卸载。
