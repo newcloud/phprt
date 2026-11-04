@@ -64,8 +64,7 @@ check_ldd() { # check_ldd <文件>
   local f="$1" bad
   bad="$(LD_LIBRARY_PATH="$(printf '%s:' "$PHPRT_HOME"/deps/*/lib)" ldd "$f" 2>/dev/null \
         | awk '$3 ~ /^\// {print $3}' \
-        | # libz 也在白名单里：swoole 无条件链系统 zlib（ABI 稳定，任何发行版都有）
-        grep -Ev '/(libc|libm|libgcc_s|libstdc\+\+|libpthread|libdl|librt|libresolv|libcrypt|libz)\.so' \
+        | grep -Ev '/(libc|libm|libgcc_s|libstdc\+\+|libpthread|libdl|librt|libresolv|libcrypt)\.so' \
         | grep -v "^$PHPRT_HOME/" || true)"
   if [ -n "$bad" ]; then
     warn "${f#"$PHPRT_HOME"/} 借用了安装根以外的库:"; printf '      %s\n' $bad; ldd_bad=1; fail=1
@@ -126,6 +125,36 @@ gd_supports jpeg     "${ENABLE_GD:-0}"    "imagetypes() & IMG_JPG"
 gd_supports webp     "${ENABLE_WEBP:-0}"  "imagetypes() & IMG_WEBP"
 gd_supports avif     "${ENABLE_AVIF:-0}"  "function_exists('imageavif')"
 gd_supports freetype "${ENABLE_GD:-0}"    "function_exists('imagettftext')"
+
+log "5c) 硬依赖（模块头部的 phprt: needs=）"
+# 不带 LD_LIBRARY_PATH 跑 ldd：声明了 needs 的模块，其依赖必须靠自己的 RUNPATH
+# 解析到安装根以内，不能悄悄回落系统库
+needs_artifact() { # needs_artifact <模块> -> 产物 .so（没装则输出空）
+  local m="$1" d
+  if [ -f "$MODULES_EXT/$m.sh" ]; then
+    ls "$PREFIX"/lib/php/extensions/*/"$m".so 2>/dev/null | head -1
+  elif [ -f "$MODULES_DEPS/$m.sh" ]; then
+    d="$(dep_dir_of "$m")"
+    ls "$d"/lib/lib"${m#lib}"*.so* 2>/dev/null | head -1   # libpng -> libpng16.so
+  fi
+  return 0
+}
+for m in $(grep -l 'phprt: needs=' "$MODULES"/*/*.sh 2>/dev/null | sed 's|.*/||; s|\.sh$||' | sort); do
+  needs="$(module_needs "$m")"
+  so="$(needs_artifact "$m")"
+  [ -n "$so" ] || continue                       # 没装的模块不检查
+  for n in $needs; do
+    [ -d "$(dep_dir_of "$n")" ] || { printf '    ✗ %-8s 依赖 %s 的目录不存在\n' "$m" "$n"; fail=1; }
+  done
+  bad="$(ldd "$so" 2>/dev/null | awk '$3 ~ /^\// {print $3}' \
+        | grep -Ev '/(libc|libm|libgcc_s|libstdc\+\+|libpthread|libdl|librt|libresolv|libcrypt)\.so' \
+        | grep -v "^$PHPRT_HOME/" || true)"
+  if [ -n "$bad" ]; then
+    printf '    ✗ %-8s 依赖解析到安装根以外（缺 RUNPATH）:\n' "$m"; printf '        %s\n' $bad; fail=1
+  else
+    printf '    ✓ %-8s %s\n' "$m" "$(printf '%s' "$needs" | tr ' ' ',')"
+  fi
+done
 
 log "6) php.ini"
 run_php --ini | sed -n '1,3p' | sed 's/^/    /'

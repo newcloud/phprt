@@ -25,7 +25,9 @@
 phprt/
 ├── configs/php-<版本>.conf   一个版本一份：版本 + 开关 + 依赖版本（用户改这里）
 ├── lib/common.sh            路径、下载、stamp、dep_dir_of、enabled_dep_names、php_sig
-├── lib/modules/<名字>.sh     每个「模块」一个脚本（模块名 = 文件名）
+├── lib/modules/deps/*.sh    独立库（安装到 <安装根>/deps/）
+├── lib/modules/ext/*.sh     PECL 扩展（安装到 php-<版本>/）
+├── lib/modules/tools/*.sh   构建工具（autoconf / re2c / perl 核心模块）
 ├── lib/modules/php.sh       PHP 本体的 configure 参数
 ├── lib/verify.sh            自检（扩展有没有真的加载）
 ├── lib/myphp-project.tmpl   项目入口模板（不用动）
@@ -39,7 +41,12 @@ phprt/
 └── php<版本>_{default,dev,prod}.ini
 ```
 
-- **模块名 = `lib/modules/<名字>.sh` 的文件名**，`build.sh` 用它找脚本。
+- **目录即类别**：`deps/` 产库、`ext/` 产 PHP 扩展、`tools/` 产构建工具（都没有开关，
+  谁需要谁拉起）；模块名 = 文件名，`build.sh` 用 `module_sh()` 在三个目录里找。
+- **硬依赖写在模块头部**：`#  phprt: needs=zlib`（逗号分隔，写依赖名，不写 `libz`）。
+  缺库时 `ensure_needs` 会先构建它，`dep_env` 自动注入 `-I` / `-L` / `-rpath` /
+  `PKG_CONFIG_PATH`。只有「上游没给关闭或指路参数」的库才登记
+  （例：swoole 的 `AC_CHECK_LIB(z)` 没有 `--with-zlib-dir`）。
 - **stamp**：`stamp_write <模块> <签名>` 把签名写进被描述目录里的 `.phprt-stamp-<模块>`。
   签名一致 → 跳过；目录被删 → 自动重装。签名里通常带上依赖版本和 `$(php_sig)`
   （PHP 一重编，PECL 扩展的 ABI 就变了，必须跟着重编）。
@@ -54,7 +61,7 @@ phprt/
 | # | 文件 | 改什么 | PECL | 编译期 |
 | --- | --- | --- | :-: | :-: |
 | 1 | `config.conf` | 开关 `ENABLE_XXX=1` + `XXX_VERSION/URL/SHA256` | ✅ | ✅ |
-| 2 | `lib/modules/<名字>.sh` | 新建模块脚本 | ✅ | ✅ |
+| 2 | `lib/modules/ext/<名字>.sh`（PECL）或 `lib/modules/deps/<名字>.sh`（库） | 新建模块脚本；硬依赖加 `#  phprt: needs=` | ✅ | ✅ |
 | 3 | `build.sh` → `ALL_MODULES` | 加模块名（依赖库要排在 `php` 之前） | ✅ | ✅ |
 | 4 | `build.sh` → `enabled_module()` | 开关 → 模块名 | ✅ | ✅ |
 | 5 | `lib/common.sh` → `dep_dir_of()` | 依赖库的目录名 | — | ✅ |
@@ -80,13 +87,13 @@ MSGPACK_URL="https://pecl.php.net/get/msgpack-3.0.1.tgz"
 MSGPACK_SHA256=""
 ```
 
-### 4.2 `lib/modules/msgpack.sh`
+### 4.2 `lib/modules/ext/msgpack.sh`
 
 ```bash
 #!/usr/bin/env bash
 # msgpack 扩展（PECL + phpize）
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc make tar
@@ -168,12 +175,12 @@ lib/verify.sh  check_ext msgpack "${ENABLE_MSGPACK:-0}"
 
 ## 5. 模板 B：编译期扩展 + 依赖库（以 gmp 为例）
 
-### 5.1 依赖库模块 `lib/modules/libgmp.sh`（autotools 版）
+### 5.1 依赖库模块 `lib/modules/deps/gmp.sh`（autotools 版）
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/../common.sh"
+source "$(dirname "$(readlink -f "$0")")/../../common.sh"
 load_config
 
 need_cmds gcc make tar
@@ -288,7 +295,11 @@ phprt verify                  # 自检：加载情况 + 动态库 + 搬迁测试
     但会连带 `--rebuild`（复用源码重编）。
 11. **PHP 8.6 移除了 `zval_dtor()`**（8.3 起弃用）：老 PECL 扩展会报
     `implicit declaration of function 'zval_dtor'`。等价替换成 `zval_ptr_dtor()` 即可
-    （`lib/modules/protobuf.sh` 里有现成的幂等补丁）。
+    （`lib/modules/ext/protobuf.sh` 里有现成的幂等补丁）。
+12. **扩展需要的库要自己指向安装根**：上游 configure 若用裸 `AC_CHECK_LIB(x)`
+    （没有 `--with-x-dir`），`LD_LIBRARY_PATH` 对链接器无效，会悄悄链上系统库。
+    在模块头写 `#  phprt: needs=x` 并 `dep_env` 注入 `-L`/`-rpath`；
+    改完记得在签名里加个标记（如 `;rpath=1`），否则 stamp 命中会跳过重编。
 
 ---
 

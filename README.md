@@ -260,9 +260,9 @@ autoconf + re2c 并跑 `buildconf`。
 **加新扩展**：完整步骤（模板、必须同步改的 11 处、踩过的坑）见
 [`docs/ADD-EXTENSION.md`](docs/ADD-EXTENSION.md)。两条路：
 
-- **编译期扩展**（gd/intl/pgsql 这类）：`config.conf` 加开关 + `lib/modules/<名字>.sh`
+- **编译期扩展**（gd/intl/pgsql 这类）：`config.conf` 加开关 + `lib/modules/deps/<名字>.sh`
   依赖脚本 + `lib/modules/php.sh` 加 configure 参数，然后 `install.sh`（只有 PHP 重编）。
-- **PECL 扩展**：照 `lib/modules/redis.sh` 抄 —— 下载 tgz → `phpize` → `configure
+- **PECL 扩展**：照 `lib/modules/ext/redis.sh` 抄 —— 下载 tgz → `phpize` → `configure
   --with-php-config` → `make install` → 往 `php-<版本>/etc/conf.d/` 写一行。
 
 ## 命令参考
@@ -308,7 +308,10 @@ build.sh                构建调度
 config.conf             开关与依赖版本的模板（install.sh 合并进安装根）
 ini/                    php.ini 预设
 lib/versions/           PHP 版本清单
-lib/modules/*.sh        每个依赖一个脚本
+lib/modules/deps/*.sh   独立库（装到 <安装根>/deps/）
+lib/modules/ext/*.sh    PECL 扩展（装到 php-<版本>/）
+lib/modules/tools/*.sh  构建工具（autoconf / re2c / perl 核心模块）
+lib/modules/php.sh      PHP 本体
 lib/myphp-project.tmpl  项目入口 ./myphp 的模板
 lib/common.sh           路径、下载、stamp、依赖记录
 lib/verify.sh           自检
