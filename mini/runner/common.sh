@@ -534,3 +534,80 @@ ext_sig() {
     done
   } | hash_sig
 }
+
+# ---------------------------------------------------------------------------
+# 运行时库整理（wheel 方式）：deps/*/lib 里的共享库全部复制到 lib/phprt/，
+# 名字加 8 位内容 hash、SONAME 同步改写，消费方的 DT_NEEDED 一起改，
+# 所有 ELF 的 RPATH 改成 $ORIGIN 相对路径。之后运行时不再需要 LD_LIBRARY_PATH。
+# ---------------------------------------------------------------------------
+wheel_hashed_name() {   # $1=SONAME  $2=hash
+  case "$1" in
+    *.so)   printf '%s-%s.so\n'   "${1%.so}"    "$2" ;;
+    *.so.*) printf '%s-%s.so%s\n' "${1%%.so.*}" "$2" "${1#*.so}" ;;
+    *)      printf '%s-%s\n'      "$1"          "$2" ;;
+  esac
+}
+
+wheelize_tree() {
+  local tree="$1" flat="$1/lib/phprt"
+  local f soname hash new old elf osoname onew
+  need_cmds patchelf sha256sum
+  mkdir -p "$flat"
+
+  # 保留上一轮映射：依赖重编后 hash 会变，已改写过的 NEEDED 要能跟到新名字
+  local prev="$flat/wheel.map.prev" repl="$flat/.replace"
+  if [ -f "$flat/wheel.map" ]; then cp -f "$flat/wheel.map" "$prev"; else : > "$prev"; fi
+  : > "$flat/wheel.map"
+  rm -f "$flat"/*.so*
+
+  for f in "$tree"/deps/*/lib/*.so.* "$tree"/deps/*/lib64/*.so.*; do
+    [ -f "$f" ] || continue
+    [ -L "$f" ] && continue
+    soname="$(patchelf --print-soname "$f" 2>/dev/null || true)"
+    [ -n "$soname" ] || soname="$(basename "$f")"
+    case "$soname" in *.so|*.so.*) ;; *) continue ;; esac
+    hash="$(sha256sum "$f" | cut -c1-8)"
+    new="$(wheel_hashed_name "$soname" "$hash")"
+    cp -af "$f" "$flat/$new"
+    patchelf --set-soname "$new" --set-rpath '$ORIGIN' --force-rpath "$flat/$new"
+    printf '%s %s\n' "$soname" "$new" >> "$flat/wheel.map"
+    # 注意：deps/*/lib 保持原样，不动它的软链。它是构建期的链接目录，
+    # 里面的库名字还是原始 SONAME；改过名字的副本只放在 lib/phprt，
+    # 消费方的 DT_NEEDED 由下面的 --replace-needed 统一改写。
+    # （如果把 deps 的 .so 软链指到 lib/phprt，后续 add ext 链接时
+    #   ld 会跟不上二级依赖的 hash 名，报 undefined reference。）
+  done
+
+  if [ ! -s "$flat/wheel.map" ]; then
+    rm -f "$prev"
+    return 0
+  fi
+
+  # 本轮 soname -> 新名字；上一轮的 hash 名字 -> 本轮新名字
+  cp -f "$flat/wheel.map" "$repl"
+  while read -r osoname onew; do
+    [ -n "$onew" ] || continue
+    new="$(awk -v s="$osoname" '$1 == s { print $2 }' "$flat/wheel.map")"
+    [ -n "$new" ] && [ "$onew" != "$new" ] && printf '%s %s\n' "$onew" "$new" >> "$repl"
+  done < "$prev"
+
+  while read -r old new; do
+    for elf in "$tree/bin/php" "$flat"/*.so* "$tree"/lib/*.so* \
+               "$tree"/lib/php/extensions/*/*.so; do
+      [ -f "$elf" ] || continue
+      [ -L "$elf" ] && continue
+      patchelf --replace-needed "$old" "$new" "$elf" 2>/dev/null || true
+    done
+  done < "$repl"
+  rm -f "$repl" "$prev"
+
+  patchelf --set-rpath '$ORIGIN/../lib/phprt' --force-rpath "$tree/bin/php"
+  for elf in "$flat"/*.so*; do
+    [ -f "$elf" ] && patchelf --set-rpath '$ORIGIN' --force-rpath "$elf"
+  done
+  for elf in "$tree"/lib/php/extensions/*/*.so; do
+    [ -f "$elf" ] && patchelf --set-rpath '$ORIGIN/../../../phprt' --force-rpath "$elf"
+  done
+
+  ok "运行时库已整理到 $flat（$(wc -l < "$flat/wheel.map") 个）"
+}

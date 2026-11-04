@@ -13,7 +13,7 @@ load_config
 case "${1:-}" in
   --flags)
     if [ "${ENABLE_ZLIB:-0}" = 1 ]; then
-      printf '%s\n' "--with-zlib=$(dep_dir_of zlib)"
+      printf '%s\n' "--with-zlib=shared"
     else
       printf '%s\n' "--without-zlib"
     fi ;;

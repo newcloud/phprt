@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # 由 phprt mini 生成：本项目的 PHP 入口。
 # 版本切换只改 .phprt/current 符号链接，这个文件不用动。
+# 依赖库已用 $ORIGIN rpath，不需要 LD_LIBRARY_PATH。
 set -euo pipefail
 
 PHPRT_ROOT=".phprt"
 PHPRT_INI=".phprt/php.ini"
 
-APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# 自身所在目录：纯参数展开，只起一次子进程
+_src="${BASH_SOURCE[0]}"
+case "$_src" in */*) _dir="${_src%/*}" ;; *) _dir="." ;; esac
+APP_DIR="$(cd -P "$_dir" && pwd)"
+
 case "$PHPRT_ROOT" in
   /*) ;;
   *)  PHPRT_ROOT="$APP_DIR/${PHPRT_ROOT#./}" ;;
@@ -22,27 +27,27 @@ if [ ! -x "$PREFIX/bin/php" ]; then
   echo "（先跑 phprt set <版本>）" >&2
   exit 1
 fi
+if [ ! -f "$PHPRT_INI" ]; then
+  echo "缺少 php.ini: $PHPRT_INI" >&2
+  echo "（先跑 phprt set <版本> 重新生成）" >&2
+  exit 1
+fi
 
-[ -f "$PHPRT_INI" ] || PHPRT_INI="$PREFIX/etc/php.ini"
 export PHPRC="$PHPRT_INI"
 export PHP_INI_SCAN_DIR="$PREFIX/etc/conf.d:$PHPRT_ROOT/conf.d"
-export PATH="$PREFIX/bin:$PATH"
+case ":$PATH:" in
+  *":$PREFIX/bin:"*) ;;
+  *) PATH="$PREFIX/bin:$PATH" ;;
+esac
+export PATH
 
 EXT_DIR=""
 for d in "$PREFIX"/lib/php/extensions/*/; do
   [ -d "$d" ] && { EXT_DIR="${d%/}"; break; }
 done
 
-_ld=""
-for d in "$PREFIX"/lib "$PREFIX"/deps/*/lib "$PREFIX"/deps/*/lib64; do
-  [ -d "$d" ] && _ld+="$d:"
-done
-export LD_LIBRARY_PATH="${_ld%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-if [ -z "${OPENSSL_CONF:-}" ]; then
-  for f in "$PREFIX"/deps/openssl-*/etc/ssl/openssl.cnf; do
-    [ -f "$f" ] && { export OPENSSL_CONF="$f"; break; }
-  done
+if [ -z "${OPENSSL_CONF:-}" ] && [ -f "$PREFIX/etc/ssl/openssl.cnf" ]; then
+  export OPENSSL_CONF="$PREFIX/etc/ssl/openssl.cnf"
 fi
 
 ARGS=()
@@ -50,8 +55,19 @@ ARGS=()
 
 case "${1:-}" in
   --env)
-    printf 'PHP=%s\nPHPRC=%s\nPHP_INI_SCAN_DIR=%s\nEXT_DIR=%s\nLD_LIBRARY_PATH=%s\n' \
-      "$PREFIX/bin/php" "$PHPRC" "$PHP_INI_SCAN_DIR" "$EXT_DIR" "$LD_LIBRARY_PATH"
+    printf 'PHP=%s\nPHPRC=%s\nPHP_INI_SCAN_DIR=%s\nEXT_DIR=%s\nOPENSSL_CONF=%s\n' \
+      "$PREFIX/bin/php" "$PHPRC" "$PHP_INI_SCAN_DIR" "$EXT_DIR" "${OPENSSL_CONF:-}"
+    exit 0 ;;
+  --shell)
+    printf 'export PHPRC=%q\n' "$PHPRC"
+    printf 'export PHP_INI_SCAN_DIR=%q\n' "$PHP_INI_SCAN_DIR"
+    printf 'export PATH=%q\n' "$PATH"
+    if [ -n "${OPENSSL_CONF:-}" ]; then
+      printf 'export OPENSSL_CONF=%q\n' "$OPENSSL_CONF"
+    fi
+    if [ -n "$EXT_DIR" ]; then
+      printf 'php() { command %q -d %q "$@"; }\n' "$PREFIX/bin/php" "extension_dir=$EXT_DIR"
+    fi
     exit 0 ;;
 esac
 

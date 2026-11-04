@@ -175,11 +175,23 @@ done
 
 [ -x "$TREE/bin/php" ] || die "构建完成但没有 $TREE/bin/php"
 
+log "整理运行时库（hash SONAME + \$ORIGIN rpath）"
+wheelize_tree "$TREE"
+
+# OpenSSL 的配置文件也收进树里：运行时只认 $PREFIX/etc/ssl，
+# 不用再去 deps/ 里按目录名找（搬目录后仍有效）
+for d in "$TREE"/deps/openssl-*/etc/ssl; do
+  [ -d "$d" ] || continue
+  mkdir -p "$TREE/etc"
+  rm -rf "$TREE/etc/ssl"
+  cp -a "$d" "$TREE/etc/ssl"
+  break
+done
+
 {
   printf 'built_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
   [ -f "$TREE/.configure-line" ] && cat "$TREE/.configure-line"
-  _ld="$TREE/lib:$(ls -d "$TREE"/deps/*/lib 2>/dev/null | tr '\n' ':')"
-  LD_LIBRARY_PATH="$_ld" "$TREE/bin/php" -v | head -2
+  env -u LD_LIBRARY_PATH "$TREE/bin/php" -v | head -2
 } > "$TREE/BUILD-INFO"
 
 printf 'ok\n' > "$TREE/BUILD-STATUS"

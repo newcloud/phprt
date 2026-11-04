@@ -327,6 +327,24 @@ cmd_verify() {
     return 1
   fi
   ok "php 与扩展没有从安装根外借库"
+
+  log "4) RPATH（只允许 \$ORIGIN 相对路径）"
+  local rp="" abs=""
+  for f in "$tree/bin/php" "$tree"/lib/*.so* "$tree"/lib/php/extensions/*/*.so; do
+    [ -f "$f" ] || continue
+    [ -L "$f" ] && continue
+    rp="$(readelf -d "$f" 2>/dev/null | awk -F'[][]' '/\(RPATH\)|\(RUNPATH\)/{print $2}' | tr '\n' ':')"
+    case "$rp" in
+      "") ;;
+      *'$ORIGIN'*) ;;
+      *) abs+="$f: $rp"$'\n' ;;
+    esac
+  done
+  if [ -n "$abs" ]; then
+    printf '    ✗ 存在绝对路径 RPATH:\n%s' "$abs"
+    return 1
+  fi
+  ok "RPATH 全部是相对路径"
 }
 
 main() {
