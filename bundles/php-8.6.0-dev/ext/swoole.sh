@@ -18,7 +18,7 @@ PERL_DIR="$(dep_dir_of perl5core)"
 D_OPENSSL="$(dep_dir_of openssl)"
 SIG="swoole=$SWOOLE_VERSION;$(php_sig);rpath=1"
 
-if [ "$FORCE" != 1 ] && stamp_ok swoole "$SIG" && [ -f "$PHPRT_HOME/conf.d/27-swoole.ini" ]; then
+if [ "$FORCE" != 1 ] && stamp_ok swoole "$SIG" && [ -f "$PREFIX/etc/conf.d/27-swoole.ini" ]; then
   ok "swoole 已装，跳过"; exit 0
 fi
 
@@ -80,7 +80,8 @@ make install >> "$LOGS/swoole-make.log" 2>&1
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir)"
 [ -f "$EXT_DIR/swoole.so" ] || die "没找到 $EXT_DIR/swoole.so"
 
-cat > "$PHPRT_HOME/conf.d/27-swoole.ini" <<EOF
+mkdir -p "$PREFIX/etc/conf.d"
+cat > "$PREFIX/etc/conf.d/27-swoole.ini" <<EOF
 ; 由 phprt 生成（swoole $SWOOLE_VERSION）
 extension=swoole.so
 swoole.use_shortname=Off

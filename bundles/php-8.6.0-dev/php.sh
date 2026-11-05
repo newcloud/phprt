@@ -94,4 +94,5 @@ make install > "$LOGS/php-install.log" 2>&1 ||
   { tail -40 "$LOGS/php-install.log"; die "PHP make install 失败"; }
 
 [ -x "$TREE/bin/php" ] || die "安装后没有 $TREE/bin/php"
+[ -f "$TREE/bin/phar.phar" ] || die "安装后没有 phar.phar（phar 命令不可用）"
 ok "PHP $PHP_VERSION 本体完成"

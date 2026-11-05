@@ -17,7 +17,7 @@ AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
 SIG="apcu=$APCU_VERSION;$(php_sig)"
 
-if [ "$FORCE" != 1 ] && stamp_ok apcu "$SIG" && [ -f "$PHPRT_HOME/conf.d/25-apcu.ini" ]; then
+if [ "$FORCE" != 1 ] && stamp_ok apcu "$SIG" && [ -f "$PREFIX/etc/conf.d/25-apcu.ini" ]; then
   ok "apcu 已装，跳过"; exit 0
 fi
 
@@ -71,7 +71,8 @@ make install >> "$LOGS/apcu-make.log" 2>&1
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir)"
 [ -f "$EXT_DIR/apcu.so" ] || die "没找到 $EXT_DIR/apcu.so"
 
-cat > "$PHPRT_HOME/conf.d/25-apcu.ini" <<EOF
+mkdir -p "$PREFIX/etc/conf.d"
+cat > "$PREFIX/etc/conf.d/25-apcu.ini" <<EOF
 ; 由 phprt 生成（apcu $APCU_VERSION）
 extension=apcu.so
 apc.enabled=1

@@ -18,7 +18,7 @@ AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
 SIG="xdebug=$XDEBUG_VERSION;$(php_sig);rpath=1"
 
-if [ "$FORCE" != 1 ] && stamp_ok xdebug "$SIG" && [ -f "$PHPRT_HOME/conf.d/30-xdebug.ini" ]; then
+if [ "$FORCE" != 1 ] && stamp_ok xdebug "$SIG" && [ -f "$PREFIX/etc/conf.d/30-xdebug.ini" ]; then
   ok "xdebug 已装，跳过"; exit 0
 fi
 
@@ -77,7 +77,8 @@ make install >> "$LOGS/xdebug-make.log" 2>&1
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir)"
 [ -f "$EXT_DIR/xdebug.so" ] || die "没找到 $EXT_DIR/xdebug.so"
 
-cat > "$PHPRT_HOME/conf.d/30-xdebug.ini" <<EOF
+mkdir -p "$PREFIX/etc/conf.d"
+cat > "$PREFIX/etc/conf.d/30-xdebug.ini" <<EOF
 ; 由 phprt 生成（xdebug $XDEBUG_VERSION）
 ; 默认关掉，不拖慢 RoadRunner worker；调试时 export XDEBUG_MODE=debug
 zend_extension=xdebug.so

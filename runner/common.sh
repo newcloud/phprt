@@ -145,10 +145,13 @@ ext_modules() {
 }
 
 ensure_base_files() {
-  mkdir -p "$PHPRT_HOME/conf.d" "$PHPRT_HOME/bin/runner" \
-           "$PHPRT_HOME/downloads" "$PHPRT_HOME/build" "$PHPRT_HOME/logs"
-  if [ ! -f "$PHPRT_HOME/php.ini" ]; then
-    cat > "$PHPRT_HOME/php.ini" <<'EOF'
+  # 配置不再放在 .phprt 根下：php.ini / conf.d 都属于具体版本树（标准布局）
+  mkdir -p "$PHPRT_HOME/bin/runner" "$PHPRT_HOME/downloads" \
+           "$PHPRT_HOME/build" "$PHPRT_HOME/logs"
+}
+
+default_php_ini() {
+  cat <<'EOF'
 [PHP]
 date.timezone = Asia/Shanghai
 memory_limit = 256M
@@ -156,7 +159,6 @@ error_reporting = E_ALL
 display_errors = On
 log_errors = On
 EOF
-  fi
 }
 
 copy_runner() {
@@ -197,17 +199,101 @@ switch_current() {
   ln -sfn "php-$1" "$PHPRT_HOME/current"
 }
 
+# 系统 OpenSSL 的资源目录（默认 CA / openssl.cnf 所在）。
+# 编译时用它，产物里就不会写死构建树的绝对路径；搬走树后直接跑 bin/php 也能兜底。
+system_ssldir() {
+  local d=""
+  if command -v openssl >/dev/null 2>&1; then
+    d="$(openssl version -d 2>/dev/null | sed -n 's/^OPENSSLDIR: "\(.*\)"$/\1/p')"
+  fi
+  case "$d" in
+    /*) printf '%s\n' "$d" ;;
+    *)  printf '/etc/ssl\n' ;;
+  esac
+}
+
+# 树内标准配置：$PREFIX/etc/php.ini + $PREFIX/etc/conf.d。
+# 老项目把配置放在 .phprt 根下，这里一次性迁进树里，之后只认标准路径。
+ensure_tree_config() {
+  local tree="$1" f cur
+  local ini="$tree/etc/php.ini" cd="$tree/etc/conf.d"
+  mkdir -p "$tree/etc" "$cd"
+
+  if [ -f "$PHPRT_HOME/php.ini" ] && [ ! -f "$ini" ]; then
+    mv -f "$PHPRT_HOME/php.ini" "$ini"
+    ok "迁移配置: .phprt/php.ini -> $ini"
+  fi
+  if [ -d "$PHPRT_HOME/conf.d" ]; then
+    for f in "$PHPRT_HOME/conf.d"/*.ini; do
+      [ -f "$f" ] || continue
+      [ -f "$cd/$(basename "$f")" ] || mv -f "$f" "$cd/"
+    done
+    rmdir "$PHPRT_HOME/conf.d" 2>/dev/null || true
+  fi
+
+  if [ ! -f "$ini" ]; then
+    # 新版本树沿用当前在用的 php.ini，不用每个版本各配一份
+    cur="$(readlink -f "$PHPRT_HOME/current" 2>/dev/null || true)"
+    if [ -n "$cur" ] && [ "$cur" != "$tree" ] && [ -f "$cur/etc/php.ini" ]; then
+      cp -f "$cur/etc/php.ini" "$ini"
+    else
+      default_php_ini > "$ini"
+    fi
+    ok "生成 $ini"
+  fi
+}
+
+# CA 只有一份：$PREFIX/etc/ssl/cert.pem。
+# 路径由 myphp 导出的 SSL_CERT_FILE 给出，所以整棵树搬走也不用改配置。
+ensure_tree_ssl() {
+  local tree="$1" src="" n
+  local ssl="$tree/etc/ssl"
+  mkdir -p "$tree/etc/conf.d" "$ssl"
+  # 清掉旧版本留下的第二份配置/证书子目录，只保留 cert.pem
+  rm -rf "$ssl/certs" "$ssl/misc" "$ssl/private"
+  rm -f "$ssl/openssl.cnf" "$ssl/openssl.cnf.dist" \
+        "$ssl/ct_log_list.cnf" "$ssl/ct_log_list.cnf.dist"
+
+  if [ ! -s "$ssl/cert.pem" ]; then
+    for src in "$DOWNLOADS/cacert.pem" \
+               /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+               /etc/ssl/certs/ca-certificates.crt \
+               /etc/pki/tls/certs/ca-bundle.crt \
+               /etc/ssl/cert.pem; do
+      [ -s "$src" ] && break
+      src=""
+    done
+    if [ -z "$src" ]; then
+      warn "没找到 CA 根证书，HTTPS 校验会失败（可把 cacert.pem 放到 $DOWNLOADS/）"
+    else
+      cp -fL "$src" "$ssl/cert.pem"
+      chmod 644 "$ssl/cert.pem"
+      n="$(grep -c 'BEGIN CERTIFICATE' "$ssl/cert.pem" 2>/dev/null || true)"
+      ok "CA 根证书 ${n:-0} 个 <- $src"
+    fi
+  fi
+
+  cat > "$tree/etc/conf.d/00-ssl.ini" <<'EOF'
+; 由 phprt 生成，勿手改；要覆盖请在 .phprt/conf.d/ 放编号更大的 ini
+; 路径来自 myphp 导出的 SSL_CERT_FILE（跟着项目移动）
+openssl.cafile = "${SSL_CERT_FILE}"
+curl.cainfo    = "${SSL_CERT_FILE}"
+EOF
+}
+
 enable_ext() {
-  local name="$1" ver tree extdir m mods ld any_shared=0 any_static=0
+  local name="$1" ver tree inidir extdir m mods ld any_shared=0 any_static=0
   ver="$(current_version)" || die "还没有 current 版本"
   tree="$(tree_of "$ver")"
+  inidir="$tree/etc/conf.d"
+  mkdir -p "$inidir"
   extdir="$(ext_dir_of "$tree")" || die "找不到扩展目录: $tree"
   mods="$(ext_modules "$name")"
   ld="$tree/lib:$(ls -d "$tree"/deps/*/lib 2>/dev/null | tr '\n' ':')"
 
   # 清理重复 ini：保留 recipe 的编号，删掉 enable_ext 生成的 20-<名字>.ini
   local inis count
-  inis="$(ls "$PHPRT_HOME/conf.d"/*-"$name".ini 2>/dev/null || true)"
+  inis="$(ls "$inidir"/*-"$name".ini 2>/dev/null || true)"
   count="$(printf '%s\n' "$inis" | grep -c . || true)"
   if [ "$count" -gt 1 ]; then
     printf '%s\n' "$inis" | while IFS= read -r f; do
@@ -215,7 +301,7 @@ enable_ext() {
     done
   fi
 
-  if ls "$PHPRT_HOME/conf.d"/*-"$name".ini >/dev/null 2>&1; then
+  if ls "$inidir"/*-"$name".ini >/dev/null 2>&1; then
     ok "扩展 $name 已由 recipe 启用"
     return 0
   fi
@@ -231,7 +317,7 @@ enable_ext() {
   done
 
   if [ "$any_shared" = 1 ]; then
-    mkdir -p "$PHPRT_HOME/conf.d"
+    mkdir -p "$inidir"
     {
       printf '; 由 phprt 生成（%s）\n' "$name"
       for m in $mods; do
@@ -247,7 +333,7 @@ enable_ext() {
       elif [ "$name" = swoole ]; then
         printf 'swoole.use_shortname=Off\n'
       fi
-    } > "$PHPRT_HOME/conf.d/20-$name.ini"
+    } > "$inidir/20-$name.ini"
     ok "启用扩展 $name"
   else
     ok "扩展 $name 已编译在 PHP 内"
@@ -255,15 +341,16 @@ enable_ext() {
 }
 
 disable_ext() {
-  local name="$1" had=0
-  if ls "$PHPRT_HOME/conf.d"/*-"$name".ini >/dev/null 2>&1; then
-    rm -f "$PHPRT_HOME/conf.d"/*-"$name".ini
-    had=1
+  local name="$1" ver tree inidir
+  ver="$(current_version)" || die "还没有 current 版本"
+  tree="$(tree_of "$ver")"
+  inidir="$tree/etc/conf.d"
+  if ls "$inidir"/*-"$name".ini >/dev/null 2>&1; then
+    rm -f "$inidir"/*-"$name".ini
     ok "停用扩展 $name"
   else
     warn "扩展 $name 没有独立的 ini（可能是编译在内），停用需要重新编译"
   fi
-  [ "$had" = 1 ] || true
 }
 
 # ---------------------------------------------------------------------------
@@ -393,7 +480,7 @@ dep_include_flags() {
 }
 
 dep_build_flags() {
-  local n d out=""
+  local n d out="-Wl,--disable-new-dtags "
   for n in "$@"; do
     d="$(dep_dir_of "$n")"
     [ -d "$d/lib" ]   && out+="-L$d/lib -Wl,-rpath,$d/lib "
@@ -592,16 +679,22 @@ wheelize_tree() {
   done < "$prev"
 
   while read -r old new; do
-    for elf in "$tree/bin/php" "$flat"/*.so* "$tree"/lib/*.so* \
+    for elf in "$tree"/bin/* "$flat"/*.so* "$tree"/lib/*.so* \
                "$tree"/lib/php/extensions/*/*.so; do
       [ -f "$elf" ] || continue
       [ -L "$elf" ] && continue
+      readelf -h "$elf" >/dev/null 2>&1 || continue
       patchelf --replace-needed "$old" "$new" "$elf" 2>/dev/null || true
     done
   done < "$repl"
   rm -f "$repl" "$prev"
 
-  patchelf --set-rpath '$ORIGIN/../lib/phprt' --force-rpath "$tree/bin/php"
+  for elf in "$tree"/bin/*; do
+    [ -f "$elf" ] || continue
+    [ -L "$elf" ] && continue
+    readelf -h "$elf" >/dev/null 2>&1 || continue
+    patchelf --set-rpath '$ORIGIN/../lib/phprt' --force-rpath "$elf"
+  done
   for elf in "$flat"/*.so*; do
     [ -f "$elf" ] && patchelf --set-rpath '$ORIGIN' --force-rpath "$elf"
   done

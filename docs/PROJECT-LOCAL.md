@@ -113,11 +113,14 @@ blog/
     │   └── php-8.5.15/           # 复制来的脚本和元数据
     ├── downloads/                # 本版本选中的源码包
     ├── build/                    # 解压目录，可删
-    ├── php-8.5.15/               # 自包含树
+    ├── php-8.5.15/               # 自包含树（标准 PHP 布局）
     │   ├── bin/php
     │   ├── deps/                 # 这棵树自己的依赖
     │   ├── lib/php/extensions/   # 扩展 .so
-    │   ├── etc/php.ini
+    │   ├── etc/
+    │   │   ├── php.ini           # 主配置
+    │   │   ├── conf.d/           # scan-dir：扩展开关、00-ssl.ini
+    │   │   └── ssl/cert.pem      # 唯一一份 CA
     │   ├── BUILD-PLAN            # 选择结果和版本
     │   └── BUILD-INFO            # configure 行、依赖目录、时间
     ├── logs/
@@ -167,7 +170,7 @@ phprt add ext sqlite
   4. 缺源码时依次查找：
        .phprt/downloads/ → 仓库 downloads/ → 网络
   5. 按顺序构建缺少的依赖，再构建扩展
-  6. 成功后写 conf.d/<编号>-<名字>.ini
+  6. 成功后写 $PREFIX/etc/conf.d/<编号>-<名字>.ini
   7. 失败不修改 ini
 ```
 
@@ -177,7 +180,7 @@ phprt add ext sqlite
 
 ```text
 phprt remove ext sqlite
-  → 删除或注释 conf.d 里的 extension 行
+  → 删除或注释 $PREFIX/etc/conf.d 里的 extension 行
   → .so 保留
   → 静态扩展无法移除，提示需要重新编译
 ```

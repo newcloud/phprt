@@ -18,7 +18,7 @@ AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
 SIG="redis=$REDIS_VERSION;$(php_sig)"
 
-if [ "$FORCE" != 1 ] && stamp_ok redis "$SIG" && [ -f "$PHPRT_HOME/conf.d/20-redis.ini" ]; then
+if [ "$FORCE" != 1 ] && stamp_ok redis "$SIG" && [ -f "$PREFIX/etc/conf.d/20-redis.ini" ]; then
   ok "redis 扩展已装，跳过"; exit 0
 fi
 
@@ -106,9 +106,9 @@ make install >> "$LOGS/redis-make.log" 2>&1
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir)"
 [ -f "$EXT_DIR/redis.so" ] || die "没找到 $EXT_DIR/redis.so"
 
-mkdir -p "$PHPRT_HOME/conf.d"
+mkdir -p "$PREFIX/etc/conf.d"
 # 只写文件名：extension_dir 由 php.ini / myphp 给出，整个安装根搬走也有效
-cat > "$PHPRT_HOME/conf.d/20-redis.ini" <<EOF
+cat > "$PREFIX/etc/conf.d/20-redis.ini" <<EOF
 ; 由 phprt 生成（redis $REDIS_VERSION）
 extension=redis.so
 EOF

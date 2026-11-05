@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  libcurl（PHP curl 扩展；只保留 http/https，TLS 用本地 OpenSSL）
+#  libcurl（PHP curl 扩展；http/https/ftp + dict，TLS 用本地 OpenSSL）
 #  安装到: deps/curl-<版本>/
 #  可单独执行: lib/modules/deps/curl.sh
 # =============================================================================
@@ -11,7 +11,7 @@ load_config
 need_cmds gcc make tar
 
 D="$(dep_dir_of curl)"
-SIG="curl=$LIBCURL_VERSION;openssl=${ENABLE_OPENSSL:-0};zlib=${ENABLE_ZLIB:-0}"
+SIG="curl=$LIBCURL_VERSION;openssl=${ENABLE_OPENSSL:-0};zlib=${ENABLE_ZLIB:-0};dict=1"
 
 if [ "$FORCE" != 1 ] && stamp_ok curl "$SIG" && [ -f "$D/lib/libcurl.so" ]; then
   ok "libcurl 已安装，跳过"; exit 0
@@ -33,12 +33,12 @@ else
   [ -d "$SRC" ] || die "解压后未找到 $SRC"
 fi
 
-# 只保留 http/https；其它协议和可选的系统库全部关掉，避免引入未知依赖
+# 只保留 http/https/ftp 等常用协议；DICT 保留以对齐发行版
 OPTS=(
   --without-libpsl --without-brotli --without-zstd --without-libidn2
   --without-libssh2 --without-nghttp2 --without-nghttp3
   --disable-ldap --disable-ldaps
-  --disable-rtsp --disable-dict --disable-telnet --disable-tftp
+  --disable-rtsp --enable-dict --disable-telnet --disable-tftp
   --disable-pop3 --disable-imap --disable-smtp --disable-gopher
   --disable-mqtt --disable-manual
   --enable-shared --enable-static

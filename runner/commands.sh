@@ -83,7 +83,14 @@ cmd_set() {
   if [ "$complete" = 1 ] && [ "$recompile" != 1 ] && [ -z "$exts" ] && [ "$plan" != 1 ]; then
     switch_current "$version"
     ensure_base_files
-    [ -n "$(repo_root)" ] && copy_runner "$(repo_root)"
+    if [ -n "$(repo_root)" ]; then
+      copy_runner "$(repo_root)"
+      # runner 刚被替换成最新版：重新载入，老项目也能用上新加的修复函数
+      # shellcheck disable=SC1091
+      . "$PHPRT_HOME/bin/runner/common.sh"
+    fi
+    ensure_tree_config "$tree"
+    ensure_tree_ssl "$tree"
     write_project_conf "$version" "$(project_exts)"
     write_myphp
     ok "切换到 PHP $version（使用已有树，未重编）"
@@ -175,7 +182,7 @@ cmd_set() {
   for old in ${SUPPORTED_EXTS:-}; do
     case " $exts " in
       *" $old "*) ;;
-      *) rm -f "$PHPRT_HOME/conf.d"/*-"$old".ini ;;
+      *) rm -f "$tree/etc/conf.d"/*-"$old".ini ;;
     esac
   done
   local e
@@ -316,8 +323,10 @@ cmd_verify() {
 
   log "3) 动态库（安装根外只允许 glibc 等基础库）"
   local bad="" f
-  for f in "$tree/bin/php" "$tree"/lib/php/extensions/*/*.so; do
+  for f in "$tree"/bin/* "$tree"/lib/php/extensions/*/*.so; do
     [ -f "$f" ] || continue
+    [ -L "$f" ] && continue
+    readelf -h "$f" >/dev/null 2>&1 || continue
     local one=""
     one="$(ldd "$f" 2>/dev/null | awk '$3 ~ /^\// {print $3}' \
       | grep -Ev '/(libc|libm|libpthread|libdl|librt|libresolv|libcrypt|libgcc_s|libstdc\+\+)\.so' \
@@ -332,9 +341,10 @@ cmd_verify() {
 
   log "4) RPATH（只允许 \$ORIGIN 相对路径）"
   local rp="" abs=""
-  for f in "$tree/bin/php" "$tree"/lib/*.so* "$tree"/lib/php/extensions/*/*.so; do
+  for f in "$tree"/bin/* "$tree"/lib/*.so* "$tree"/lib/php/extensions/*/*.so; do
     [ -f "$f" ] || continue
     [ -L "$f" ] && continue
+    readelf -h "$f" >/dev/null 2>&1 || continue
     rp="$(readelf -d "$f" 2>/dev/null | awk -F'[][]' '/\(RPATH\)|\(RUNPATH\)/{print $2}' | tr '\n' ':')"
     case "$rp" in
       "") ;;
@@ -347,6 +357,46 @@ cmd_verify() {
     return 1
   fi
   ok "RPATH 全部是相对路径"
+
+  log "5) 配置路径（树内标准位置）"
+  local loaded scanenv cafile
+  loaded="$( cd "$PHPRT_PROJECT" && ./myphp -r 'echo php_ini_loaded_file();' )"
+  if [ "$(readlink -f "${loaded:-/nonexistent}")" != "$(readlink -f "$tree/etc/php.ini")" ]; then
+    printf '    ✗ php.ini 不是 %s/etc/php.ini（实际: %s）\n' "$tree" "${loaded:-无}"
+    return 1
+  fi
+  scanenv="$( cd "$PHPRT_PROJECT" && ./myphp -r 'echo (string)getenv("PHP_INI_SCAN_DIR");' )"
+  if [ "$(readlink -f "${scanenv:-/nonexistent}")" != "$(readlink -f "$tree/etc/conf.d")" ]; then
+    printf '    ✗ 扫描目录不是 %s/etc/conf.d（实际: %s）\n' "$tree" "${scanenv:-空}"
+    return 1
+  fi
+  ok "php.ini 与 conf.d 都在版本目录里"
+
+  log "6) CA（只有一份，随项目移动）"
+  cafile="$( cd "$PHPRT_PROJECT" && ./myphp -r 'echo (string)ini_get("openssl.cafile");' )"
+  if [ -z "$cafile" ] || [ ! -s "$cafile" ] ||
+     [ "$(readlink -f "$cafile")" != "$(readlink -f "$tree/etc/ssl/cert.pem")" ]; then
+    printf '    ✗ openssl.cafile 不是 %s/etc/ssl/cert.pem（实际: %s）\n' "$tree" "${cafile:-空}"
+    return 1
+  fi
+  if [ "$( cd "$PHPRT_PROJECT" && ./myphp -r 'echo (string)ini_get("curl.cainfo");' )" != "$cafile" ]; then
+    printf '    ✗ curl.cainfo 与 openssl.cafile 不一致\n'
+    return 1
+  fi
+  if [ "$( cd "$PHPRT_PROJECT" && ./myphp -r 'echo (string)ini_get("curl.cainfo");' )" != "$cafile" ]; then
+    printf '    ✗ curl.cainfo 与 openssl.cafile 不一致\n'
+    return 1
+  fi
+  if ( cd "$PHPRT_PROJECT" && ./myphp -r '$c=stream_context_create(["http"=>["timeout"=>10]]); $s=@file_get_contents("https://www.php.net/",false,$c); exit($s===false?1:0);' ); then
+    ok "HTTPS 请求可用"
+  else
+    warn "HTTPS 连通性未验证（可能离线）"
+  fi
+  if ( cd "$PHPRT_PROJECT" && ./myphp -r '$c=curl_init("https://www.php.net/"); curl_setopt_array($c,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_TIMEOUT=>10]); $r=curl_exec($c); exit($r===false?1:0);' ); then
+    ok "PHP curl 也走同一个 CA"
+  else
+    warn "curl 连通性未验证（可能离线）"
+  fi
 }
 
 main() {

@@ -109,6 +109,9 @@ fi
 printf 'building\n' > "$TREE/BUILD-STATUS"
 printf '%s\n' "$SELECTED_EXTS" > "$TREE/.build-exts"
 
+# 先把配置迁/建到树内的标准位置（ext recipe 的 stamp 检查会看这里）
+ensure_tree_config "$TREE"
+
 cat > "$TREE/BUILD-PLAN" <<EOF
 PHP_VERSION=$PHP_VERSION
 PHP_URL="$PHP_URL"
@@ -168,7 +171,7 @@ for e in $PECL; do
     continue
   fi
   log "执行 ext/$e"
-  rm -f "$PHPRT_HOME/conf.d/20-$e.ini"
+  rm -f "$TREE/etc/conf.d/20-$e.ini"
   bash "$BUNDLE/ext/$e.sh" 2>&1 | tee -a "$LOGS/build.log"
   state_set "ext/$e" "$sig"
 done
@@ -178,15 +181,9 @@ done
 log "整理运行时库（hash SONAME + \$ORIGIN rpath）"
 wheelize_tree "$TREE"
 
-# OpenSSL 的配置文件也收进树里：运行时只认 $PREFIX/etc/ssl，
-# 不用再去 deps/ 里按目录名找（搬目录后仍有效）
-for d in "$TREE"/deps/openssl-*/etc/ssl; do
-  [ -d "$d" ] || continue
-  mkdir -p "$TREE/etc"
-  rm -rf "$TREE/etc/ssl"
-  cp -a "$d" "$TREE/etc/ssl"
-  break
-done
+# 树内的标准布局：etc/php.ini、etc/conf.d、etc/ssl/cert.pem
+ensure_tree_config "$TREE"
+ensure_tree_ssl "$TREE"
 
 {
   printf 'built_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"

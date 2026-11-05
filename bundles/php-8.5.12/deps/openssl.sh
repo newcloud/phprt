@@ -45,16 +45,16 @@ perl -MTime::Piece -e1 >/dev/null 2>&1 || export PERL5LIB="$PERL5LIB:$VENDOR/per
 
 cd "$SRC"
 log "Configure + make -j$JOBS（约 1-2 分钟）"
-./config --prefix="$D" --openssldir="$D/etc/ssl" --libdir=lib \
+./config --prefix="$D" --openssldir="$(system_ssldir)" --libdir=lib \
     shared no-tests > "$LOGS/openssl-configure.log" 2>&1 \
   || { tail -20 "$LOGS/openssl-configure.log"; die "OpenSSL Configure 失败"; }
 make -j"$JOBS" > "$LOGS/openssl-make.log" 2>&1 \
   || { tail -20 "$LOGS/openssl-make.log"; die "OpenSSL make 失败"; }
+# OPENSSLDIR 是系统目录（/etc 下），不能往那里装 openssl.cnf / 证书：
+# 这里只装 --prefix 下的库、头文件和命令。CA 由 ensure_tree_ssl 放进
+# $TREE/etc/ssl/cert.pem，运行时由 myphp 用 SSL_CERT_FILE 指过去。
+# 这样编译产物里没有构建树的绝对路径，整棵树搬走也不影响。
 make install_sw >> "$LOGS/openssl-make.log" 2>&1
-# install_sw 不装 openssl.cnf，但 PHP 的 openssl 扩展会去 OPENSSLDIR 找它（找不到报
-# "configuration file routines::no such file"），所以把 ssl 目录也装出来
-make install_ssldirs >> "$LOGS/openssl-make.log" 2>&1 || warn "install_ssldirs 失败（openssl.cnf 缺失）"
-[ -f "$D/etc/ssl/openssl.cnf" ] || warn "没找到 $D/etc/ssl/openssl.cnf"
 
 stamp_write openssl "$SIG"
 ok "OpenSSL $OPENSSL_VERSION -> $D"

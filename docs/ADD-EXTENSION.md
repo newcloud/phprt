@@ -149,7 +149,8 @@ esac
 - `dep_env <扩展>` 设置构建期环境；
 - `phpize` → `./configure --with-php-config="$PREFIX/bin/php-config"` → `make` → `make install`；
 - 产物必须在 `$("$PREFIX/bin/php-config" --extension-dir)/<模块>.so`；
-- 写 `$PHPRT_HOME/conf.d/<序号>-<扩展>.ini` 才会启用；
+- 写 `$PREFIX/etc/conf.d/<序号>-<扩展>.ini` 才会启用（`$PREFIX` 就是版本树，
+  即 `.phprt/php-<版本>`；这是 PHP 官方的 scan-dir 位置）；
 - `stamp_write` 记录签名。
 
 另外要改：

@@ -99,6 +99,7 @@ make install > "$LOGS/php-install.log" 2>&1 ||
   { tail -40 "$LOGS/php-install.log"; die "PHP make install 失败"; }
 
 [ -x "$TREE/bin/php" ] || die "安装后没有 $TREE/bin/php"
+[ -f "$TREE/bin/phar.phar" ] || die "安装后没有 phar.phar（phar 命令不可用）"
 
 # 7.4 的 opcache 编译成共享扩展（8.x 默认静态），要显式加载
 mkdir -p "$TREE/etc/conf.d"

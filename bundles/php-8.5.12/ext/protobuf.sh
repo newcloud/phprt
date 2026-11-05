@@ -18,7 +18,7 @@ AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
 SIG="protobuf=$PROTOBUF_VERSION;$(php_sig)"
 
-INI="$PHPRT_HOME/conf.d/23-protobuf.ini"
+INI="$PREFIX/etc/conf.d/23-protobuf.ini"
 if [ "$FORCE" != 1 ] && stamp_ok protobuf "$SIG" && [ -f "$INI" ]; then
   ok "protobuf 已装，跳过"; exit 0
 fi
@@ -81,6 +81,7 @@ make install >> "$LOGS/protobuf-make.log" 2>&1
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir)"
 [ -f "$EXT_DIR/protobuf.so" ] || die "没找到 $EXT_DIR/protobuf.so"
 
+mkdir -p "$PREFIX/etc/conf.d"
 cat > "$INI" <<EOF
 ; 由 phprt 生成（protobuf $PROTOBUF_VERSION）
 extension=protobuf.so

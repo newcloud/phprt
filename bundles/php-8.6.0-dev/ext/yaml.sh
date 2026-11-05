@@ -18,7 +18,7 @@ PERL_DIR="$(dep_dir_of perl5core)"
 LY="$(dep_dir_of libyaml)"
 SIG="yaml=$YAML_EXT_VERSION;libyaml=$LIBYAML_VERSION;$(php_sig)"
 
-if [ "$FORCE" != 1 ] && stamp_ok yaml "$SIG" && [ -f "$PHPRT_HOME/conf.d/26-yaml.ini" ]; then
+if [ "$FORCE" != 1 ] && stamp_ok yaml "$SIG" && [ -f "$PREFIX/etc/conf.d/26-yaml.ini" ]; then
   ok "yaml 扩展已装，跳过"; exit 0
 fi
 
@@ -82,7 +82,8 @@ make install >> "$LOGS/yaml-make.log" 2>&1
 EXT_DIR="$("$PREFIX/bin/php-config" --extension-dir)"
 [ -f "$EXT_DIR/yaml.so" ] || die "没找到 $EXT_DIR/yaml.so"
 
-cat > "$PHPRT_HOME/conf.d/26-yaml.ini" <<EOF
+mkdir -p "$PREFIX/etc/conf.d"
+cat > "$PREFIX/etc/conf.d/26-yaml.ini" <<EOF
 ; 由 phprt 生成（yaml $YAML_EXT_VERSION / libyaml $LIBYAML_VERSION）
 extension=yaml.so
 EOF
