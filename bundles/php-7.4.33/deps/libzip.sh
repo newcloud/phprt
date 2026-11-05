@@ -12,7 +12,7 @@ load_config
 need_cmds cmake make tar
 
 D="$(dep_dir_of libzip)"
-SIG="libzip=$LIBZIP_VERSION;zlib=${ENABLE_ZLIB:-0};openssl=1"
+SIG="libzip=$LIBZIP_VERSION;zlib=${ENABLE_ZLIB:-0}:${ZLIB_VERSION:-none};openssl=${OPENSSL_VERSION:-none}"
 
 if [ "$FORCE" != 1 ] && stamp_ok libzip "$SIG" && [ -f "$D/lib/libzip.so" ]; then
   ok "libzip 已安装，跳过"; exit 0

@@ -16,7 +16,7 @@ PHP="$PREFIX/bin/php"
 AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
 D_OPENSSL="$(dep_dir_of openssl)"
-SIG="swoole=$SWOOLE_VERSION;$(php_sig);rpath=1"
+SIG="swoole=$SWOOLE_VERSION;$(php_sig);openssl=${OPENSSL_VERSION:-none};zlib=${ZLIB_VERSION:-none};rpath=1"
 
 if [ "$FORCE" != 1 ] && stamp_ok swoole "$SIG" && [ -f "$PREFIX/etc/conf.d/27-swoole.ini" ]; then
   ok "swoole 已装，跳过"; exit 0

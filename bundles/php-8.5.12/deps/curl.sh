@@ -11,7 +11,7 @@ load_config
 need_cmds gcc make tar
 
 D="$(dep_dir_of curl)"
-SIG="curl=$LIBCURL_VERSION;openssl=${ENABLE_OPENSSL:-0};zlib=${ENABLE_ZLIB:-0};dict=1"
+SIG="curl=$LIBCURL_VERSION;openssl=${ENABLE_OPENSSL:-0}:${OPENSSL_VERSION:-none};zlib=${ENABLE_ZLIB:-0}:${ZLIB_VERSION:-none};dict=1"
 
 if [ "$FORCE" != 1 ] && stamp_ok curl "$SIG" && [ -f "$D/lib/libcurl.so" ]; then
   ok "libcurl 已安装，跳过"; exit 0

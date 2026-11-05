@@ -16,7 +16,7 @@ PHP="$PREFIX/bin/php"
 
 AC_DIR="$(dep_dir_of autoconf)"
 PERL_DIR="$(dep_dir_of perl5core)"
-SIG="xdebug=$XDEBUG_VERSION;$(php_sig);rpath=1"
+SIG="xdebug=$XDEBUG_VERSION;$(php_sig);zlib=${ZLIB_VERSION:-none};rpath=1"
 
 if [ "$FORCE" != 1 ] && stamp_ok xdebug "$SIG" && [ -f "$PREFIX/etc/conf.d/30-xdebug.ini" ]; then
   ok "xdebug 已装，跳过"; exit 0

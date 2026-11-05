@@ -135,6 +135,9 @@ for d in $ALL_DEPS; do
   ensure_dep "$d"
 done
 
+# 旧版本目录会和当前版本产生同名 SONAME；在 PHP/ext 开始前清掉
+prune_stale_deps $ALL_DEPS
+
 # ----------------------------------------------------------------- php ----
 PHP_SIG="$(
   {
@@ -172,7 +175,8 @@ for e in $PECL; do
   fi
   log "执行 ext/$e"
   rm -f "$TREE/etc/conf.d/20-$e.ini"
-  bash "$BUNDLE/ext/$e.sh" 2>&1 | tee -a "$LOGS/build.log"
+  # 外层 ext_sig 已判定要重编；强制绕过配方内部的 stamp
+  FORCE=1 bash "$BUNDLE/ext/$e.sh" 2>&1 | tee -a "$LOGS/build.log"
   state_set "ext/$e" "$sig"
 done
 

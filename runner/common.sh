@@ -544,6 +544,23 @@ artifact_ok() {
     -print -quit 2>/dev/null | grep -q .
 }
 
+# 同一依赖在 deps/ 下只保留当前版本目录。
+# 版本更新后旧目录不会自动删除，而 wheelize_tree 会扫描 deps/*/lib，
+# 两份同名 SONAME 会让映射指回旧库。
+prune_stale_deps() {
+  local n cur old
+  [ -n "${DEPS:-}" ] || return 0
+  for n in "$@"; do
+    cur="$(dep_dir_of "$n")"
+    for old in "$DEPS/$n"-*; do
+      [ -d "$old" ] || continue
+      [ "$old" = "$cur" ] && continue
+      log "清理旧依赖 $(basename "$old")"
+      rm -rf -- "$old"
+    done
+  done
+}
+
 dep_sig() {
   local n="$1" x
   {
@@ -552,13 +569,15 @@ dep_sig() {
     case "$n" in
       curl)
         printf 'switches=%s/%s\n' "${ENABLE_OPENSSL:-0}" "${ENABLE_ZLIB:-0}"
-        printf 'optional=%s:%s\n' "$(dep_dir_of openssl)" "$(dep_dir_of zlib)" ;;
+        printf 'optional=openssl:%s:%s:zlib:%s:%s\n' \
+          "$(dep_dir_of openssl)" "$(state_get deps/openssl)" \
+          "$(dep_dir_of zlib)" "$(state_get deps/zlib)" ;;
       libxml2|libzip)
         printf 'switches=%s\n' "${ENABLE_ZLIB:-0}"
-        printf 'optional=%s\n' "$(dep_dir_of zlib)" ;;
+        printf 'optional=zlib:%s:%s\n' "$(dep_dir_of zlib)" "$(state_get deps/zlib)" ;;
     esac
     for x in $(module_needs "$n"); do
-      printf 'need=%s:%s:%s\n' "$x" "$(dep_dir_of "$x")" "$(recipe_hash "$x")"
+      printf 'need=%s:%s:%s:%s\n' "$x" "$(dep_dir_of "$x")" "$(recipe_hash "$x")" "$(state_get "deps/$x")"
     done
   } | hash_sig
 }
@@ -574,7 +593,9 @@ ensure_dep() {
     return 0
   fi
   log "构建依赖 $n"
-  bash "$(module_sh "$n")"
+  # 外层 dep_sig 已经判定要重编；必须绕过配方内部的 stamp，
+  # 否则会出现「外层要重编、内层跳过」，随后把旧产物记成新签名。
+  FORCE=1 bash "$(module_sh "$n")"
   artifact_ok "$n" || die "依赖 $n 构建后没有产物"
   state_set "deps/$n" "$sig"
 }
@@ -637,7 +658,7 @@ wheel_hashed_name() {   # $1=SONAME  $2=hash
 
 wheelize_tree() {
   local tree="$1" flat="$1/lib/phprt"
-  local f soname hash new old elf osoname onew
+  local f soname hash new old elf osoname onew dup
   need_cmds patchelf sha256sum
   mkdir -p "$flat"
 
@@ -668,6 +689,14 @@ wheelize_tree() {
   if [ ! -s "$flat/wheel.map" ]; then
     rm -f "$prev"
     return 0
+  fi
+
+  # 同一原始 SONAME 只能对应一个文件。出现重复通常是旧依赖目录没清掉，
+  # 继续往下会让 patchelf 只改到其中一份，运行时可能仍用旧库。
+  dup="$(cut -d' ' -f1 "$flat/wheel.map" | sort | uniq -d)"
+  if [ -n "$dup" ]; then
+    printf '%s\n' "$dup" >&2
+    die "wheel.map 中同一个 SONAME 对应多个文件（旧依赖目录没清干净？）"
   fi
 
   # 本轮 soname -> 新名字；上一轮的 hash 名字 -> 本轮新名字

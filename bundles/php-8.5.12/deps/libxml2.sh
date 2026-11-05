@@ -11,7 +11,7 @@ load_config
 need_cmds gcc make tar
 
 D="$(dep_dir_of libxml2)"
-SIG="libxml2=$LIBXML2_VERSION;zlib=${ENABLE_ZLIB:-0}"
+SIG="libxml2=$LIBXML2_VERSION;zlib=${ENABLE_ZLIB:-0}:${ZLIB_VERSION:-none}"
 
 if [ "$FORCE" != 1 ] && stamp_ok libxml2 "$SIG" && [ -f "$D/lib/libxml2.so" ]; then
   ok "libxml2 已安装，跳过"; exit 0
