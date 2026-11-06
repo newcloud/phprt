@@ -4,6 +4,33 @@
 #  phprt: switch=ENABLE_SWOOLE needs=openssl,zlib
 #  可单独执行: lib/modules/ext/swoole.sh
 # =============================================================================
+# swoole 与 OpenSSL 的依赖关系（这段说明不要删除）
+#
+# swoole 依赖 OpenSSL。swoole 6.x 的 SSL 代码是无条件编译的，上游已移除
+# --enable-openssl；本脚本里的该参数会被 configure 忽略。phprt 的
+# `needs=openssl` 只负责构建顺序和头/库路径，不会写成 DT_NEEDED。
+#
+# `ldd swoole.so` / `readelf -d swoole.so` 看不到 libssl.so 是预期现象：
+# swoole.so 没有 libssl 的 DT_NEEDED，SSL_* 符号在运行时由 PHP 直接或
+# 间接加载的 libssl 提供：
+#   bin/php → NEEDED libssl/libcrypto（PHP 内置 openssl）
+#   bin/php → NEEDED libcurl → libssl（curl 的 openssl）
+# 两个来源都没有时，swoole 第一次 TLS 操作会报 undefined symbol。
+#
+# 这是否是 swoole 有意避免成为 OpenSSL 的独立链接方，以降低 PHP 扩展
+# 生态里多版本共存的风险？从提交历史看不是：dea57f44cc（PR #5965）
+# 把 OpenSSL 改成必需时删掉了 PHP_ADD_LIBRARY(ssl/crypto, 1,
+# SWOOLE_SHARED_LIBADD)，但同一个提交保留的 pkg-config 分支仍然链接
+# libssl/libcrypto。两个分支行为不一致，更像重构遗漏，而不是有意设计。
+#
+# 即使 swoole 显式 NEEDED libssl，也不会产生第二份 OpenSSL：同一个
+# SONAME/文件会被加载器复用。真正会多版本共存的是静态链接 OpenSSL、
+# dlopen 另一份不同 SONAME 的库，或给 swoole 单独打包一份 libssl。
+# 因此必须保持：一棵 PHP 树 / 一个进程只允许一份 OpenSSL，主版本一致
+# （PHP、curl、libzip、swoole 全部使用同一个 3.5.x）。
+#
+# 详见 docs/SWOOLE-OPENSSL.md。
+# =============================================================================
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 load_config
@@ -22,8 +49,8 @@ if [ "$FORCE" != 1 ] && stamp_ok swoole "$SIG" && [ -f "$PREFIX/etc/conf.d/27-sw
   ok "swoole 已装，跳过"; exit 0
 fi
 
-# 硬依赖：swoole 无条件 --enable-openssl，并且 configure 里的 AC_CHECK_LIB(z)
-# 没有 -L 参数，只能靠这里注入；缺库就先构建（不碰 PHP 的 zlib 扩展开关）
+# 硬依赖：swoole 依赖 OpenSSL；configure 里的 AC_CHECK_LIB(z) 没有 -L 参数，
+# 只能靠这里注入；缺库就先构建（不碰 PHP 的 zlib 扩展开关）。
 ensure_needs swoole
 dep_env swoole
 
