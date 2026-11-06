@@ -72,14 +72,54 @@ if [ "${NEEDS_BUILDCONF:-0}" = 1 ] && [ ! -x "$SRC/configure" ]; then
     { tail -30 "$LOGS/php-buildconf.log"; die "buildconf 失败（需要 autoconf/re2c）"; }
 fi
 
+# PHP 默认 autoconf 会给 -g -O2；这里统一从 -O2 起步，两个对比版本都不带 -g。
+export CFLAGS="${PHP_CFLAGS:--O2}${CFLAGS:+ $CFLAGS}"
+export CXXFLAGS="${PHP_CXXFLAGS:--O2}${CXXFLAGS:+ $CXXFLAGS}"
+
+LTO_LDFLAGS_EXTRA=""
+if lto_on php; then
+  export CFLAGS="$CFLAGS $LTO_CFLAGS"
+  export CXXFLAGS="$CXXFLAGS $LTO_CFLAGS"
+  LTO_LDFLAGS_EXTRA="$LTO_LDFLAGS"
+fi
+
 names="$(enabled_dep_names)"
 export CPPFLAGS="$(dep_include_flags $names)${CPPFLAGS:+ $CPPFLAGS}"
-export LDFLAGS="$(dep_build_flags $names)${LDFLAGS:+ $LDFLAGS}"
+export LDFLAGS="$(dep_build_flags $names)${LTO_LDFLAGS_EXTRA:+ $LTO_LDFLAGS_EXTRA}${LDFLAGS:+ $LDFLAGS}"
 export PKG_CONFIG_PATH="$(dep_pc_path $names)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+# 复用源码树时 make 只看时间戳：CFLAGS 变了必须清掉旧 .o，
+# 否则 LTO / 非 LTO 对象会混在一起。
+FLAGS_SIG="CFLAGS=${CFLAGS:-}|CXXFLAGS=${CXXFLAGS:-}|lto_ld=${LTO_LDFLAGS_EXTRA}"
+FLAGS_STAMP="$SRC/.phprt-build-flags"
+if [ -f "$SRC/Makefile" ] && [ "$(cat "$FLAGS_STAMP" 2>/dev/null || true)" != "$FLAGS_SIG" ]; then
+  log "编译参数变化，清理 PHP 目标文件"
+  make distclean >/dev/null 2>&1 || true
+fi
+printf '%s\n' "$FLAGS_SIG" > "$FLAGS_STAMP"
 
 log "PHP configure"
 ./configure "${ARGS[@]}" > "$LOGS/php-configure.log" 2>&1 ||
   { tail -60 "$LOGS/php-configure.log"; die "PHP configure 失败"; }
+
+if lto_on php; then
+  # 这两个文件使用 GCC 全局寄存器变量（%r14/%r15）；LTO 合并翻译单元后
+  # GCC 报 "global register variable follows a function definition"。
+  # 只让它们用 -fno-lto 编译，其余对象仍参与 LTO，混合链接没有问题。
+  #   Zend/zend_execute.c                    — VM 执行器
+  #   ext/opcache/jit/zend_jit_vm_helpers.c  — JIT helper
+  sed -i '/-c .*\/zend_execute\.c/ s|\$(CFLAGS_CLEAN)|$(CFLAGS_CLEAN) -fno-lto|' Makefile
+  sed -i '/-c .*\/zend_jit_vm_helpers\.c/ s|\$(CFLAGS_CLEAN)|$(CFLAGS_CLEAN) -fno-lto|' Makefile
+  rm -f Zend/zend_execute.lo Zend/zend_execute.dep Zend/.libs/zend_execute.o \
+        ext/opcache/jit/zend_jit_vm_helpers.lo \
+        ext/opcache/jit/zend_jit_vm_helpers.dep \
+        ext/opcache/jit/.libs/zend_jit_vm_helpers.o
+  grep -q -- '-fno-lto .*zend_execute\.c' Makefile ||
+    die "给 zend_execute.c 加 -fno-lto 失败"
+  grep -q -- '-fno-lto .*zend_jit_vm_helpers\.c' Makefile ||
+    die "给 zend_jit_vm_helpers.c 加 -fno-lto 失败"
+fi
+
 {
   printf 'configure: ./configure'
   printf ' %q' "${ARGS[@]}"

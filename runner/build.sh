@@ -143,6 +143,10 @@ PHP_SIG="$(
   {
     bash "$BUNDLE/php.sh" --flags
     printf 'php=%s\n' "$PHP_VERSION"
+    printf 'php_cflags=%s|%s\n' "${PHP_CFLAGS:-}" "${PHP_CXXFLAGS:-}"
+    if lto_on php; then
+      printf 'lto=%s|%s\n' "$LTO_CFLAGS" "$LTO_LDFLAGS"
+    fi
     cat "$BUNDLE/php.sh" "$BUNDLE"/builtin/*.sh 2>/dev/null
     for d in $PHP_DEPS; do
       printf 'dep=%s:%s:%s\n' "$d" "$(dep_dir_of "$d")" "$(state_get "deps/$d")"
@@ -191,6 +195,11 @@ ensure_tree_ssl "$TREE"
 
 {
   printf 'built_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+  printf 'lto_php=%s\n' "$(lto_state php)"
+  if lto_on php; then
+    printf 'lto_flags=%s|%s\n' "$LTO_CFLAGS" "$LTO_LDFLAGS"
+  fi
+  printf 'php_cflags=%s|%s\n' "${PHP_CFLAGS:-}" "${PHP_CXXFLAGS:-}"
   [ -f "$TREE/.configure-line" ] && cat "$TREE/.configure-line"
   env -u LD_LIBRARY_PATH "$TREE/bin/php" -v | head -2
 } > "$TREE/BUILD-INFO"

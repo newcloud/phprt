@@ -369,6 +369,21 @@ need_cmds() {
   for c in "$@"; do command -v "$c" >/dev/null 2>&1 || die "缺少命令: $c"; done
 }
 
+# ---------------------------------------------------------------------------
+# LTO：只给需要跨目标文件优化的模块用。
+# 动态库之间不能跨库 LTO，每个 .so / 可执行文件各自在自己的链接单元内优化。
+# LTO_CFLAGS / LTO_LDFLAGS 只放 LTO 本身；基础 -O2 由各 recipe 自己决定。
+# ---------------------------------------------------------------------------
+LTO_CFLAGS="${LTO_CFLAGS:--flto=auto}"
+LTO_LDFLAGS="${LTO_LDFLAGS:--flto=auto}"
+
+lto_on() {
+  local var="LTO_$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+  [ "${!var:-0}" = 1 ]
+}
+
+lto_state() { lto_on "$1" && printf 1 || printf 0; }
+
 load_config() {
   [ -n "${BUNDLE:-}" ] || return 0
   # shellcheck disable=SC1090
