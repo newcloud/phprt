@@ -177,20 +177,20 @@ PHP_EVAL_LIBLINE($CRYPTO_LIBS, SWOOLE_SHARED_LIBADD)
 
 ```text
 bin/php
-  NEEDED libssl-<hash>.so.3
-  NEEDED libcrypto-<hash>.so.3
-  NEEDED libcurl-<hash>.so.4
-  NEEDED libzip-<hash>.so.5
+  NEEDED libssl-rt3.so.3
+  NEEDED libcrypto-rt3.so.3
+  NEEDED libcurl-rt4.so.4
+  NEEDED libzip-rt5.so.5
 
 libcurl
-  NEEDED libssl-<hash>.so.3
-  NEEDED libcrypto-<hash>.so.3
+  NEEDED libssl-rt3.so.3
+  NEEDED libcrypto-rt3.so.3
 
 libzip
-  NEEDED libcrypto-<hash>.so.3
+  NEEDED libcrypto-rt3.so.3
 
 swoole.so
-  NEEDED libz-<hash>.so.1
+  NEEDED libz-rt1.so.1
   没有 libssl / libcrypto
 ```
 
@@ -291,7 +291,7 @@ Swoole\Coroutine\run(function () {
 ' 2>&1 | grep SSL_CTX_new
 ```
 
-如果改成显式链接，第一条命令应该能看到 `libssl-<hash>.so.3` 和 `libcrypto-<hash>.so.3`。
+如果改成显式链接，第一条命令应该能看到 `libssl-rt3.so.3` 和 `libcrypto-rt3.so.3`。
 
 ## 10. 参考链接
 

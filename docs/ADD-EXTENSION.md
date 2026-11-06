@@ -12,7 +12,7 @@ bundle 是仓库里 `bundles/php-<版本>/` 那一套文件：版本信息、con
 | PECL 扩展 | `ext/<扩展>.sh` | phpize + configure + make | `<tree>/lib/php/extensions/*/<扩展>.so` |
 
 runtime 库不用管：`set` 收尾的 `wheelize_tree` 会自动把 `deps/*/lib` 里的 `.so`
-改成 hash 名、改 SONAME、回写消费方的 `DT_NEEDED`，并把 RPATH 设成 `$ORIGIN`。
+改成 rt 运行时名、改 SONAME、回写消费方的 `DT_NEEDED`，并把 RPATH 设成 `$ORIGIN`。
 
 ## 2. 加一个依赖库
 
@@ -171,8 +171,8 @@ esac
 - [ ] PECL 扩展加了 `ext_version` / `ext_modules`
 - [ ] `SUPPORTED_EXTS` 里有名字
 - [ ] `phprt set 8.5.12 --ext "<新扩展>" --plan` 能看到正确的依赖顺序
-- [ ] 构建后 `readelf -d` 里新库的 `NEEDED` 是带 hash 的名字，`RPATH` 是 `$ORIGIN`
-- [ ] `env -i ./myphp -m` 能看到扩展，`phprt verify` 四步全过
+- [ ] 构建后 `readelf -d` 里新库的 `NEEDED` 是 rt 运行时名，`RPATH` 是 `$ORIGIN`
+- [ ] `env -i ./myphp -m` 能看到扩展，`phprt verify` 全部步骤通过
 
 ## 6. 常见坑
 
@@ -184,9 +184,9 @@ esac
 消费方记的是后者。`wheelize_tree` 已经按 SONAME 处理，手写脚本时别搞反。
 
 **`deps/*/lib` 只给构建期用。** 不要把它里面的 `.so` 软链指向 `lib/phprt`：
-后续 `add ext` 链接时 `ld` 跟不上二级依赖的 hash 名，会报 `undefined reference`。
+后续 `add ext` 链接时 `ld` 跟不上二级依赖的 rt 运行时名，会报 `undefined reference`。
 
-**运行时 `dlopen("libfoo.so.1")` 会失败。** `lib/phprt` 里只有带 hash 的名字，
-`DT_NEEDED` 会被自动改写，字符串形式的 `dlopen` 不会。真遇到就补一个不带 hash 的别名。
+**运行时 `dlopen("libfoo.so.1")` 会失败。** `lib/phprt` 里只有 rt 运行时名，
+`DT_NEEDED` 会被自动改写，字符串形式的 `dlopen` 不会。真遇到就补一个不带 rt 的别名。
 
 **静态库不要参与 wheel 化。** `wheelize_tree` 只处理 `deps/*/lib/*.so.*` 的真实文件。

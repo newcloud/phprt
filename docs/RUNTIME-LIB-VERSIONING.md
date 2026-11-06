@@ -14,17 +14,17 @@
 
 构建收尾时 `wheelize_tree` 把共享库平铺到 `<tree>/lib/phprt`：
 
-- 库名加 8 位内容 hash；
-- 库自己的 SONAME 改成带 hash 的名字；
+- 库名换成稳定的运行时名（rt + SONAME 的 ABI 版本号）；
+- 库自己的 SONAME 改成运行时名；
 - `bin/php`、扩展和其他库的 `DT_NEEDED` 改到新名字；
 - 所有 ELF 的 RPATH 改成 `$ORIGIN` 相对路径。
 
 示例：
 
 ```text
-libssl.so.3      → libssl-7ce83f8a.so.3
-libcrypto.so.3   → libcrypto-f8719f94.so.3
-libz.so.1        → libz-523f183f.so.1
+libssl.so.3      → libssl-rt3.so.3
+libcrypto.so.3   → libcrypto-rt3.so.3
+libz.so.1        → libz-rt1.so.1
 ```
 
 目标只有三个：
@@ -33,22 +33,29 @@ libz.so.1        → libz-523f183f.so.1
 2. 整棵树可以改名或搬家；
 3. 运行时不依赖 `LD_LIBRARY_PATH`。
 
-内容 hash 不负责处理“多个版本必须共存”的问题，也不要求同一组依赖一起升级。
+运行时名只表达 ABI 系列，不表达内容：同系列小版本升级名字不变，完整性由
+`wheel.map` 的 sha256 列和 `phprt verify` 负责。rt 名与构建目录、编译选项
+无关，跨目录构建名字稳定。
 
-增量构建时 `wheel.map.prev` 保存上一轮映射，依赖重编后把消费方里的旧 hash 名改成新名字。
+增量构建时 `wheel.map.prev` 保存上一轮映射，跨系列改名后把消费方里的旧
+运行时名改成新名字；同系列升级映射为空，零改写。
 
 ## 2. 依赖更新是否联动
 
-版本上互不绑定；是否重编由依赖签名决定。
+版本上互不绑定；是否重编由依赖签名决定。签名里参与判断的是依赖的
+「稳定 ABI 身份」（它装的所有库的原始 SONAME 集合，`dep_rt_id`），不是
+版本号也不是目录路径：同系列小版本升级身份不变，消费方不重编。
 
 | 更新对象 | 其他组件版本要跟着变吗 | 当前签名策略下会重编 |
 | --- | --- | --- |
 | swoole | 不用 | 只 swoole |
 | curl | 不用 | curl + PHP（curl 是内建扩展） |
 | libzip | 不用 | libzip + PHP（zip 是内建扩展） |
-| openssl | 不用 | openssl + curl + libzip + PHP + swoole |
+| openssl | 不用 | 只 openssl（`phprt update`，见第 9 节） |
 
-openssl 那一行不是 wheel 要求的，而是 curl、libzip、swoole 的依赖签名里包含 openssl 目录和状态。
+openssl 那一行靠 `phprt update` 实现：同系列小版本升级只重编 openssl、
+替换运行时库，消费方签名不变、零重编。跨系列升级（SONAME 变化）会被
+`phprt update` 拒绝，走 `phprt set` 的正常重编路径。
 
 更新一个组件不会自动升级它的兄弟组件；只会让依赖它的组件重新编译。
 
@@ -65,7 +72,7 @@ readelf -V swoole.so    → 没有 OPENSSL_* 符号版本要求
 启动时：
 
 ```text
-LD_DEBUG=libs → 只加载一份 libssl-<hash>.so.3
+LD_DEBUG=libs → 只加载一份 libssl-rt3.so.3
                libssl 先初始化，swoole.so 后初始化
 ```
 
@@ -151,7 +158,10 @@ ldd bin/php
 ldd lib/php/extensions/*/swoole.so
 
 # wheel 映射是否有重复
-cut -d' ' -f1 lib/phprt/wheel.map | sort | uniq -d
+cut -d'|' -f1,2 lib/phprt/wheel.map | sort | uniq -d
+
+# 升级日志（phprt update 的记录）
+cat .phprt/logs/upgrade.log
 
 # 整树校验
 phprt verify
@@ -159,8 +169,46 @@ phprt verify
 
 ## 8. 当前结论
 
-1. 保留内容 hash 的 wheel 命名。
+1. wheel 命名用运行时名（rt + SONAME ABI 版本号），不用内容 hash；同系列
+   小版本升级消费方零改写、零重编。
 2. 一棵 PHP 树 / 一个进程只允许一个 OpenSSL 版本。
 3. 依赖版本互不绑定；更新一个组件只重编依赖它的组件。
 4. 扩展应动态链接 PHP 已加载的同一份 OpenSSL，不静态内嵌第二份。
 5. 需要不同 OpenSSL 线路时，使用不同的 `.phprt/php-*` 树和独立进程。
+
+## 9. 同系列小版本升级：phprt update
+
+`phprt update <依赖> <版本>`（如 `phprt update openssl 3.5.8`）只升级一个
+依赖库的同系列小版本：
+
+1. 校验：只允许同系列（major.minor 相同）且更高版本，拒绝降级；
+2. 加构建锁，快照全树 ELF 的 SONAME / NEEDED / RPATH；
+3. 备份 bundle.conf、旧 deps 目录、lib/phprt、wheel.map；
+4. 改仓库 bundle.conf 的版本变量和 URL（项目副本由 `bundle_for` 同步）；
+5. 下载新源码包到 downloads/（旧包保留），`FORCE=1` 只重编该依赖；
+6. 比对新旧 SONAME 集合，不一致当跨系列拒绝；
+7. 移走旧 deps 目录，`wheelize_tree`；
+8. 断言全树 ELF 链接关系快照零差异、wheel 完整性校验、`myphp` 功能验证
+   （openssl 额外查 flat 里 libcrypto 的版本串；注意 `OPENSSL_VERSION_TEXT`
+   是 PHP 编译期字符串，不重编就不会变，不能当验证依据）；
+9. 修正其它依赖 `.la`/`.pc` 里指向旧依赖目录的路径（libtool 链接时会读
+   `.la` 的 `dependency_libs`，不改掉以后重链接会指向已移走的旧目录）；
+10. 写升级日志 `.phprt/logs/upgrade.log`（START / BUILD / WHEEL / VERIFY /
+   COMMIT，失败写 ROLLBACK），清理备份。
+
+任何一步失败都回滚：bundle.conf、旧 deps 目录、lib/phprt、wheel.map 全部
+还原。
+
+注意：升级后 PHP 构建树里的旧 `.dep`/`.la` 引用不会立刻清理（运行时不受影
+响，wheel 已经是新库）。下次 `phprt set` 真要重编 PHP 时，`php.sh` 的
+`FLAGS_SIG` 含 CPPFLAGS/LDFLAGS（依赖路径在里面），路径一变就会
+`make distclean` 后全新构建，不会拿旧 `.dep` 碰壁。
+
+限制：
+
+- 只保证 ABI 兼容的同系列升级。消费者是旧头文件编的，不会用到新 API；
+  禁止降级（wheel.map 记版本，verify 可查）。
+- 同系列内换编译选项导致 ABI 变化的情况，靠 SONAME 集合比对 + sha256 +
+  功能验证兜底，不能 100% 识别。
+- 跨系列升级（如 3.5 → 3.6、OpenSSL 4.x）会被拒绝，走 `phprt set` 的
+  正常重编路径。

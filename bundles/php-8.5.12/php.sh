@@ -90,7 +90,10 @@ export PKG_CONFIG_PATH="$(dep_pc_path $names)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PAT
 
 # 复用源码树时 make 只看时间戳：CFLAGS 变了必须清掉旧 .o，
 # 否则 LTO / 非 LTO 对象会混在一起。
-FLAGS_SIG="CFLAGS=${CFLAGS:-}|CXXFLAGS=${CXXFLAGS:-}|lto_ld=${LTO_LDFLAGS_EXTRA}"
+# FLAGS_SIG 必须含 CPPFLAGS/LDFLAGS：同系列依赖升级后 include/lib 路径变了，
+    # 即使 CFLAGS 没变也要 distclean，否则旧的 .dep 文件还指着旧版本目录，
+    # 下次 make 会报「没有规则可制作目标 …/openssl-3.5.6/include/…」。
+    FLAGS_SIG="CFLAGS=${CFLAGS:-}|CXXFLAGS=${CXXFLAGS:-}|CPPFLAGS=${CPPFLAGS:-}|LDFLAGS=${LDFLAGS:-}|lto_ld=${LTO_LDFLAGS_EXTRA}"
 FLAGS_STAMP="$SRC/.phprt-build-flags"
 if [ -f "$SRC/Makefile" ] && [ "$(cat "$FLAGS_STAMP" 2>/dev/null || true)" != "$FLAGS_SIG" ]; then
   log "编译参数变化，清理 PHP 目标文件"

@@ -90,9 +90,10 @@ phprt set 8.5.12 --clean-src
 
 ## 特点
 
-**1. wheel 方式管理动态库。** 依赖库的名字加内容 hash、SONAME 同步改写，所有消费方的
-`DT_NEEDED` 一起改，RPATH 写成 `$ORIGIN` 相对路径。于是同名库不会和系统里的抢，
-运行时不用 `LD_LIBRARY_PATH`，整棵树搬走或改名都能跑。
+**1. wheel 方式管理动态库。** 依赖库的名字换成稳定的运行时名（rt + SONAME 的
+ABI 版本号）、SONAME 同步改写，所有消费方的 `DT_NEEDED` 一起改，RPATH 写成
+`$ORIGIN` 相对路径。于是同名库不会和系统里的抢，运行时不用 `LD_LIBRARY_PATH`，
+整棵树搬走或改名都能跑；同系列小版本升级（`phprt update`）消费方零改写。
 
 **2. 依赖按 builtin / deps / ext / tools 分类。** 内置扩展、第三方库、PECL 扩展、构建工具
 各自独立 recipe、独立签名、按依赖拓扑排序，把系统依赖隔离在项目内，只使用树里的库。

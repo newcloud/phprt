@@ -576,23 +576,42 @@ prune_stale_deps() {
   done
 }
 
+# 依赖的稳定 ABI 身份：它装的所有库的原始 SONAME 集合（排序去重）。
+# 同系列小版本升级 SONAME 不变 => 身份不变 => 消费方签名不变、不重编；
+# 跨 ABI 系列（SONAME 变）才变。真实版本记录在配方 stamp、wheel.map 和
+# 升级日志里，不进消费方签名（签名是「构建输入有没有变」，不是版本史）。
+dep_rt_id() {
+  local d f s
+  d="$(dep_dir_of "$1")"
+  [ -d "$d/lib" ] || [ -d "$d/lib64" ] ||
+    die "dep_rt_id: $1 未构建（$d 不存在）"
+  {
+    for f in "$d"/lib/*.so.* "$d"/lib64/*.so.*; do
+      [ -f "$f" ] || continue
+      [ -L "$f" ] && continue
+      s="$(patchelf --print-soname "$f" 2>/dev/null)" ||
+        die "dep_rt_id: 读不到 SONAME: $f"
+      [ -n "$s" ] || die "dep_rt_id: 共享库缺少 SONAME: $f"
+      printf '%s\n' "$s"
+    done
+  } | sort -u | paste -sd, -
+}
+
 dep_sig() {
   local n="$1" x
   {
     printf 'recipe=%s\n' "$(recipe_hash "$n")"
-    printf 'dir=%s\n' "$(dep_dir_of "$n")"
     case "$n" in
       curl)
         printf 'switches=%s/%s\n' "${ENABLE_OPENSSL:-0}" "${ENABLE_ZLIB:-0}"
-        printf 'optional=openssl:%s:%s:zlib:%s:%s\n' \
-          "$(dep_dir_of openssl)" "$(state_get deps/openssl)" \
-          "$(dep_dir_of zlib)" "$(state_get deps/zlib)" ;;
+        printf 'optional=openssl:%s\n' "$(dep_rt_id openssl)"
+        printf 'optional=zlib:%s\n' "$(dep_rt_id zlib)" ;;
       libxml2|libzip)
         printf 'switches=%s\n' "${ENABLE_ZLIB:-0}"
-        printf 'optional=zlib:%s:%s\n' "$(dep_dir_of zlib)" "$(state_get deps/zlib)" ;;
+        printf 'optional=zlib:%s\n' "$(dep_rt_id zlib)" ;;
     esac
     for x in $(module_needs "$n"); do
-      printf 'need=%s:%s:%s:%s\n' "$x" "$(dep_dir_of "$x")" "$(recipe_hash "$x")" "$(state_get "deps/$x")"
+      printf 'need=%s:%s:%s\n' "$x" "$(dep_rt_id "$x")" "$(recipe_hash "$x")"
     done
   } | hash_sig
 }
@@ -653,31 +672,42 @@ ext_sig() {
     printf 'php_version=%s\n' "${PHP_VERSION:-}"
     printf 'php_abi=%s\n' "$(php_abi_sig)"
     for x in $(module_needs "$n"); do
-      printf 'dep=%s:%s:%s\n' "$x" "$(dep_dir_of "$x")" "$(state_get "deps/$x")"
+      printf 'dep=%s:%s\n' "$x" "$(dep_rt_id "$x")"
     done
   } | hash_sig
 }
 
 # ---------------------------------------------------------------------------
 # 运行时库整理（wheel 方式）：deps/*/lib 里的共享库全部复制到 lib/phprt/，
-# 名字加 8 位内容 hash、SONAME 同步改写，消费方的 DT_NEEDED 一起改，
-# 所有 ELF 的 RPATH 改成 $ORIGIN 相对路径。之后运行时不再需要 LD_LIBRARY_PATH。
+# 名字换成稳定的运行时名（rt + SONAME 的 ABI 版本号）、SONAME 同步改写，
+# 消费方的 DT_NEEDED 一起改，所有 ELF 的 RPATH 改成 $ORIGIN 相对路径。
+# 之后运行时不再需要 LD_LIBRARY_PATH。
+#
+# 命名规则：rt 标签 = 上游 SONAME 的版本号（它就是上游的 ABI 系列信号）。
+#   libssl.so.3    -> libssl-rt3.so.3
+#   libz.so.1      -> libz-rt1.so.1
+#   libicuuc.so.79 -> libicuuc-rt79.so.79
+#   libyaml-0.so.2 -> libyaml-0-rt2.so.2
+# 同系列小版本升级 SONAME 不变 => 运行时名不变 => 消费方 DT_NEEDED 零改写；
+# 跨 ABI 系列（SONAME 变化）才改名并改写消费方。内容 hash 不再参与命名，
+# 完整性改由 wheel.map 里的 sha256 列负责。
 # ---------------------------------------------------------------------------
-wheel_hashed_name() {   # $1=SONAME  $2=hash
+wheel_runtime_name() {   # $1=SONAME
   case "$1" in
-    *.so)   printf '%s-%s.so\n'   "${1%.so}"    "$2" ;;
-    *.so.*) printf '%s-%s.so%s\n' "${1%%.so.*}" "$2" "${1#*.so}" ;;
-    *)      printf '%s-%s\n'      "$1"          "$2" ;;
+    *.so.*) printf '%s-rt%s.so.%s\n' "${1%%.so.*}" "${1##*.so.}" "${1##*.so.}" ;;
+    *.so)   printf '%s-rt.so\n'   "${1%.so}" ;;
+    *)      printf '%s-rt\n'      "$1" ;;
   esac
 }
 
 wheelize_tree() {
   local tree="$1" flat="$1/lib/phprt"
-  local f soname hash new old elf osoname onew dup
+  local f soname new old elf osoname onew dup depdir depver line rest
   need_cmds patchelf sha256sum
   mkdir -p "$flat"
 
-  # 保留上一轮映射：依赖重编后 hash 会变，已改写过的 NEEDED 要能跟到新名字
+  # 保留上一轮映射：跨 ABI 系列升级时运行时名会变，已改写过的 NEEDED 要能
+  # 跟到新名字；同系列小版本升级名字不变，映射为空、零改写。
   local prev="$flat/wheel.map.prev" repl="$flat/.replace"
   if [ -f "$flat/wheel.map" ]; then cp -f "$flat/wheel.map" "$prev"; else : > "$prev"; fi
   : > "$flat/wheel.map"
@@ -688,17 +718,26 @@ wheelize_tree() {
     [ -L "$f" ] && continue
     soname="$(patchelf --print-soname "$f" 2>/dev/null || true)"
     [ -n "$soname" ] || soname="$(basename "$f")"
-    case "$soname" in *.so|*.so.*) ;; *) continue ;; esac
-    hash="$(sha256sum "$f" | cut -c1-8)"
-    new="$(wheel_hashed_name "$soname" "$hash")"
+    # 运行时名取自 SONAME 的 ABI 版本号；没有版本号的 SONAME 无法生成
+    # 有 ABI 语义的名字，直接失败（不静默回退）
+    case "$soname" in
+      *.so.*) ;;
+      *) die "SONAME 没有 ABI 版本号，无法生成运行时名: $soname（$f）" ;;
+    esac
+    new="$(wheel_runtime_name "$soname")"
+    # 依赖版本取自 deps 目录名（deps/<库>-<版本>/lib，目录名规则由
+    # dep_dir_of 保证：<库名>-<版本>）；只作记录用，不参与命名
+    depdir="$(basename "$(dirname "$(dirname "$f")")")"
+    depver="${depdir#*-}"
     cp -af "$f" "$flat/$new"
     patchelf --set-soname "$new" --set-rpath '$ORIGIN' --force-rpath "$flat/$new"
-    printf '%s %s\n' "$soname" "$new" >> "$flat/wheel.map"
+    # sha256 列最后统一回填（见函数尾部）：所有 patchelf 之后才算
+    printf '%s|%s|%s|-\n' "$soname" "$new" "$depver" >> "$flat/wheel.map"
     # 注意：deps/*/lib 保持原样，不动它的软链。它是构建期的链接目录，
     # 里面的库名字还是原始 SONAME；改过名字的副本只放在 lib/phprt，
     # 消费方的 DT_NEEDED 由下面的 --replace-needed 统一改写。
     # （如果把 deps 的 .so 软链指到 lib/phprt，后续 add ext 链接时
-    #   ld 会跟不上二级依赖的 hash 名，报 undefined reference。）
+    #   ld 会跟不上二级依赖的运行时名，报 undefined reference。）
   done
 
   if [ ! -s "$flat/wheel.map" ]; then
@@ -706,23 +745,34 @@ wheelize_tree() {
     return 0
   fi
 
-  # 同一原始 SONAME 只能对应一个文件。出现重复通常是旧依赖目录没清掉，
-  # 继续往下会让 patchelf 只改到其中一份，运行时可能仍用旧库。
-  dup="$(cut -d' ' -f1 "$flat/wheel.map" | sort | uniq -d)"
+  # 同一原始 SONAME / 同一运行时名 只能对应一个文件。出现重复通常是旧
+  # 依赖目录没清掉，继续往下走会让 patchelf 只改到其中一份，运行时可能
+  # 仍用旧库。
+  dup="$(cut -d'|' -f1 "$flat/wheel.map" | sort | uniq -d)"
+  dup="$dup$(cut -d'|' -f2 "$flat/wheel.map" | sort | uniq -d)"
   if [ -n "$dup" ]; then
     printf '%s\n' "$dup" >&2
-    die "wheel.map 中同一个 SONAME 对应多个文件（旧依赖目录没清干净？）"
+    die "wheel.map 中同一个 SONAME / 运行时名 对应多个文件（旧依赖目录没清干净？）"
   fi
 
-  # 本轮 soname -> 新名字；上一轮的 hash 名字 -> 本轮新名字
+  # 本轮 原始SONAME -> 运行时名；上一轮的运行时名 -> 本轮运行时名。
+  # repl 前半部分是本轮映射（首次 wheel 化用），后半部分是跨轮映射
+  # （上一轮的运行时名 -> 本轮运行时名，名字没变就不追加、零改写）。
+  # .prev 兼容旧的两列空格格式（hash 时代）。
   cp -f "$flat/wheel.map" "$repl"
-  while read -r osoname onew; do
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *\|*) osoname="${line%%|*}"; rest="${line#*|}"; onew="${rest%%|*}" ;;
+      *)     osoname="${line%% *}"; onew="${line#* }" ;;
+    esac
     [ -n "$onew" ] || continue
-    new="$(awk -v s="$osoname" '$1 == s { print $2 }' "$flat/wheel.map")"
-    [ -n "$new" ] && [ "$onew" != "$new" ] && printf '%s %s\n' "$onew" "$new" >> "$repl"
+    new="$(awk -F'|' -v s="$osoname" '$1 == s { print $2; exit }' "$flat/wheel.map")"
+    [ -n "$new" ] && [ "$onew" != "$new" ] && printf '%s|%s\n' "$onew" "$new" >> "$repl"
   done < "$prev"
 
-  while read -r old new; do
+  while IFS='|' read -r old new rest; do
+    [ -n "$old" ] || continue
     for elf in "$tree"/bin/* "$flat"/*.so* "$tree"/lib/*.so* \
                "$tree"/lib/php/extensions/*/*.so; do
       [ -f "$elf" ] || continue
@@ -746,5 +796,83 @@ wheelize_tree() {
     [ -f "$elf" ] && patchelf --set-rpath '$ORIGIN/../../../phprt' --force-rpath "$elf"
   done
 
+  # sha256 必须最后算：set-soname / replace-needed / set-rpath 都会改字节，
+  # 任何一步之后算都不是最终内容。回填第 4 列。
+  local tmpmap="$flat/.wheel.map.tmp"
+  : > "$tmpmap"
+  while IFS='|' read -r src rt ver sha0; do
+    [ -n "$src" ] || continue
+    printf '%s|%s|%s|%s\n' "$src" "$rt" "$ver" \
+      "$(sha256sum "$flat/$rt" | cut -d' ' -f1)" >> "$tmpmap"
+  done < "$flat/wheel.map"
+  mv -f "$tmpmap" "$flat/wheel.map"
+
   ok "运行时库已整理到 $flat（$(wc -l < "$flat/wheel.map") 个）"
+}
+
+# 全树 ELF 的链接关系快照：相对路径 | SONAME | 有序 NEEDED | RPATH/RUNPATH。
+# phprt update 前后各取一份做 diff，断言消费方的动态链接关系零变化。
+elf_link_snapshot() {
+  local tree="$1" out="$2" f soname needed rpath
+  {
+    # 扫整棵树（deps/ 构建目录除外），按 ELF 文件头识别，不靠文件名猜
+    while IFS= read -r f; do
+      [ -L "$f" ] && continue
+      readelf -h "$f" >/dev/null 2>&1 || continue
+      soname="$(readelf -d "$f" 2>/dev/null | awk -F'[][]' '/\(SONAME\)/{print $2; exit}')"
+      needed="$(readelf -d "$f" 2>/dev/null | awk -F'[][]' '/\(NEEDED\)/{print $2}' | paste -sd, -)"
+      rpath="$(readelf -d "$f" 2>/dev/null | awk -F'[][]' '/\(RPATH\)|\(RUNPATH\)/{print $2}' | paste -sd: -)"
+      printf '%s|soname=%s|needed=%s|rpath=%s\n' \
+        "${f#"$tree"/}" "${soname:-}" "$needed" "${rpath:-}"
+    done < <(find "$tree" -path "$tree/deps" -prune -o -type f -print 2>/dev/null | LC_ALL=C sort)
+  } > "$out"
+}
+
+# wheel 完整性：sha256、文件名与 DT_SONAME 一致、OpenSSL 只许一份且成套、
+# 消费方不得残留原始 SONAME。
+wheel_integrity_check() {
+  local tree="$1" flat="$1/lib/phprt" map="$1/lib/phprt/wheel.map"
+  local src rt ver sha f n ss sc elf needed line bad=""
+  [ -f "$map" ] || { warn "缺少 $map"; return 1; }
+  # 格式必须是 4 列 pipe 分隔（旧 hash 时代的两列空格格式直接判失败）
+  awk -F'|' 'NF != 4 { bad=1 } END { exit bad ? 1 : 0 }' "$map" || {
+    warn "wheel.map 格式不对（需要 4 列 pipe 分隔: 原始SONAME|运行时名|版本|sha256）"
+    return 1
+  }
+  while IFS='|' read -r src rt ver sha; do
+    [ -n "$src" ] && [ -n "$rt" ] && [ -n "$sha" ] || { warn "wheel.map 空字段: $src|$rt|$ver|$sha"; return 1; }
+    f="$flat/$rt"
+    [ -s "$f" ] || { warn "缺文件: $rt"; return 1; }
+    [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$sha" ] || { warn "sha256 不符: $rt"; return 1; }
+    [ "$(patchelf --print-soname "$f" 2>/dev/null)" = "$rt" ] || { warn "DT_SONAME 与文件名不符: $rt"; return 1; }
+  done < "$map"
+  # OpenSSL 唯一性：libssl/libcrypto 各一份，且 wheel.map 里版本一致
+  if grep -q '^libssl\.so\.3|' "$map"; then
+    n="$(find "$flat" -maxdepth 1 -name 'libssl-rt*.so*' | wc -l)"
+    [ "$n" = 1 ] || { warn "libssl 运行时库不止一份 ($n)"; return 1; }
+    n="$(find "$flat" -maxdepth 1 -name 'libcrypto-rt*.so*' | wc -l)"
+    [ "$n" = 1 ] || { warn "libcrypto 运行时库不止一份 ($n)"; return 1; }
+    ss="$(awk -F'|' '$1=="libssl.so.3"{print $3}' "$map")"
+    sc="$(awk -F'|' '$1=="libcrypto.so.3"{print $3}' "$map")"
+    [ -n "$ss" ] && [ "$ss" = "$sc" ] || { warn "libssl/libcrypto 版本不一致: $ss vs $sc"; return 1; }
+  fi
+  # flat 里的每个 .so* 都必须在 map 里（防遗留旧库：跨系列/迁移后旧名残留）
+  while IFS= read -r f; do
+    b="$(basename "$f")"
+    awk -F'|' -v n="$b" '$2 == n { found=1 } END { exit found ? 0 : 1 }' "$map" || {
+      warn "lib/phprt 里有文件不在 wheel.map: $b（遗留旧库？）"
+      return 1
+    }
+  done < <(find "$flat" -maxdepth 1 -name '*.so*' -type f 2>/dev/null)
+  # 消费方不得残留原始 SONAME（wheel 化没改写干净会加载到系统库）
+  while IFS= read -r elf; do
+    needed="$(readelf -d "$elf" 2>/dev/null | awk -F'[][]' '/\(NEEDED\)/{print $2}' | paste -sd' ' -)"
+    [ -z "$needed" ] && continue
+    while IFS='|' read -r src rt ver sha; do
+      [ -n "$src" ] || continue
+      case " $needed " in *" $src "*) bad+="$elf -> $src"$'\n' ;; esac
+    done < "$map"
+  done < <(find "$tree/bin" "$tree/lib" -type f \( -name '*.so*' -o -name php \) 2>/dev/null)
+  [ -z "$bad" ] || { printf '%s' "$bad" >&2; warn "消费方仍引用原始 SONAME"; return 1; }
+  return 0
 }

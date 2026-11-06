@@ -11,12 +11,18 @@ phprt
   phprt list
   phprt add ext <名字>
   phprt remove ext <名字>
+  phprt update <依赖> <版本>
   phprt verify
+
+phprt update 只升级一个依赖库的同系列小版本（如 openssl 3.5.7 -> 3.5.8）：
+只重编该依赖并替换 lib/phprt 里的运行时库，消费方不重编、DT_NEEDED 零改写。
 
 示例:
   phprt set 8.5.12
   phprt set 8.6.0-dev --ext sqlite
   phprt set 8.5.12 --recompile --ext sqlite --yes
+  phprt update openssl 3.5.8
+  phprt update libpng 1.6.51
 EOF
 }
 
@@ -63,6 +69,12 @@ cmd_set() {
     esac
   done
   [ -n "$version" ] || die "用法: phprt set <版本>"
+
+  # 构建锁：和 update / add 互斥，防止并发改同一棵树
+  need_cmds flock
+  ensure_base_files
+  exec 9>"$PHPRT_HOME/.phprt.lock"
+  flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
 
   local bundle tree complete=0 status=""
   tree="$(tree_of "$version")"
@@ -230,6 +242,11 @@ cmd_add() {
   [ "${1:-}" = "ext" ] || die "用法: phprt add ext <名字>"
   local name="${2:-}"
   [ -n "$name" ] || die "用法: phprt add ext <名字>"
+
+  # 构建锁：和 set / update 互斥
+  need_cmds flock
+  exec 9>"$PHPRT_HOME/.phprt.lock"
+  flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
   local ver tree bundle kind list mods m extdir ld missing=0
   ver="$(current_version)" || die "还没有 current 版本"
   tree="$(tree_of "$ver")"
@@ -293,6 +310,235 @@ cmd_remove() {
     out="$out${out:+ }$e"
   done
   write_project_conf "$ver" "$out"
+}
+
+# 依赖名 -> bundle.conf 里的版本变量
+dep_version_var() {
+  case "$1" in
+    openssl)   printf 'OPENSSL_VERSION' ;;
+    zlib)      printf 'ZLIB_VERSION' ;;
+    libxml2)   printf 'LIBXML2_VERSION' ;;
+    sqlite)    printf 'SQLITE_VERSION' ;;
+    curl)      printf 'LIBCURL_VERSION' ;;
+    oniguruma) printf 'ONIGURUMA_VERSION' ;;
+    libzip)    printf 'LIBZIP_VERSION' ;;
+    icu)       printf 'ICU_VERSION' ;;
+    libpng)    printf 'LIBPNG_VERSION' ;;
+    jpeg)      printf 'JPEG_VERSION' ;;
+    freetype)  printf 'FREETYPE_VERSION' ;;
+    webp)      printf 'WEBP_VERSION' ;;
+    aom)       printf 'AOM_VERSION' ;;
+    avif)      printf 'AVIF_VERSION' ;;
+    libffi)    printf 'LIBFFI_VERSION' ;;
+    libyaml)   printf 'LIBYAML_VERSION' ;;
+    *)         return 1 ;;
+  esac
+}
+
+# 升级日志：.phprt/logs/upgrade.log，阶段 START/BUILD/WHEEL/VERIFY/COMMIT/ROLLBACK
+upgrade_log() {
+  mkdir -p "$PHPRT_HOME/logs"
+  printf '[%s] %-8s %s %s -> %s %s\n' \
+    "$(date '+%F %T')" "$1" "${UP_DEP:-}" "${UP_OLD:-}" "${UP_NEW:-}" "$2" \
+    >> "$PHPRT_HOME/logs/upgrade.log"
+}
+
+# phprt update <依赖> <版本>
+# 同系列小版本升级（如 openssl 3.5.7 -> 3.5.8）：只重编该依赖、替换
+# lib/phprt 里的运行时库；消费方不重编、DT_NEEDED 零改写。任何一步失败
+# 都回滚到升级前的配置、依赖目录和运行时库。
+cmd_update() {
+  local dep="$1" newver="$2"
+  [ $# -eq 2 ] || die "用法: phprt update <依赖> <版本>（如 phprt update openssl 3.5.8）"
+  [ -n "$(dep_version_var "$dep")" ] || die "未知依赖: $dep"
+
+  local ver tree flat repo_conf vvar urlvar oldver newver url oldurl newurl
+  local bak tmp bundle old_id new_id rtver f line
+  local pconf dnew dold
+  ver="$(current_version)" || die "还没有设置 current（先跑 phprt set <版本>）"
+  tree="$(tree_of "$ver")"
+  flat="$tree/lib/phprt"
+  # 回滚要用的路径一次性算好（rollback 里不再拼 $ver，避免作用域意外）
+  pconf="$PHPRT_HOME/bundles/php-$ver/bundle.conf"
+  dnew="$tree/deps/$dep-$newver"
+  [ -x "$tree/bin/php" ] || die "树不存在或未构建: $tree"
+  [ "$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)" = ok ] || die "上次构建未完成，先修好树"
+  grep -q "^deps/$dep\$" "$tree/BUILD-ORDER" 2>/dev/null ||
+    die "当前树没有依赖 $dep（BUILD-ORDER 里没有）"
+
+  vvar="$(dep_version_var "$dep")"
+  repo_conf="$PHPRT_REPO/bundles/php-$ver/bundle.conf"
+  [ -f "$repo_conf" ] || die "找不到 $repo_conf"
+  oldver="$(sed -n "s/^$vvar=//p" "$repo_conf" | head -1)"
+  [ -n "$oldver" ] || die "$repo_conf 里没有 $vvar"
+  dold="$tree/deps/$dep-$oldver"
+
+  # 只允许同系列（major.minor 相同）且更高的小版本
+  [ "$newver" != "$oldver" ] || die "新版本与当前相同: $oldver"
+  [ "$(printf '%s\n' "$oldver" | cut -d. -f1-2)" = "$(printf '%s\n' "$newver" | cut -d. -f1-2)" ] ||
+    die "只允许同系列小版本升级（当前 $oldver，目标 $newver）"
+  [ "$(printf '%s\n%s\n' "$oldver" "$newver" | sort -V | head -1)" = "$oldver" ] ||
+    die "拒绝降级: $oldver -> $newver"
+
+  # 构建锁：和 phprt set / add 共用同一把，防止并发改同一棵树
+  need_cmds flock
+  exec 9>"$PHPRT_HOME/.phprt.lock"
+  flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
+
+  bak="$PHPRT_HOME/upgrade-backup/update-$(date +%Y%m%d%H%M%S)"
+  tmp="$PHPRT_HOME/logs/.update.$$"
+  mkdir -p "$bak" "$tmp"
+  UP_DEP="$dep" UP_OLD="$oldver" UP_NEW="$newver"
+
+  # 失败回滚：配置、旧 deps 目录、lib/phprt、wheel.map 全部还原
+  # 注意：set -e 下不能用 `[ -f x ] && cmd` 一行式，条件为假会静默退出
+  rollback_update() {
+    local reason="$1"
+    log "升级失败，回滚"
+    if [ -f "$bak/bundle.conf" ]; then
+      cp -f "$bak/bundle.conf" "$repo_conf"
+    fi
+    if [ -f "$bak/project-bundle.conf" ]; then
+      cp -f "$bak/project-bundle.conf" "$pconf"
+    fi
+    if [ -d "$bak/deps-old" ]; then
+      rm -rf "$dnew"
+      mv "$bak/deps-old" "$dold"
+    fi
+    if [ -d "$bak/flat" ]; then
+      rm -f "$flat"/*.so*
+      cp -af "$bak/flat"/. "$flat"/
+    fi
+    if [ -f "$bak/wheel.map" ]; then
+      cp -f "$bak/wheel.map" "$flat/wheel.map"
+    fi
+    if [ -f "$bak/wheel.map.prev" ]; then
+      cp -f "$bak/wheel.map.prev" "$flat/wheel.map.prev"
+    fi
+    if [ -d "$bak/la-pc" ]; then
+      while IFS= read -r rel; do
+        cp -f "$bak/la-pc/$rel" "$tree/$rel"
+      done < "$bak/la-pc.list"
+    fi
+    # wheelize 的临时文件；消费方 state 不用动（签名按 ABI 身份，升级前后不变）
+    rm -f "$flat/.replace" "$flat/.wheel.map.tmp"
+    upgrade_log ROLLBACK "$reason"
+    rm -rf "$tmp"
+    die "update 失败，已回滚: $reason"
+  }
+
+  upgrade_log START "dep=$dep"
+  elf_link_snapshot "$tree" "$tmp/before.snap" || rollback_update "升级前快照失败"
+
+  # 备份：仓库 bundle.conf、项目副本、旧 deps 目录、整个 lib/phprt、wheel.map
+  cp -f "$repo_conf" "$bak/bundle.conf"
+  cp -f "$PHPRT_HOME/bundles/php-$ver/bundle.conf" "$bak/project-bundle.conf"
+  mv "$tree/deps/$dep-$oldver" "$bak/deps-old" || rollback_update "备份旧依赖目录失败"
+  mkdir -p "$bak/flat"
+  cp -af "$flat"/*.so* "$bak/flat/" || rollback_update "备份运行时库失败"
+  cp -f "$flat/wheel.map" "$bak/wheel.map"
+  if [ -f "$flat/wheel.map.prev" ]; then
+    cp -f "$flat/wheel.map.prev" "$bak/wheel.map.prev"
+  fi
+
+  # 旧库的 SONAME 集合：升级后必须完全一致，否则当跨系列拒绝。
+  # 用 -maxdepth 2 从 deps 目录起找（lib/ 与 lib64/ 都覆盖，少了也不报错）
+  old_id="$(
+    find "$bak/deps-old" -maxdepth 2 -type f -name '*.so.*' 2>/dev/null |
+      while IFS= read -r f; do patchelf --print-soname "$f" 2>/dev/null; done |
+      LC_ALL=C sort -u | paste -sd, -
+  )" || rollback_update "读取旧库 SONAME 失败"
+
+  # 改版本与 URL（仓库 bundle.conf 是唯一版本源；项目副本由 bundle_for 同步）。
+  # URL 行可能带行尾注释，只替换引号内的部分
+  urlvar="$(dep_version_var "$dep" | sed 's/_VERSION$/_URL/')"
+  oldurl="$(sed -n "s/^$urlvar=\"\([^\"]*\)\".*$/\1/p" "$repo_conf" | head -1)"
+  [ -n "$oldurl" ] || rollback_update "读不到 $urlvar"
+  newurl="${oldurl//$oldver/$newver}"
+  sed -i "s|^$vvar=.*|$vvar=$newver|" "$repo_conf" || rollback_update "改版本变量失败"
+  sed -i "s|^\($urlvar=\"\)[^\"]*\"|\1$newurl\"|" "$repo_conf" || rollback_update "改 URL 失败"
+  bundle="$(bundle_for "$ver")" || rollback_update "同步项目 bundle 副本失败"
+  # 当前 shell 也要拿到新版本变量（artifact_ok / dep_dir_of 用）
+  # shellcheck disable=SC1090
+  . "$repo_conf"
+
+  # 只重编该依赖（FORCE=1 绕过配方内部 stamp）。
+  # 注意：BUNDLE/TREE 必须显式赋值为小写变量的内容，否则 export 的是空串；
+  # 其余变量与 build.sh 保持一致，配方（JOBS/PREFIX/...）才不会报未绑定
+  upgrade_log BUILD "start $oldver -> $newver"
+  export BUNDLE="$bundle" TREE="$tree" PREFIX="$tree" \
+         DEPS="$tree/deps" SRCDIR="$PHPRT_HOME/build" LOGS="$PHPRT_HOME/logs" \
+         SELECTED_EXTS="" JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}" \
+         FORCE=1 REBUILD=1 \
+         PHPRT_RUNNER="$PHPRT_HOME/bin/runner"
+  if ! bash "$bundle/deps/$dep.sh" > "$tmp/build.log" 2>&1; then
+    tail -30 "$tmp/build.log" >&2
+    rollback_update "依赖 $dep $newver 构建失败"
+  fi
+  artifact_ok "$dep" || rollback_update "依赖 $dep $newver 没有产物"
+
+  new_id="$(
+    find "$tree/deps/$dep-$newver" -maxdepth 2 -type f -name '*.so.*' 2>/dev/null |
+      while IFS= read -r f; do patchelf --print-soname "$f" 2>/dev/null; done |
+      LC_ALL=C sort -u | paste -sd, -
+  )" || rollback_update "读取新库 SONAME 失败"
+  [ -n "$new_id" ] || rollback_update "新依赖没有共享库"
+  [ "$new_id" = "$old_id" ] ||
+    rollback_update "SONAME 集合变化（$old_id -> $new_id），疑似跨系列，拒绝"
+  upgrade_log BUILD "ok soname 集合不变"
+
+  # 其它依赖的 .la/.pc 里可能写着旧依赖目录（libtool/pkg-config 构建期
+  # 元数据）：libtool 链接时会读 .la 的 dependency_libs，不改掉以后重链接
+  # 会指向已移走的旧目录。完整绝对路径替换（不会误伤同名普通文本），
+  # 先备份进事务目录，回滚时一并还原。
+  local oldpath m rel fixed=0
+  oldpath="$tree/deps/$dep-$oldver"
+  : > "$bak/la-pc.list"
+  while IFS= read -r m; do
+    rel="${m#"$tree"/}"
+    mkdir -p "$bak/la-pc/$(dirname "$rel")"
+    cp -f "$m" "$bak/la-pc/$rel"
+    printf '%s\n' "$rel" >> "$bak/la-pc.list"
+    sed -i "s|$oldpath|$dnew|g" "$m"
+    fixed=1
+  done < <(grep -rl "$oldpath" "$tree/deps" --include='*.la' --include='*.pc' 2>/dev/null)
+  [ "$fixed" = 1 ] && upgrade_log BUILD "fixed 其它依赖 .la/.pc 里的旧路径引用"
+
+  # wheel 化：旧 deps 目录已移走，不会扫到两份同名 SONAME；rt 名不变 =>
+  # .prev 映射为空 => 消费方 DT_NEEDED 零改写
+  upgrade_log WHEEL "start"
+  wheelize_tree "$tree" || rollback_update "wheelize 失败"
+  elf_link_snapshot "$tree" "$tmp/after.snap" || rollback_update "升级后快照失败"
+  if ! diff -q "$tmp/before.snap" "$tmp/after.snap" >/dev/null; then
+    diff "$tmp/before.snap" "$tmp/after.snap" | head -20 >&2
+    rollback_update "消费方动态链接关系发生变化"
+  fi
+  upgrade_log WHEEL "ok 消费方 NEEDED/SONAME/RPATH 零变化"
+
+  upgrade_log VERIFY "start"
+  wheel_integrity_check "$tree" || rollback_update "wheel 完整性校验失败"
+  ( cd "$PHPRT_PROJECT" && ./myphp -v >/dev/null ) || rollback_update "myphp 启动失败"
+  if [ "$dep" = openssl ]; then
+    # 注意：php 的 OPENSSL_VERSION_TEXT 是编译期字符串，不重编就不会变，
+    # 不能当验证依据。直接查运行时真正加载的 flat/libcrypto 里的版本串。
+    need_cmds strings
+    rtver="$(strings "$flat/libcrypto-rt3.so.3" 2>/dev/null |
+             grep -m1 -o 'OpenSSL [0-9][0-9.]*' || true)"
+    case "$rtver" in
+      *"$newver"*) ;;
+      *) rollback_update "运行时 libcrypto 不是 $newver（$rtver）" ;;
+    esac
+  fi
+  upgrade_log VERIFY "ok"
+
+  # 提交：清理备份（失败时 bak 留在 upgrade-backup/ 供人工排查）
+  rm -rf "$bak/deps-old" "$bak/flat" "$bak/la-pc" \
+         "$bak/wheel.map" "$bak/wheel.map.prev" "$bak/la-pc.list" \
+         "$bak/bundle.conf" "$bak/project-bundle.conf"
+  rmdir "$bak" 2>/dev/null || true
+  upgrade_log COMMIT "ok"
+  rm -rf "$tmp"
+  ok "phprt update $dep $oldver -> $newver 完成（消费方零改写、零重编）"
 }
 
 cmd_verify() {
@@ -397,6 +643,13 @@ cmd_verify() {
   else
     warn "curl 连通性未验证（可能离线）"
   fi
+
+  log "7) wheel 完整性（sha256 / SONAME / OpenSSL 唯一 / 无残留原始名）"
+  if wheel_integrity_check "$tree"; then
+    ok "wheel 完整性通过"
+  else
+    return 1
+  fi
 }
 
 main() {
@@ -408,6 +661,7 @@ main() {
     list|ls)  cmd_list ;;
     add)      cmd_add "$@" ;;
     remove|rm) cmd_remove "$@" ;;
+    update)   cmd_update "$@" ;;
     verify)   cmd_verify ;;
     ""|-h|--help) usage ;;
     *)        die "未知命令: $cmd（--help 查看用法）" ;;

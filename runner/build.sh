@@ -141,7 +141,11 @@ prune_stale_deps $ALL_DEPS
 # ----------------------------------------------------------------- php ----
 PHP_SIG="$(
   {
-    bash "$BUNDLE/php.sh" --flags
+    # configure 参数里 deps/<库>-<版本>/ 要归一化成 deps/<库>/：同系列小版本
+    # 升级路径变了但 ABI 没变，不该因此重编 PHP（版本进 wheel.map / 升级日志）
+    # 两种形态都要归一化：路径中段（…/deps/openssl-3.5.9/include）和
+    # 行尾（--with-openssl=…/deps/openssl-3.5.9，无尾斜杠）
+    bash "$BUNDLE/php.sh" --flags | sed -E -e 's|(deps/[A-Za-z0-9_+]+)-[^/]+/|\1/|g' -e 's|(deps/[A-Za-z0-9_+]+)-[^/ ]+$|\1|g'
     printf 'php=%s\n' "$PHP_VERSION"
     printf 'php_cflags=%s|%s\n' "${PHP_CFLAGS:-}" "${PHP_CXXFLAGS:-}"
     if lto_on php; then
@@ -149,7 +153,7 @@ PHP_SIG="$(
     fi
     cat "$BUNDLE/php.sh" "$BUNDLE"/builtin/*.sh 2>/dev/null
     for d in $PHP_DEPS; do
-      printf 'dep=%s:%s:%s\n' "$d" "$(dep_dir_of "$d")" "$(state_get "deps/$d")"
+      printf 'dep=%s:%s\n' "$d" "$(dep_rt_id "$d")"
     done
     printf 'env=%s\n' "${CFLAGS:-} ${CPPFLAGS:-} ${LDFLAGS:-}"
   } | hash_sig
@@ -186,7 +190,7 @@ done
 
 [ -x "$TREE/bin/php" ] || die "构建完成但没有 $TREE/bin/php"
 
-log "整理运行时库（hash SONAME + \$ORIGIN rpath）"
+log "整理运行时库（rt SONAME + \$ORIGIN rpath）"
 wheelize_tree "$TREE"
 
 # 树内的标准布局：etc/php.ini、etc/conf.d、etc/ssl/cert.pem
