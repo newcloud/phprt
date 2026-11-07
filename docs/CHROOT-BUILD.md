@@ -92,7 +92,7 @@ create 会在目标目录写一个 `.phprt-buildroot` 标记；只有带这个�
 `common.sh` 新增统一包装，4 个构建入口全覆盖：
 
 - `run_build_env()`：host 模式直接执行；chroot 模式走 `chroot_exec()`
-- 接入点：`phprt set` 正式构建、`phprt add ext`、`phprt update`
+- 接入点：`phprt install` 正式构建、`phprt add ext`、`phprt update`
   （`set --plan` 只读，不走 chroot；`--recompile` / `--clean-src` 随 set 自动覆盖）
 - `chroot_exec()` 流程：
   1. rootfs 不存在 → 报错提示先跑 `phprt buildroot create`
@@ -108,7 +108,7 @@ create 会在目标目录写一个 `.phprt-buildroot` 标记；只有带这个�
 ## 启用方式
 
 - 默认 `BUILD_ENV=host`（现状）
-- `phprt set --chroot` → 写 `project.conf` 的 `BUILD_ENV=chroot`；`--host` 切回
+- `phprt install --chroot` → 写 `project.conf` 的 `BUILD_ENV=chroot`；`--host` 切回
 - `add` / `update` / `--recompile` 读配置自动沿用
 - `PHPRT_BUILD_ENV` 环境变量可临时覆盖
 

@@ -90,8 +90,8 @@ rm -f Zend/zend_execute.lo Zend/zend_execute.dep Zend/.libs/zend_execute.o \
 ## 3. 签名与重编
 
 - `runner/build.sh` 的 `PHP_SIG` 包含 `PHP_CFLAGS`、`PHP_CXXFLAGS` 和 LTO 状态。
-- 修改 `LTO_PHP` 或 `PHP_CFLAGS` 后必须用 `phprt set <版本> --recompile` 才会重编
-  （已完成的树在普通 `phprt set` 下只切换，不走构建）。
+- 修改 `LTO_PHP` 或 `PHP_CFLAGS` 后必须用 `phprt install <版本> --recompile` 才会重编
+  （已完成的树在普通 `phprt install` 下只切换，不走构建）。
 - `php.sh` 在源码树里记录 `.phprt-build-flags`。CFLAGS/CXXFLAGS 或 LTO 链接参数
   变化时先 `make distclean`，避免旧的 `-O2` 对象和新的 LTO 对象混用。
 - 签名只记录影响代码生成的参数，不记录依赖的 `-L/-rpath`；依赖升级不会因此
@@ -104,7 +104,7 @@ cd /home/z/testphp/blog
 
 # 非 LTO 对照
 #   bundle.conf: LTO_PHP=0
-.phprt/bin/phprt set 8.5.12 --recompile
+.phprt/bin/phprt install 8.5.12 --recompile
 
 # 复制对照树（.phprt-bench/ 是临时目录，实验结束后已删除）
 mkdir -p .phprt-bench
@@ -112,7 +112,7 @@ cp -a .phprt/php-8.5.12 .phprt-bench/php-8.5.12-nolto
 
 # LTO 版本
 #   bundle.conf: LTO_PHP=1
-.phprt/bin/phprt set 8.5.12 --recompile
+.phprt/bin/phprt install 8.5.12 --recompile
 ```
 
 确认两个版本都没有 DWARF 调试段：
@@ -385,7 +385,7 @@ mbstring、PCRE 解释器这类库密集型负载，能看到 4%–13% 的局部
 
 两个版本的 `bin/php` 都是 29M，都没有 `.debug_info`；LTO 没有带来体积变化。
 保留开关是为了继续做对比实验；要回到 stock 构建，把 `bundle.conf` 的
-`LTO_PHP` 改回 0 后 `phprt set 8.5.12 --recompile`。
+`LTO_PHP` 改回 0 后 `phprt install 8.5.12 --recompile`。
 
 如果想进一步验证“完整 LTO”的潜力，需要同时关闭 GCC global registers
 （`--disable-gcc-global-regs`）让 `zend_execute.c` 也参与 LTO；但那会改变
@@ -401,7 +401,7 @@ PHP 默认的 VM 优化方式，必须两个对比版本一起关，属于另一
 cd /home/z/testphp/blog
 
 # bundle.conf: LTO_PHP=0
-.phprt/bin/phprt set 8.5.12 --recompile
+.phprt/bin/phprt install 8.5.12 --recompile
 ```
 
 实验期间的 `.phprt-backup/php-8.5.12-pre-lto-20261105` 快照已随实验结束删除，

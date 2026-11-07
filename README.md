@@ -109,7 +109,8 @@ cd /path/to/project
 # 2. 进入（自动挂载 proc/sys/最小 dev；exit 时自动卸载）
 /path/to/phprt/phprt buildroot enter ../buildrootabc
 
-# 3. 在 chroot 里按平时的方式构建（例如安装 PHP 8.5，命令见上方「使用示例」）
+# 3. 在 chroot 里按平时的方式构建，例如：
+/path/to/phprt/phprt install 8.5 --yes
 
 # 4. 退出后查看状态 / 删除
 /path/to/phprt/phprt buildroot status ../buildrootabc

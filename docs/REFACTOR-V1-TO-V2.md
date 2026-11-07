@@ -46,7 +46,7 @@
 命令：
 
 ```bash
-phprt set <版本> [--ext "a b"] [--recompile] [--clean-src] [--plan] [--yes]
+phprt install <版本> [--ext "a b"] [--recompile] [--clean-src] [--plan] [--yes]
 phprt current
 phprt list
 phprt add ext <名字>
@@ -71,7 +71,7 @@ phprt verify
 
 | v1 | v2 |
 | --- | --- |
-| `install.sh` | 删除，`phprt set` 取代 |
+| `install.sh` | 删除，`phprt install` 取代 |
 | `build.sh`（根） | `runner/build.sh`（复制进项目） |
 | `config.conf` | `bundles/php-<版本>/bundle.conf`（按版本拆开） |
 | `lib/versions/*.conf` | 合并进各 `bundle.conf` |
@@ -88,9 +88,9 @@ phprt verify
 
 | v1 | v2 |
 | --- | --- |
-| `install.sh --profile minimal` | `phprt set 8.5.12 --ext "..."` |
-| `phprt init` | `phprt set` 自动生成 `myphp` |
-| `phprt build --only php` | `phprt set 8.5.12 --recompile` |
+| `install.sh --profile minimal` | `phprt install 8.5.12 --ext "..."` |
+| `phprt init` | `phprt install` 自动生成 `myphp` |
+| `phprt build --only php` | `phprt install 8.5.12 --recompile` |
 | `phprt modules` | `phprt list` / `phprt current` |
 | `phprt exec -- ...` | `./myphp ...` |
 | `phprt home` | 无（路径固定在项目 `.phprt`） |
@@ -103,7 +103,7 @@ cd /path/to/project
 rm -rf .phprt
 
 # 2) 用新仓库构建（源码缓存会从仓库 downloads/ 硬链接，不用重新下载）
-/path/to/phprt/phprt set 8.5.12 --ext "openssl zlib curl sqlite redis" --yes
+/path/to/phprt/phprt install 8.5.12 --ext "openssl zlib curl sqlite redis" --yes
 
 # 3) 验证
 ./myphp -v
@@ -149,7 +149,7 @@ eval "$(./myphp --shell)"   # 之后直接敲 php / composer
 新仓库、全 17 个扩展、真实项目（RoadRunner）：
 
 ```text
-phprt set 8.5.12 --ext "openssl zlib libxml2 curl sqlite mysqli mbstring intl
+phprt install 8.5.12 --ext "openssl zlib libxml2 curl sqlite mysqli mbstring intl
                         zip gd ffi redis protobuf xdebug apcu yaml swoole" --yes   → ok
 
 env -i ./myphp -m
