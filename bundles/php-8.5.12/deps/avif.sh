@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  libavif（gd 的 AVIF 支持；后端用 libaom，读/写都支持）
-#  phprt: switch=ENABLE_AVIF needs=aom
+#  phprt: switch=ENABLE_GD_AVIF needs=aom
 #  安装到: deps/avif-<版本>/
 #  可单独执行: lib/modules/deps/avif.sh
 # =============================================================================

@@ -13,18 +13,32 @@ load_config
 case "${1:-}" in
   --flags)
     if [ "${ENABLE_GD:-0}" = 1 ]; then
-      printf '%s\n' --enable-gd \
-        "--with-jpeg=$(dep_dir_of jpeg)" "--with-freetype=$(dep_dir_of freetype)"
-      if [ "${ENABLE_WEBP:-0}" = 1 ]; then printf '%s\n' "--with-webp=$(dep_dir_of webp)"; fi
-      if [ "${ENABLE_AVIF:-0}" = 1 ]; then printf '%s\n' "--with-avif=$(dep_dir_of avif)"; fi
+      printf '%s\n' --enable-gd
+      if [ "${ENABLE_GD_JPEG:-1}" = 1 ]; then
+        printf '%s\n' "--with-jpeg=$(dep_dir_of jpeg)"
+      else
+        printf '%s\n' --without-jpeg
+      fi
+      printf '%s\n' "--with-freetype=$(dep_dir_of freetype)"
+      if [ "${ENABLE_GD_WEBP:-1}" = 1 ]; then
+        printf '%s\n' "--with-webp=$(dep_dir_of webp)"
+      else
+        printf '%s\n' --without-webp
+      fi
+      if [ "${ENABLE_GD_AVIF:-1}" = 1 ]; then
+        printf '%s\n' "--with-avif=$(dep_dir_of avif)"
+      else
+        printf '%s\n' --without-avif
+      fi
     else
       printf '%s\n' --disable-gd
     fi ;;
   --needs)
     if [ "${ENABLE_GD:-0}" = 1 ]; then
-      printf '%s\n' libpng jpeg freetype
-      if [ "${ENABLE_WEBP:-0}" = 1 ]; then printf '%s\n' webp; fi
-      if [ "${ENABLE_AVIF:-0}" = 1 ]; then printf '%s\n' aom avif; fi
+      printf '%s\n' libpng freetype
+      if [ "${ENABLE_GD_JPEG:-1}" = 1 ]; then printf '%s\n' jpeg; fi
+      if [ "${ENABLE_GD_WEBP:-1}" = 1 ]; then printf '%s\n' webp; fi
+      if [ "${ENABLE_GD_AVIF:-1}" = 1 ]; then printf '%s\n' aom avif; fi
     fi ;;
   *) die "由 php.sh 调用: $0 --flags | --needs" ;;
 esac

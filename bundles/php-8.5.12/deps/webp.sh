@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  phprt: switch=ENABLE_WEBP
+#  phprt: switch=ENABLE_GD_WEBP
 #  libwebp（gd 的 WebP 支持）
 #  安装到: deps/webp-<版本>/
 #  可单独执行: lib/modules/deps/webp.sh

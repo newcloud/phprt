@@ -101,6 +101,10 @@ ABI 版本号）、SONAME 同步改写，所有消费方的 `DT_NEEDED` 一起�
 **3. downloads 支持离线。** 可以提前把源码包放进 `downloads/`，构建时直接硬链接到项目，
 不联网；缺哪个才按 URL 下载。
 
+**4. gd 的图片格式可配。** `gd` 默认支持 PNG / JPEG / AVIF / WebP（PNG 由 libpng 提供，
+无法单独关闭）；想关掉某个格式，改 bundle.conf 里的 `ENABLE_GD_JPEG` / `ENABLE_GD_AVIF` /
+`ENABLE_GD_WEBP`，重编后生效。`phprt verify` 会核对实际格式支持与开关一致。
+
 ## 文档
 
 - [运行时库的 wheel 化](docs/WHEEL-LIBS.md)
