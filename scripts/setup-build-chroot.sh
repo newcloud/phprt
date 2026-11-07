@@ -9,7 +9,7 @@
 #     --remove    安全删除 rootfs：先卸载 → 确认 0 挂载 → 再删除（推荐，勿手写 rm -rf）
 #     --dry-run   只预览删除对象（隐含 --remove），不做任何修改
 #     --force     仍有进程使用 rootfs 时也继续（默认拒绝并列出 PID）
-#     chroot路径  默认 <仓库>/buildroot（只允许 <仓库>/buildroot*）
+#     chroot路径  默认沿用上次 setup 的路径（.buildroot.conf），否则 <仓库>/buildroot
 #     releasever  默认与当前系统 VERSION_ID 一致（如需其它版本再指定）
 #
 # 生成的脚本（放在仓库根，与 buildroot/ 同级）：
@@ -24,6 +24,7 @@
 #
 # 环境变量：PHPRT_CHROOT_PASS  sudo 密码（默认交互输入）
 #          PHPRT_CHROOT_BIND   要绑定进 chroot 的目录（默认仓库的父目录）
+#          PHPRT_CHROOT_ROOT   指定 rootfs 路径（等价于第一个位置参数）
 #          PHPRT_DNF_CACHE     dnf 下载缓存目录（默认 /var/cache/dnf-phprt，
 #                              跨 rootfs 复用，删除/重建 buildroot 不丢包）
 #
@@ -33,12 +34,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_PROJECT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BIND_ROOT="${PHPRT_CHROOT_BIND:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+CONF="$HOST_PROJECT/.buildroot.conf"
+ROOT_DEFAULT=""
+BIND_DEFAULT=""
+if [ -f "$CONF" ]; then
+  # shellcheck disable=SC1090
+  . "$CONF"
+fi
+BIND_ROOT="${PHPRT_CHROOT_BIND:-${BIND_DEFAULT:-$(cd "$SCRIPT_DIR/../.." && pwd)}}"
 log()  { printf '[chroot] %s\n' "$*"; }
 die()  { printf '错误: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '7,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '7,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 REMOVE=0
@@ -54,7 +62,8 @@ for a in "$@"; do
     *)         POSARGS+=("$a") ;;
   esac
 done
-CHROOT="${POSARGS[0]:-$HOST_PROJECT/buildroot}"
+CHROOT="${POSARGS[0]:-${PHPRT_CHROOT_ROOT:-${ROOT_DEFAULT:-$HOST_PROJECT/buildroot}}}"
+CHROOT="$(realpath -m -- "$CHROOT")"
 RELVER="${POSARGS[1]:-$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID:-}")}"
 SUDO_PASS="${PHPRT_CHROOT_PASS:-}"
 DNF_CACHE="${PHPRT_DNF_CACHE:-/var/cache/dnf-phprt}"
@@ -121,8 +130,12 @@ remove_rootfs() {
   [ ! -L "$CHROOT" ] || die "拒绝删除：$CHROOT 是符号链接"
   real="$(realpath -m -- "$CHROOT")"
   case "$real" in
-    "$HOST_PROJECT"/buildroot|"$HOST_PROJECT"/buildroot-*|"$HOST_PROJECT"/buildroot.*) ;;
-    *) die "拒绝删除：只允许 $HOST_PROJECT/buildroot*（当前解析为: $real）" ;;
+    "$HOST_PROJECT"/*) ;;
+    *) die "拒绝删除：只允许 $HOST_PROJECT 下的目录（当前解析为: $real）" ;;
+  esac
+  case "$(basename "$real")" in
+    *buildroot*) ;;
+    *) die "拒绝删除：目录名必须包含 buildroot（当前: $real）" ;;
   esac
 
   local scripts=("$HOST_PROJECT/enter-build-chroot.sh" "$HOST_PROJECT/unmount-build-chroot.sh")
@@ -133,6 +146,7 @@ remove_rootfs() {
     for f in "${scripts[@]}"; do
       [ -e "$f" ] && rm -f -- "$f" && log "已删除生成脚本: $f"
     done
+    [ -e "$CONF" ] && [ "${ROOT_DEFAULT:-}" = "$real" ] && rm -f -- "$CONF" && log "已删除配置: $CONF"
     return 0
   fi
 
@@ -150,6 +164,7 @@ remove_rootfs() {
     fi
     echo "  使用进程  : ${procs:-无}"
     echo "  将删除脚本: ${scripts[*]}"
+    echo "  将删除配置: $CONF"
     echo "  删除方式  : 先卸载 → 确认 0 挂载 → sudo rm -rf --one-file-system"
     return 0
   fi
@@ -197,6 +212,7 @@ remove_rootfs() {
   for f in "${scripts[@]}"; do
     [ -e "$f" ] && rm -f -- "$f" && log "已删除生成脚本: $f"
   done
+  [ -e "$CONF" ] && [ "${ROOT_DEFAULT:-}" = "$real" ] && rm -f -- "$CONF" && log "已删除配置: $CONF"
 }
 
 # 0. 前置校验 + 互斥锁 + sudo
@@ -243,6 +259,11 @@ sudo rm -f "$CHROOT/etc/resolv.conf"
 sudo cp -L /etc/resolv.conf "$CHROOT/etc/resolv.conf"
 log "已复制 /etc/resolv.conf"
 
+# 2b. 记录实际路径，供生成的 enter/unmount 读取（支持自定义 rootfs 目录名）
+printf '# 由 scripts/setup-build-chroot.sh 生成；enter/unmount 读取\nROOT_DEFAULT=%q\nBIND_DEFAULT=%q\n' \
+  "$CHROOT" "$BIND_ROOT" > "$CONF"
+log "已写入 $CONF（rootfs: $CHROOT）"
+
 # 3. 生成进入脚本（放在仓库根，与 buildroot/ 同级）
 cat > "$HOST_PROJECT/enter-build-chroot.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -250,8 +271,12 @@ cat > "$HOST_PROJECT/enter-build-chroot.sh" <<'EOF'
 # /dev 是最小化 tmpfs（不 rbind 宿主 /dev），只放构建必需的设备节点
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$HERE/buildroot"
-BIND="${PHPRT_CHROOT_BIND:-$(cd "$HERE/.." && pwd)}"
+CONF="$HERE/.buildroot.conf"
+ROOT_DEFAULT=""
+BIND_DEFAULT=""
+[ -f "$CONF" ] && . "$CONF"
+ROOT="${PHPRT_CHROOT_ROOT:-${ROOT_DEFAULT:-$HERE/buildroot}}"
+BIND="${PHPRT_CHROOT_BIND:-${BIND_DEFAULT:-$(cd "$HERE/.." && pwd)}}"
 PASS="${PHPRT_CHROOT_PASS:-}"
 LOCK="$HERE/.buildroot.lock"
 
@@ -326,8 +351,12 @@ cat > "$HOST_PROJECT/unmount-build-chroot.sh" <<'EOF'
 # unmount-build-chroot.sh — 卸载 chroot 的全部挂载（proc/sys/dev/pts/项目绑定）
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$HERE/buildroot"
-BIND="${PHPRT_CHROOT_BIND:-$(cd "$HERE/.." && pwd)}"
+CONF="$HERE/.buildroot.conf"
+ROOT_DEFAULT=""
+BIND_DEFAULT=""
+[ -f "$CONF" ] && . "$CONF"
+ROOT="${PHPRT_CHROOT_ROOT:-${ROOT_DEFAULT:-$HERE/buildroot}}"
+BIND="${PHPRT_CHROOT_BIND:-${BIND_DEFAULT:-$(cd "$HERE/.." && pwd)}}"
 PASS="${PHPRT_CHROOT_PASS:-}"
 if [ -n "$PASS" ]; then echo "$PASS" | sudo -S -v; else sudo -v; fi
 
