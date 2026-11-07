@@ -29,36 +29,47 @@ phprt 现在只在宿主直接源码编译。干净环境复现、隔离宿主�
 
 ```
 <仓库>/
-  buildroots/
-    <名字>/                     # dnf --installroot 目标 = chroot 根（~659M）
-      usr/ bin/ etc/ ...
-  .buildroot.conf               # 记录默认 rootfs 路径和绑定目录
+  .buildroot.conf               # 记录上次使用的路径和绑定目录
+  .buildroots.list              # 记录创建过的路径（list 用）
   .buildroot.lock               # 运行期互斥锁
   scripts/buildroot.sh          # 唯一实现（create/enter/unmount/remove/status/list/use）
 ```
 
-将来集成进项目时改成 `<项目>/.phprt/buildroots/<名字>/`，命令不变。
+rootfs 位置**由用户在命令里指定**，可以是任意目录、相对路径按当前目录解析：
+
+```bash
+cd <某目录>
+./phprt buildroot create ./buildroot        # <某目录>/buildroot
+./phprt buildroot create ../buildrootabc    # <某目录>/../buildrootabc
+./phprt buildroot create /data/php-build    # 绝对路径
+```
+
+create 会在目标目录写一个 `.phprt-buildroot` 标记；只有带这个标记的目录才允许 `remove`。
+
+将来集成进项目时，rootfs 位置可改为 `<项目>/.phprt/buildroots/<名字>/`，命令不变。
 
 ## 命令
 
 ```
-./phprt buildroot create [名字] [releasever]
-./phprt buildroot enter  [名字]
-./phprt buildroot unmount [名字]
-./phprt buildroot remove [名字] [--dry-run] [--force]
-./phprt buildroot status [名字]
+./phprt buildroot create <路径> [releasever]
+./phprt buildroot enter  [路径]
+./phprt buildroot unmount [路径]
+./phprt buildroot remove [路径] [--dry-run] [--force]
+./phprt buildroot status [路径]
 ./phprt buildroot list
-./phprt buildroot use <名字>
+./phprt buildroot use <路径>
 ```
 
-- `create`：`dnf --installroot` 装最小包清单 → 复制 resolv.conf → 写入 `.buildroot.conf`
-  （默认名 `buildroot`；releasever 默认跟随系统；幂等，可重复执行续装）
-- `enter`：挂载 → 进入 shell，`exit` 时自动卸载；带名字时同时设为默认
+- `create`：`dnf --installroot` 装最小包清单 → 复制 resolv.conf → 写 `.phprt-buildroot` 标记
+  → 记录默认路径（releasever 默认跟随系统；幂等，可重复执行续装）
+- `enter`：挂载 → 进入 shell，`exit` 时自动卸载；同时把该路径设为默认
 - `unmount`：手动清理异常残留的挂载（可随时执行，不加锁）
 - `remove`：先卸载，确认 0 挂载后再删；`--dry-run` 只预览，`--force` 跳过进程检查
 - `status`：路径、大小、包数、挂载、占用进程
-- `list`：列出 `buildroots/` 下所有 rootfs
-- `use`：改默认 rootfs，不进入
+- `list`：列出创建过的路径（记录在 `.buildroots.list`）
+- `use`：改默认路径，不进入
+
+省略路径时使用上次的路径（`.buildroot.conf`）；没有记录时会要求显式给出。
 
 日常只会用到三个：`create` → `enter` → 用完 `exit`（自动卸载）。
 
@@ -141,25 +152,23 @@ tar xz bzip2 unzip curl binutils diffutils gawk openssl util-linux
 ## 参考实现（`scripts/buildroot.sh`，经 `./phprt buildroot` 调用）
 
 ```bash
-cd <仓库>
-./phprt buildroot create              # 创建/续装默认 rootfs（releasever 跟随系统）
-./phprt buildroot create abc          # 命名 rootfs：buildroots/abc
-./phprt buildroot enter abc           # 进入（exit 自动卸载，并设为默认）
-./phprt buildroot unmount             # 手动兜底卸载
-./phprt buildroot remove --dry-run    # 预览删除对象，不做修改
-./phprt buildroot remove              # 卸载 → 确认 0 挂载 → 删除
-./phprt buildroot remove abc --force  # 仍有进程占用时强制
-./phprt buildroot status / list / use <名字>
+cd <任意目录>
+./phprt buildroot create ../buildrootabc   # 相对当前目录 → <上级>/buildrootabc
+./phprt buildroot enter  ../buildrootabc   # 进入（exit 自动卸载，并设为默认）
+./phprt buildroot unmount ../buildrootabc  # 手动兜底卸载
+./phprt buildroot remove ../buildrootabc --dry-run   # 预览删除对象，不做修改
+./phprt buildroot remove ../buildrootabc             # 卸载 → 确认 0 挂载 → 删除
+./phprt buildroot remove ../buildrootabc --force     # 仍有进程占用时强制
+./phprt buildroot status / list / use <路径>
 ```
 
-- rootfs 统一在 `<仓库>/buildroots/<名字>`；默认名 `buildroot`
-- 默认 rootfs 记录在 `.buildroot.conf`；`enter <名字>` / `use <名字>` 可切换；
-  临时覆盖用 `PHPRT_CHROOT_ROOT=<路径>`
+- rootfs 位置完全由参数决定：相对路径按当前目录解析，绝对路径原样使用
+- 上次使用的路径记录在 `.buildroot.conf`；省略路径时沿用它；临时覆盖用 `PHPRT_CHROOT_ROOT=<路径>`
 - dnf 下载缓存默认 `/var/cache/dnf-phprt`（`keepcache=True` + 共享 `cachedir`），
   删除/重建 rootfs 不丢包；实测第二次重建 54.5s → 12s（缓存 294M），可用 `PHPRT_DNF_CACHE` 覆盖
 - chroot 内 `/dev` 为最小 tmpfs（6 个设备节点 + 独立 devpts + shm），不暴露宿主设备
 - `trap cleanup EXIT` 在首个 mount 之前，mount 中途失败也会回滚
-- `remove`：只接受 `buildroots/` 下、看起来是 rootfs 的目录；拒绝符号链接；
+- `remove`：只删除带 `.phprt-buildroot` 标记且看起来是 rootfs 的目录；拒绝符号链接、`/`、`$HOME`；
   卸载后残留必须为 0；删除用 `rm -rf --one-file-system`；有进程占用时默认拒绝（`--force` 跳过）
 - `create` / `enter` / `remove` 用 `flock` 互斥；`unmount` 不加锁，可随时兜底
 - 实测：409 包 / 659M；挂载 6 处；异常退出（kill -9）残留可用 `unmount` 或 `remove` 清理

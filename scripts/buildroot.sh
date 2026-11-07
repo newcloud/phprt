@@ -2,35 +2,39 @@
 # buildroot.sh — chroot 构建环境的唯一入口（由 `phprt buildroot` 转发）
 #
 # 用法：
-#   ./phprt buildroot create [名字] [releasever]   创建/续装（默认 buildroot）
-#   ./phprt buildroot enter  [名字]                进入（exit 自动卸载）
-#   ./phprt buildroot unmount [名字]               只卸载挂载
-#   ./phprt buildroot remove [名字] [--dry-run] [--force]  安全删除
-#   ./phprt buildroot status [名字]                查看状态
-#   ./phprt buildroot list                         列出全部 rootfs
-#   ./phprt buildroot use <名字>                   设为默认
+#   ./phprt buildroot create <路径> [releasever]   创建/续装
+#   ./phprt buildroot enter  [路径]                进入（exit 自动卸载）
+#   ./phprt buildroot unmount [路径]               只卸载挂载
+#   ./phprt buildroot remove [路径] [--dry-run] [--force]  安全删除
+#   ./phprt buildroot status [路径]                 查看状态
+#   ./phprt buildroot list                          列出创建过的环境
+#   ./phprt buildroot use <路径>                    设为默认
 #
-# rootfs 统一放在 <仓库>/buildroots/<名字>；默认名 buildroot。
+# 路径规则：
+#   - 相对路径按「执行命令时的当前目录」解析，如 cd blog && create ../buildrootabc
+#   - 绝对路径原样使用
+#   - 省略路径时用上次使用的路径（记录在仓库 .buildroot.conf）
+#
+# 安全约定：
+#   1. chroot 内 /dev 是最小 tmpfs（null/zero/full/random/urandom/tty + 独立 devpts），
+#      不 rbind 宿主 /dev。
+#   2. remove 只处理参数里给的路径：必须是 create 创建的目录（有 .phprt-buildroot 标记）、
+#      不是符号链接、不是 / 或 $HOME；卸载 → 残留必须为 0 → rm -rf --one-file-system。
+#      有进程占用时默认拒绝（--force 跳过）。
+#   3. create/enter/remove 用 flock 互斥。
 #
 # 环境变量：
 #   PHPRT_CHROOT_PASS   sudo 密码（默认交互输入）
 #   PHPRT_CHROOT_BIND   绑定进 chroot 的目录（默认仓库的父目录）
 #   PHPRT_DNF_CACHE     dnf 下载缓存（默认 /var/cache/dnf-phprt）
-#
-# 安全约定：
-#   1. chroot 内 /dev 是最小 tmpfs（null/zero/full/random/urandom/tty + 独立 devpts），
-#      不 rbind 宿主 /dev。
-#   2. 删除只走 remove：卸载 → 残留必须为 0 → rm -rf --one-file-system；
-#      有进程占用时默认拒绝（--force 跳过）。
-#   3. create/enter/remove 用 flock 互斥。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_PROJECT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ROOTBASE="$HOST_PROJECT/buildroots"
 CONF="$HOST_PROJECT/.buildroot.conf"
+REG="$HOST_PROJECT/.buildroots.list"
 LOCK="$HOST_PROJECT/.buildroot.lock"
-DEFAULT_NAME="buildroot"
+MARKER=".phprt-buildroot"
 
 BIND_ROOT="${PHPRT_CHROOT_BIND:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 SUDO_PASS="${PHPRT_CHROOT_PASS:-}"
@@ -41,7 +45,7 @@ log() { printf '[buildroot] %s\n' "$*"; }
 die() { printf '错误: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '3,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 sudo_q() {
@@ -83,41 +87,63 @@ load_conf() {
 
 write_conf() {
   local root="$1"
-  printf '# 由 phprt buildroot 生成\nROOT_DEFAULT=%q\nBIND_DEFAULT=%q\n' \
+  printf '# 由 phprt buildroot 生成（记录上次使用的路径）\nROOT_DEFAULT=%q\nBIND_DEFAULT=%q\n' \
     "$root" "$BIND_ROOT" > "$CONF"
-  log "默认 rootfs: $root"
+  log "默认路径: $root"
 }
 
-valid_name() {
-  case "$1" in ""|.|..|*/*) return 1 ;; esac
-  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+remember() {
+  local root="$1"
+  grep -Fxq -- "$root" "$REG" 2>/dev/null || printf '%s\n' "$root" >> "$REG"
 }
 
-# 解析 rootfs 路径：无名字 → 配置文件里的默认值
-root_of() {
-  local name="${1:-}"
-  if [ -z "$name" ]; then
+# 解析路径：相对当前目录；省略则用上次使用
+resolve_path() {
+  local arg="${1:-}"
+  if [ -z "$arg" ]; then
     if [ -n "${PHPRT_CHROOT_ROOT:-}" ]; then
       realpath -m -- "$PHPRT_CHROOT_ROOT"
       return
     fi
     load_conf
-    if [ -n "${ROOT_DEFAULT:-}" ]; then
-      printf '%s' "$ROOT_DEFAULT"
-    else
-      printf '%s/%s' "$ROOTBASE" "$DEFAULT_NAME"
-    fi
+    [ -n "${ROOT_DEFAULT:-}" ] \
+      || die "请指定路径，例：./phprt buildroot create ../buildrootabc"
+    printf '%s' "$ROOT_DEFAULT"
     return
   fi
-  case "$name" in
-    /*) realpath -m -- "$name" ;;
-    *)  valid_name "$name" || die "名字不合法: $name（只允许字母数字 . _ -）"
-        printf '%s/%s' "$ROOTBASE" "$name" ;;
-  esac
+  realpath -m -- "$arg"
 }
 
 looks_rootfs() {
   [ -f "$1/etc/os-release" ] && [ -x "$1/usr/bin/bash" ]
+}
+
+is_created() {
+  [ -f "$1/$MARKER" ]
+}
+
+# create 时禁止直接写进仓库自身或它的源码目录
+check_create_target() {
+  local root="$1"
+  [ "$root" != "/" ] || die "拒绝使用 / 作为 rootfs"
+  [ "$root" != "$HOME" ] || die "拒绝使用 \$HOME 作为 rootfs"
+  case "$root" in
+    "$HOST_PROJECT"|"$HOST_PROJECT"/scripts|"$HOST_PROJECT"/runner|"$HOST_PROJECT"/bundles|\
+    "$HOST_PROJECT"/docs|"$HOST_PROJECT"/downloads|"$HOST_PROJECT"/bin|"$HOST_PROJECT"/tools|\
+    "$HOST_PROJECT"/vendor|"$HOST_PROJECT"/.git|"$HOST_PROJECT"/.phprt)
+      die "拒绝写入仓库目录: $root" ;;
+  esac
+}
+
+# remove 时只允许删除 create 创建、且确实是 rootfs 的目录
+check_remove_target() {
+  local root="$1"
+  [ ! -L "$root" ] || die "拒绝删除：$root 是符号链接"
+  [ "$root" != "/" ] || die "拒绝删除 /"
+  [ "$root" != "$HOME" ] || die "拒绝删除 \$HOME"
+  [ -d "$root" ] || return 0
+  is_created "$root" || die "拒绝删除：$root 不是 phprt buildroot create 创建的（缺少 $MARKER）"
+  looks_rootfs "$root" || die "拒绝删除：$root 不像 rootfs"
 }
 
 mount_count() {
@@ -174,10 +200,11 @@ cleanup() {
 
 # ---------- create ----------
 cmd_create() {
-  local name="${1:-$DEFAULT_NAME}" relver="${2:-$RELVER_DEFAULT}"
-  valid_name "$name" || die "名字不合法: $name（只允许字母数字 . _ -）"
-  local root; root="$(root_of "$name")"
+  local root relver
+  root="$(resolve_path "${1:-}")"
+  relver="${2:-$RELVER_DEFAULT}"
   check_bind
+  check_create_target "$root"
 
   if [ -e "$root" ] && [ ! -d "$root" ]; then
     die "已存在同名文件，不能作为 rootfs: $root"
@@ -188,9 +215,9 @@ cmd_create() {
 
   take_lock
   sudo_auth
-  [ "$(mount_count "$root")" -eq 0 ] || die "rootfs 内仍有挂载，先跑：phprt buildroot unmount $name"
+  [ "$(mount_count "$root")" -eq 0 ] || die "rootfs 内仍有挂载，先跑：phprt buildroot unmount $root"
 
-  mkdir -p -- "$ROOTBASE"
+  sudo mkdir -p -- "$root"
   log "dnf --installroot=$root（releasever=${relver:-跟随系统}）"
   log "  dnf 下载缓存: $DNF_CACHE"
   sudo mkdir -p -- "$DNF_CACHE"
@@ -210,24 +237,28 @@ cmd_create() {
 
   sudo rm -f "$root/etc/resolv.conf"
   sudo cp -L /etc/resolv.conf "$root/etc/resolv.conf"
+
+  # 标记：只有带标记的目录才允许 remove
+  sudo_q sh -c 'printf "created_at=%s\n" "$1" > "$2"' sh "$(date -Is)" "$root/$MARKER"
   write_conf "$root"
+  remember "$root"
   log "完成：$root（$(sudo_q du -sh -- "$root" 2>/dev/null | cut -f1)）"
-  log "下一步：phprt buildroot enter $name"
+  log "下一步：phprt buildroot enter $root"
 }
 
 # ---------- enter ----------
 cmd_enter() {
-  local name="${1:-}"
-  local root; root="$(root_of "$name")"
+  local root; root="$(resolve_path "${1:-}")"
   check_bind
-  [ -d "$root" ] || die "rootfs 不存在: $root（先跑：phprt buildroot create${name:+ $name}）"
+  [ -d "$root" ] || die "rootfs 不存在: $root（先跑：phprt buildroot create $root）"
   looks_rootfs "$root" || die "目录不像 rootfs: $root"
 
   take_lock
-  if [ -n "$name" ]; then write_conf "$root"; fi
+  write_conf "$root"
+  remember "$root"
   sudo_auth
   [ "$(mount_count "$root")" -eq 0 ] \
-    || die "rootfs 内已有 $(mount_count "$root") 个挂载（上次未正常退出？），先跑：phprt buildroot unmount"
+    || die "rootfs 内已有 $(mount_count "$root") 个挂载（上次未正常退出？），先跑：phprt buildroot unmount $root"
 
   CLEANUP_ROOT="$root"
   trap cleanup EXIT
@@ -265,8 +296,8 @@ cmd_enter() {
 
 # ---------- unmount ----------
 cmd_unmount() {
-  local root; root="$(root_of "${1:-}")"
-  [ -d "$root" ] || die "rootfs 不存在: $root"
+  local root; root="$(resolve_path "${1:-}")"
+  [ -d "$root" ] || die "路径不存在: $root"
   sudo_auth
   log "卸载前挂载数: $(mount_count "$root")"
   unequip "$root"
@@ -282,40 +313,35 @@ cmd_unmount() {
 
 # ---------- remove ----------
 cmd_remove() {
-  local name="" dry=0 force=0 a
+  local path="" dry=0 force=0 a
   for a in "$@"; do
     case "$a" in
       --dry-run) dry=1 ;;
       --force)   force=1 ;;
       -*)        die "未知参数: $a" ;;
-      *)         [ -z "$name" ] || die "多余参数: $a"; name="$a" ;;
+      *)         [ -z "$path" ] || die "多余参数: $a"; path="$a" ;;
     esac
   done
 
-  local root; root="$(root_of "$name")"
-  local real; real="$(realpath -m -- "$root")"
-  [ ! -L "$root" ] || die "拒绝删除：$root 是符号链接"
-  case "$real" in
-    "$ROOTBASE"/*) ;;
-    *) die "拒绝删除：只允许 $ROOTBASE 下的 rootfs（当前: $real）" ;;
-  esac
-  [ "$real" != "$ROOTBASE" ] || die "拒绝删除 buildroots 根目录"
+  local root; root="$(resolve_path "$path")"
+  check_remove_target "$root"
 
-  if [ ! -d "$real" ]; then
-    log "不存在，无需删除: $real"
+  if [ ! -d "$root" ]; then
+    log "不存在，无需删除: $root"
+    load_conf
+    [ "${ROOT_DEFAULT:-}" = "$root" ] && rm -f -- "$CONF"
     return 0
   fi
-  looks_rootfs "$real" || die "目录不像 rootfs，拒绝删除: $real"
 
   sudo_auth
-  local procs; procs="$(chroot_procs "$real" | tr '\n' ' ' | sed 's/ *$//')"
+  local procs; procs="$(chroot_procs "$root" | tr '\n' ' ' | sed 's/ *$//')"
 
   if [ "$dry" -eq 1 ]; then
     echo "== dry-run：不做任何修改 =="
-    echo "  rootfs    : $real"
-    echo "  大小      : $(sudo_q du -sh -- "$real" 2>/dev/null | cut -f1)"
-    echo "  当前挂载  : $(mount_count "$real") 个"
-    show_mounts "$real"
+    echo "  rootfs    : $root"
+    echo "  大小      : $(sudo_q du -sh -- "$root" 2>/dev/null | cut -f1)"
+    echo "  当前挂载  : $(mount_count "$root") 个"
+    show_mounts "$root"
     echo "  使用进程  : ${procs:-无}"
     echo "  删除方式  : 卸载 → 确认 0 挂载 → sudo rm -rf --one-file-system"
     return 0
@@ -323,7 +349,7 @@ cmd_remove() {
 
   if [ -n "$procs" ]; then
     if [ "$force" -ne 1 ]; then
-      echo "拒绝删除：仍有进程在使用 $real：" >&2
+      echo "拒绝删除：仍有进程在使用 $root：" >&2
       local p
       for p in $procs; do echo "  PID $p" >&2; done
       echo "退出/结束这些进程后重试；确认强制删除可加 --force" >&2
@@ -333,35 +359,38 @@ cmd_remove() {
   fi
 
   take_lock
-  log "先卸载 $real"
-  unequip "$real"
-  local n; n="$(mount_count "$real")"
+  log "先卸载 $root"
+  unequip "$root"
+  local n; n="$(mount_count "$root")"
   if [ "$n" -ne 0 ]; then
-    show_mounts "$real" >&2
+    show_mounts "$root" >&2
     die "仍有 $n 个挂载残留，未做任何删除"
   fi
-  log "挂载已清零，删除 $real"
-  sudo rm -rf --one-file-system -- "$real"
-  log "已删除: $real"
+  log "挂载已清零，删除 $root"
+  sudo rm -rf --one-file-system -- "$root"
+  log "已删除: $root"
 
   load_conf
-  if [ "${ROOT_DEFAULT:-}" = "$real" ] && [ -e "$CONF" ]; then
+  if [ "${ROOT_DEFAULT:-}" = "$root" ] && [ -e "$CONF" ]; then
     rm -f -- "$CONF"
-    log "已删除默认配置: $CONF"
+    log "已清除默认路径记录: $CONF"
   fi
-  rmdir -- "$ROOTBASE" 2>/dev/null || true
 }
 
 # ---------- status / list / use ----------
 cmd_status() {
-  local name="${1:-}"
+  local root; root="$(resolve_path "${1:-}")"
   load_conf
-  local cur="${ROOT_DEFAULT:-$ROOTBASE/$DEFAULT_NAME}"
-  local root; root="$(root_of "$name")"
+  local cur="${ROOT_DEFAULT:-}"
   echo "rootfs    : $root"
-  if [ "$root" = "$cur" ]; then echo "默认      : 是"; else echo "默认      : 否（当前默认 $cur）"; fi
+  if [ -n "$cur" ] && [ "$root" = "$cur" ]; then echo "默认      : 是"; else echo "默认      : 否${cur:+（当前默认 $cur）}"; fi
   if [ ! -d "$root" ]; then echo "状态      : 不存在"; return 0; fi
-  looks_rootfs "$root" && echo "状态      : 可用" || echo "状态      : 目录存在但不像 rootfs"
+  if looks_rootfs "$root"; then
+    if is_created "$root"; then echo "状态      : 可用"; else echo "状态      : 可用（不是 create 创建的）"; fi
+  else
+    echo "状态      : 目录存在但不像 rootfs"
+    return 0
+  fi
   sudo_auth
   echo "大小      : $(sudo_q du -sh -- "$root" 2>/dev/null | cut -f1)"
   echo "包数      : $(sudo_q rpm --root "$root" -qa 2>/dev/null | wc -l)"
@@ -374,42 +403,44 @@ cmd_status() {
 
 cmd_list() {
   load_conf
-  local cur="${ROOT_DEFAULT:-$ROOTBASE/$DEFAULT_NAME}"
-  [ -d "$ROOTBASE" ] || { echo "（还没有 rootfs）"; return 0; }
-  local d n
-  for d in "$ROOTBASE"/*/; do
-    [ -d "$d" ] || continue
-    n="$(basename "$d")"
-    if looks_rootfs "$d"; then
-      printf '  %-20s %s%s\n' "$n" \
-        "$(sudo_q du -sh -- "${d%/}" 2>/dev/null | cut -f1)" \
-        "$([ "${d%/}" = "$cur" ] && echo '  <- 默认')"
-    else
-      printf '  %-20s %s\n' "$n" "(不像 rootfs，忽略)"
+  local cur="${ROOT_DEFAULT:-}"
+  [ -f "$REG" ] || { echo "（还没有创建过环境）"; return 0; }
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ ! -d "$p" ]; then
+      printf '  %-45s (已不存在)\n' "$p"
+      continue
     fi
-  done
+    if looks_rootfs "$p"; then
+      printf '  %-45s %s%s\n' "$p" \
+        "$(sudo_q du -sh -- "$p" 2>/dev/null | cut -f1)" \
+        "$([ "$p" = "$cur" ] && echo '  <- 默认')"
+    else
+      printf '  %-45s %s\n' "$p" "(不像 rootfs)"
+    fi
+  done < "$REG"
 }
 
 cmd_use() {
-  local name="${1:-}"
-  [ -n "$name" ] || die "用法: phprt buildroot use <名字>"
-  local root; root="$(root_of "$name")"
-  [ -d "$root" ] || die "rootfs 不存在: $root"
+  local root; root="$(resolve_path "${1:-}")"
+  [ -d "$root" ] || die "路径不存在: $root"
   looks_rootfs "$root" || die "目录不像 rootfs: $root"
   write_conf "$root"
+  remember "$root"
 }
 
 # ---------- dispatch ----------
 cmd="${1:-help}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
-  create)  [ $# -le 2 ] || die "用法: phprt buildroot create [名字] [releasever]"; cmd_create "$@" ;;
-  enter)   [ $# -le 1 ] || die "用法: phprt buildroot enter [名字]"; cmd_enter "$@" ;;
-  unmount) [ $# -le 1 ] || die "用法: phprt buildroot unmount [名字]"; cmd_unmount "$@" ;;
+  create)  [ $# -le 2 ] || die "用法: phprt buildroot create <路径> [releasever]"; cmd_create "$@" ;;
+  enter)   [ $# -le 1 ] || die "用法: phprt buildroot enter [路径]"; cmd_enter "$@" ;;
+  unmount) [ $# -le 1 ] || die "用法: phprt buildroot unmount [路径]"; cmd_unmount "$@" ;;
   remove)  cmd_remove "$@" ;;
-  status)  [ $# -le 1 ] || die "用法: phprt buildroot status [名字]"; cmd_status "$@" ;;
+  status)  [ $# -le 1 ] || die "用法: phprt buildroot status [路径]"; cmd_status "$@" ;;
   list)    [ $# -eq 0 ] || die "用法: phprt buildroot list"; cmd_list ;;
-  use)     cmd_use "$@" ;;
+  use)     [ $# -eq 1 ] || die "用法: phprt buildroot use <路径>"; cmd_use "$@" ;;
   help|-h|--help) usage ;;
   *) usage; die "未知命令: $cmd" ;;
 esac

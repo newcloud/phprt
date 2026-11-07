@@ -9,8 +9,10 @@ downloads/**
 # 在仓库根直接跑 phprt 时可能生成的项目目录
 /.phprt/
 
-# chroot 构建环境（phprt buildroot 生成，不进 git）
+# chroot 构建环境（phprt buildroot 生成的标记文件，不进 git）
 /buildroots/
+/*buildroot*/
 /.buildroot.conf
 /.buildroot.lock
+/.buildroots.list
 /.buildroot.lock
