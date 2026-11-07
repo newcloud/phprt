@@ -1,7 +1,7 @@
 # chroot 构建环境（buildroot）设计
 
-- 状态：设计讨论稿，未实施
-- 日期：2026-11-07
+- 状态：参考脚本已实现并实测（`scripts/setup-build-chroot.sh`）；`phprt buildroot` 子命令待集成
+- 日期：2026-11-07（2026-11-08 更新：最小 /dev、`--remove`/`--dry-run`/`--force`、flock）
 - 适用：phprt 的构建流程（`set` / `add ext` / `update`）
 
 ## 背景
@@ -65,6 +65,10 @@ phprt buildroot remove [--yes]
 
 `.phprt/buildroot` 平时就是**未挂载状态**，只有构建/enter 期间短暂挂载。
 
+实际挂载只有 6 处：`/proc`、`/sys`、`/dev`（tmpfs）、`/dev/pts`（独立 devpts）、
+`/dev/shm`（tmpfs）、项目目录（bind）。不使用 `--rbind /dev`，宿主磁盘和输入设备
+不会出现在 chroot 里。
+
 ## 构建集成
 
 `common.sh` 新增统一包装，4 个构建入口全覆盖：
@@ -74,12 +78,14 @@ phprt buildroot remove [--yes]
   （`set --plan` 只读，不走 chroot；`--recompile` / `--clean-src` 随 set 自动覆盖）
 - `chroot_exec()` 流程：
   1. rootfs 不存在 → 报错提示先跑 `phprt buildroot setup`
-  2. mount proc/sys/dev/devpts + `mount --bind` 项目目录和 phprt 仓库到**同路径**
-     （保证 configure 的 `--prefix` 等绝对路径不变）
+  2. 挂载 `/proc`、`/sys`；`/dev` 用 tmpfs + 只创建 null/zero/full/random/urandom/tty
+     + 独立 `devpts newinstance` + `/dev/shm`（**不 rbind 宿主 /dev**）；
+     `mount --bind` 项目目录和 phprt 仓库到**同路径**（保证 configure 的 `--prefix` 等绝对路径不变）
   3. `sudo chroot --userspec=<宿主uid:gid> <rootfs>` 执行
   4. `trap EXIT INT TERM` 自动卸载（返回码透传）
 - 产物属主：`--userspec` 以宿主用户构建，天然正确，不做 chown
-- 并发：rootfs 在项目内，项目构建锁（`.phprt.lock`）已互斥，无需额外全局锁
+- 并发：集成后沿用项目构建锁（`.phprt.lock`）；独立脚本自带 `flock`（`.buildroot.lock`），
+  setup / enter / remove 互斥，`unmount` 不加锁可随时兜底
 
 ## 启用方式
 
@@ -123,15 +129,40 @@ tar xz bzip2 unzip curl binutils diffutils gawk openssl util-linux
 - 构建结束/失败打印：「已自动卸载；如残留执行 phprt buildroot unmount」
 - `status` 显示剩余挂载和删除命令
 
+## 参考实现（`scripts/setup-build-chroot.sh`）
+
+`phprt buildroot` 子命令集成前，用仓库内脚本验证同一套机制：
+
+```bash
+cd <仓库>
+sudo ./scripts/setup-build-chroot.sh                  # 创建/续装 rootfs（releasever 默认跟随系统）
+./enter-build-chroot.sh                               # 进入（exit 自动卸载）
+./unmount-build-chroot.sh                             # 手动兜底卸载
+sudo ./scripts/setup-build-chroot.sh --dry-run        # 预览删除对象，不做修改
+sudo ./scripts/setup-build-chroot.sh --remove         # 卸载 → 确认 0 挂载 → 删除
+sudo ./scripts/setup-build-chroot.sh --remove --force # 仍有进程占用时强制
+```
+
+- 生成脚本放在仓库根（与 `buildroot/` 同级）；rootfs 默认 `<仓库>/buildroot`
+- chroot 内 `/dev` 为最小 tmpfs（6 个设备节点 + 独立 devpts + shm），不暴露宿主设备
+- `trap cleanup EXIT` 在首个 mount 之前，mount 中途失败也会回滚
+- `--remove`：只接受 `<仓库>/buildroot*`、拒绝符号链接；卸载后残留必须为 0；
+  删除用 `rm -rf --one-file-system`；有进程的 root/cwd 落在该 rootfs 内时默认拒绝（`--force` 跳过）
+- `setup` / `enter` / `remove` 用 `flock` 互斥；`--dry-run` 只打印预览
+- 实测：409 包 / 768M；挂载 6 处；异常退出（kill -9）残留可用 `unmount` 或 `--remove` 清理
+
+集成后 `phprt buildroot` 直接复用上述逻辑，独立脚本删除。
+
 ## 与现有独立脚本的关系
 
-集成后删除散落在仓库外的 `setup-build-chroot.sh` / `enter-build-chroot.sh` /
-`unmount-build-chroot.sh` 和 `buildroot/` 目录，逻辑全部收进 `phprt buildroot`。
+参考实现位于仓库 `scripts/setup-build-chroot.sh`（不在项目 `.phprt` 下）；生成的
+`enter-build-chroot.sh` / `unmount-build-chroot.sh` 放在仓库根。集成后逻辑全部收进
+`phprt buildroot`，这三个脚本与 `buildroot/` 目录删除。
 
 ## 待确认
 
 1. 路径语义：「`./phprt/buildroot`」指 `<项目>/.phprt/buildroot/`（本设计按此实现）
-2. 上述独立脚本集成后直接删除
+2. 集成完成后删除仓库内参考脚本和生成的脚本
 
 ## 实测计划
 
