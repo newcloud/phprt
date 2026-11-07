@@ -11,5 +11,7 @@ downloads/**
 
 # chroot 构建环境（scripts/setup-build-chroot.sh 生成的产物，不进 git）
 /buildroot/
+/.buildroot.lock
 /enter-build-chroot.sh
 /unmount-build-chroot.sh
+/.buildroot.lock
