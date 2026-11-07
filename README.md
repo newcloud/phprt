@@ -91,6 +91,32 @@ phprt set 8.5.12 --clean-src
 
 支持 `php-8.5.12`、`php-8.6.0-dev`、`php-7.4.33`（7.4 目前只有最小档）。
 
+## Demo：用 chroot 构建（可选）
+
+宿主工具链太杂、或想要干净可复现的构建环境时，可以在 chroot 里跑同一套 `phprt`：
+
+```bash
+cd /path/to/project
+
+# 1. 创建 chroot 环境（路径自己定；相对路径按当前目录解析）
+/path/to/phprt/phprt buildroot create ../buildrootabc
+
+# 2. 进入（自动挂载 proc/sys/最小 dev；exit 时自动卸载）
+/path/to/phprt/phprt buildroot enter ../buildrootabc
+
+# 3. 在 chroot 里按平时的方式构建（例如安装 PHP 8.5，命令见上方「使用示例」）
+
+# 4. 退出后查看状态 / 删除
+/path/to/phprt/phprt buildroot status ../buildrootabc
+/path/to/phprt/phprt buildroot remove ../buildrootabc
+```
+
+- 环境默认跟随当前系统版本（Fedora 43 实测）；`create ../buildrootabc 43` 可指定 releasever
+- dnf 包缓存默认在 `/var/cache/dnf-phprt`：删除、重建 rootfs 不用重新下载
+- `remove` 只删 `create` 创建过的目录（带 `.phprt-buildroot` 标记），且先卸载、确认 0 挂载
+- chroot 内是 root 构建；退出后按需 `sudo chown -R "$(id -u):$(id -g)" .phprt`
+- 实测：PHP 8.5.12 + 16 个指定扩展 → 加载 56 个扩展，`phprt verify` 全绿（gd 的 WebP/AVIF 均为 1）
+
 ## 特点
 
 **1. wheel 方式管理动态库。** 依赖库的名字换成稳定的运行时名（rt + SONAME 的
@@ -115,6 +141,7 @@ ABI 版本号）、SONAME 同步改写，所有消费方的 `DT_NEEDED` 一起�
 - [从 v1 重构到 v2](docs/REFACTOR-V1-TO-V2.md)
 - [项目本地自包含模型](docs/PROJECT-LOCAL.md)
 - [多 PHP 版本的配置组织](docs/PHP-VERSIONS.md)
+- [chroot 构建环境（可选）](docs/CHROOT-BUILD.md)
 
 ## 开发说明
 
