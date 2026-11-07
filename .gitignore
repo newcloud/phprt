@@ -8,3 +8,8 @@ downloads/**
 
 # 在仓库根直接跑 phprt 时可能生成的项目目录
 /.phprt/
+
+# chroot 构建环境（scripts/setup-build-chroot.sh 生成的产物，不进 git）
+/buildroot/
+/enter-build-chroot.sh
+/unmount-build-chroot.sh

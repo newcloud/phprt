@@ -23,7 +23,7 @@ phprt 类似 Python 的 uv，用一条命令为 PHP 项目配置一套隔离系�
 | `sha256sum` | `coreutils`（系统自带） | 算内容 hash（库改名）和校验源码包 |
 | `tar`、`xz`、`unzip` | `tar`、`xz`、`unzip` | 解压 `.tar.gz` / `.tar.xz` / `.zip` |
 | `ar` | `binutils` | SQLite 静态库 |
-| `m4`、`perl` | `m4`、`perl-interpreter` | 构建 OpenSSL、autoconf |
+| `m4`、`perl` | `m4`、`perl` | 构建 OpenSSL、autoconf（`perl-interpreter` 缺 `lib.pm`，OpenSSL Configure 会失败） |
 | `curl` | `curl` | 仅在 `downloads/` 和缓存里都找不到源码包时才联网下载 |
 
 一次装齐：
@@ -31,7 +31,7 @@ phprt 类似 Python 的 uv，用一条命令为 PHP 项目配置一套隔离系�
 ```bash
 # Fedora / RHEL
 sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config patchelf \
-    tar xz unzip binutils m4 perl-interpreter curl
+    tar xz unzip binutils m4 perl curl
 
 # Debian / Ubuntu
 sudo apt install build-essential cmake pkg-config patchelf \
