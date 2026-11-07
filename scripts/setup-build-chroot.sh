@@ -24,6 +24,8 @@
 #
 # 环境变量：PHPRT_CHROOT_PASS  sudo 密码（默认交互输入）
 #          PHPRT_CHROOT_BIND   要绑定进 chroot 的目录（默认仓库的父目录）
+#          PHPRT_DNF_CACHE     dnf 下载缓存目录（默认 /var/cache/dnf-phprt，
+#                              跨 rootfs 复用，删除/重建 buildroot 不丢包）
 #
 # 注：本脚本是设计文档 docs/CHROOT-BUILD.md 的参考实现；
 #     将来集成进 phprt buildroot 子命令后由它取代。
@@ -36,7 +38,7 @@ log()  { printf '[chroot] %s\n' "$*"; }
 die()  { printf '错误: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '7,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '7,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 REMOVE=0
@@ -55,6 +57,7 @@ done
 CHROOT="${POSARGS[0]:-$HOST_PROJECT/buildroot}"
 RELVER="${POSARGS[1]:-$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID:-}")}"
 SUDO_PASS="${PHPRT_CHROOT_PASS:-}"
+DNF_CACHE="${PHPRT_DNF_CACHE:-/var/cache/dnf-phprt}"
 LOCK="$HOST_PROJECT/.buildroot.lock"
 
 # 精确统计 rootfs 内挂载数（不用 grep 子串匹配，避免 buildroot-old 之类误判）
@@ -217,18 +220,23 @@ fi
 #    git 不装（下载全走 curl）；autoconf/re2c 不装（phprt 自动装到 tools/）。
 [ "$(mount_count)" -eq 0 ] || die "rootfs 内仍有 $(mount_count) 个挂载（可能正在使用），先跑 unmount-build-chroot.sh"
 log "dnf --installroot=$CHROOT 安装构建依赖（releasever 默认跟随当前系统）..."
+log "  dnf 下载缓存: $DNF_CACHE（跨 rootfs 复用，可用 PHPRT_DNF_CACHE 覆盖）"
+sudo mkdir -p -- "$DNF_CACHE"
 RELVER_ARGS=()
 [ -n "$RELVER" ] && RELVER_ARGS=(--releasever="$RELVER")
 sudo dnf -y \
   --installroot="$CHROOT" --use-host-config "${RELVER_ARGS[@]}" \
   --setopt=install_weak_deps=False \
+  --setopt=keepcache=True \
+  --setopt=cachedir="$DNF_CACHE" \
+  --setopt=max_parallel_downloads=10 \
   install gcc gcc-c++ make cmake patchelf \
     pkgconf-pkg-config perl m4 bison re2c \
     tar xz bzip2 unzip curl binutils diffutils gawk openssl util-linux \
     >/dev/null 9>&-
 # 注：perl 必须用完整包（perl-interpreter 缺 lib.pm，OpenSSL Configure 会失败）
 #     util-linux 提供 flock（phprt 构建锁，need_cmds flock 会 die）
-log "依赖安装完成"
+log "依赖安装完成（缓存: $(sudo_q du -sh -- "$DNF_CACHE" 2>/dev/null | cut -f1)）"
 
 # 2. chroot 内联网（resolv.conf 可能是悬空符号链接，先删再复制）
 sudo rm -f "$CHROOT/etc/resolv.conf"

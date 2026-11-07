@@ -144,6 +144,8 @@ sudo ./scripts/setup-build-chroot.sh --remove --force # 仍有进程占用时强
 ```
 
 - 生成脚本放在仓库根（与 `buildroot/` 同级）；rootfs 默认 `<仓库>/buildroot`
+- dnf 下载缓存默认 `/var/cache/dnf-phprt`（`keepcache=True` + 共享 `cachedir`），
+  删除/重建 rootfs 不丢包；实测第二次重建 54.5s → 12s（缓存 294M），可用 `PHPRT_DNF_CACHE` 覆盖
 - chroot 内 `/dev` 为最小 tmpfs（6 个设备节点 + 独立 devpts + shm），不暴露宿主设备
 - `trap cleanup EXIT` 在首个 mount 之前，mount 中途失败也会回滚
 - `--remove`：只接受 `<仓库>/buildroot*`、拒绝符号链接；卸载后残留必须为 0；
