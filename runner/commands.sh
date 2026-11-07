@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # phprt：命令实现
 
+# shellcheck disable=SC1091
+. "${BASH_SOURCE[0]%/*}/update-check.sh"
+
 usage() {
   cat <<'EOF'
 phprt
@@ -12,10 +15,14 @@ phprt
   phprt add ext <名字>
   phprt remove ext <名字>
   phprt update <依赖> <版本>
+  phprt outdated
   phprt verify
 
 phprt update 只升级一个依赖库的同系列小版本（如 openssl 3.5.7 -> 3.5.8）：
 只重编该依赖并替换 lib/phprt 里的运行时库，消费方不重编、DT_NEEDED 零改写。
+
+phprt outdated 只读检查已安装软件有没有同系列新版本，结果写入
+.phprt/cache/update-check/，不下载、不编译、不改 bundle.conf。
 
 示例:
   phprt set 8.5.12
@@ -541,6 +548,97 @@ cmd_update() {
   ok "phprt update $dep $oldver -> $newver 完成（消费方零改写、零重编）"
 }
 
+# phprt outdated：只读检查已安装的 PHP 和依赖库有没有同系列新版本。
+# 清单以实际安装为准（BUILD-ORDER + deps/ 实际目录），版本取自项目
+# bundle.conf；查询失败只影响本行，不中断其它软件，也不改任何文件。
+# 每次查询成功都写进 .phprt/cache/update-check/results.json，之后 update
+# 直接读缓存取版本，不再重复请求上游。
+# TTY 下动态刷新（先画整表，再原地更新行和底部进度）；非 TTY 输出静态表。
+cmd_outdated() {
+  need_cmds jq
+  local ver tree conf name vvar cur deps_line i rc out st up
+  local -a pkg cur_l disp hasq
+  local rows_file total nq n_up n_cur n_fail UC_RC UC_LATEST UC_STATUS
+  ver="$(current_version)" || die "还没有设置 current（先跑 phprt set <版本>）"
+  tree="$(tree_of "$ver")"
+  [ -x "$tree/bin/php" ] || die "树不存在或未构建: $tree"
+  conf="$PHPRT_HOME/bundles/php-$ver/bundle.conf"
+  [ -f "$conf" ] || die "找不到 $conf"
+  rows_file="$(mktemp "${TMPDIR:-/tmp}/phprt-outdated.XXXXXX")"
+
+  # 收集清单：PHP + 实际装了 deps 目录的库；bundle.conf 只当版本来源
+  pkg=(); cur_l=(); disp=(); hasq=()
+  pkg+=("php"); cur_l+=("$ver"); disp+=("PHP"); hasq+=("1")
+  while IFS= read -r deps_line; do
+    name="${deps_line#deps/}"
+    [ -n "$name" ] || continue
+    ls -d "$tree/deps/$name"-* >/dev/null 2>&1 || continue
+    if vvar="$(dep_version_var "$name")"; then
+      cur="$(sed -n "s/^$vvar=//p" "$conf" | head -1)"
+      [ -n "$cur" ] || cur='-'
+    else
+      cur='-'
+    fi
+    if uc_supported "$name"; then hasq+=("1"); else hasq+=("0"); fi
+    pkg+=("$name"); cur_l+=("$cur"); disp+=("$(uc_name "$name")")
+  done < <(grep '^deps/' "$tree/BUILD-ORDER" 2>/dev/null || true)
+
+  total="${#pkg[@]}"; nq=0; n_up=0; n_cur=0; n_fail=0
+  for i in "${!pkg[@]}"; do
+    [ "${hasq[$i]}" = 1 ] && nq=$((nq + 1))
+  done
+
+  # 非 TTY：直接输出最终静态表格（日志/管道里不出现 ANSI 控制字符）
+  if ! uc_tty; then
+    printf '%-12s %-12s %-12s %s\n' '软件包' '当前版本' '最新版本' '状态'
+    printf '%s\n' '---------------------------------------------'
+    for i in "${!pkg[@]}"; do
+      if [ "${hasq[$i]}" != 1 ]; then
+        uc_row "${disp[$i]}" "${cur_l[$i]}" '-' '暂不支持'
+        continue
+      fi
+      uc_consider "${pkg[$i]}" "${cur_l[$i]}" "$rows_file"
+      if [ "$UC_RC" = 0 ]; then
+        uc_row "${disp[$i]}" "${cur_l[$i]}" "$UC_LATEST" "$UC_STATUS"
+        if [ "$UC_STATUS" = '发现更新' ]; then n_up=$((n_up + 1)); else n_cur=$((n_cur + 1)); fi
+      else
+        uc_row "${disp[$i]}" "${cur_l[$i]}" '-' '查询失败'
+        n_fail=$((n_fail + 1))
+      fi
+    done
+    uc_cache_save "$rows_file"
+    rm -f "$rows_file"
+    return 0
+  fi
+
+  # TTY：先画整表，再逐个原地刷新行与底部进度
+  uc_draw_table pkg cur_l disp hasq "$nq"
+  trap 'uc_cache_save "$rows_file"; rm -f "$rows_file"; printf "\r\033[2K\n"; exit 130' INT
+  local done_n=0
+  for i in "${!pkg[@]}"; do
+    [ "${hasq[$i]}" = 1 ] || continue
+    uc_write_querying "${disp[$i]}"
+    uc_consider "${pkg[$i]}" "${cur_l[$i]}" "$rows_file"
+    up=$(( total + 2 - i ))   # 从「正在查询」行上移到第 i 个数据行
+    if [ "$UC_RC" = 0 ]; then
+      uc_update_row "$up" "${disp[$i]}" "${cur_l[$i]}" "$UC_LATEST" "$UC_STATUS"
+      if [ "$UC_STATUS" = '发现更新' ]; then n_up=$((n_up + 1)); else n_cur=$((n_cur + 1)); fi
+    else
+      uc_update_row "$up" "${disp[$i]}" "${cur_l[$i]}" '-' '查询失败'
+      n_fail=$((n_fail + 1))
+    fi
+    done_n=$((done_n + 1))
+    uc_write_progress "$done_n" "$nq"
+    uc_write_querying '-'
+  done
+  trap - INT
+  uc_cache_save "$rows_file"
+  rm -f "$rows_file"
+  # 统计与表格一致：暂不支持 = 总数 - 有查询器数
+  printf '\n\n检查完成：发现更新 %s 个，已是最新 %s 个，查询失败 %s 个，暂不支持 %s 个\n' \
+    "$n_up" "$n_cur" "$n_fail" "$(( total - nq ))"
+}
+
 cmd_verify() {
   require_project() { [ -d "$PHPRT_HOME" ] || die "还没有 .phprt"; }
   require_project
@@ -566,6 +664,43 @@ cmd_verify() {
       fi
     done
   done
+
+  # gd 启用时核对格式支持与 bundle.conf 的 ENABLE_GD_* 一致
+  if ( cd "$PHPRT_PROJECT" && ./myphp -m 2>/dev/null | grep -qx gd ); then
+    log "2b) gd 格式支持（对照 bundle.conf 的 ENABLE_GD_*）"
+    local gdconf="$PHPRT_HOME/bundles/php-$ver/bundle.conf"
+    local exp_jpg=1 exp_webp=1 exp_avif=1
+    if [ -f "$gdconf" ]; then
+      # shellcheck disable=SC1090
+      . "$gdconf"
+      exp_jpg="${ENABLE_GD_JPEG:-1}"
+      exp_webp="${ENABLE_GD_WEBP:-1}"
+      exp_avif="${ENABLE_GD_AVIF:-1}"
+    fi
+    local act f got exp gd_mismatch=0
+    act="$( ( cd "$PHPRT_PROJECT" && ./myphp -r '
+      $i = gd_info();
+      foreach (["PNG","JPEG","WebP","AVIF"] as $f) {
+        $k = "$f Support";
+        echo "$f=" . (!empty($i[$k]) ? "1" : "0") . "\n";
+      }') )"
+    while IFS='=' read -r f got; do
+      case "$f" in
+        PNG)  exp=1 ;;
+        JPEG) exp="$exp_jpg" ;;
+        WebP) exp="$exp_webp" ;;
+        AVIF) exp="$exp_avif" ;;
+        *)    continue ;;
+      esac
+      if [ "$got" = "$exp" ]; then
+        printf '    ✓ %s=%s\n' "$f" "$got"
+      else
+        printf '    ✗ %s: 期望 %s，实际 %s\n' "$f" "$exp" "$got"
+        gd_mismatch=1
+      fi
+    done <<< "$act"
+    [ "$gd_mismatch" = 0 ] || return 1
+  fi
 
   log "3) 动态库（安装根外只允许 glibc 等基础库）"
   local bad="" f
@@ -662,6 +797,7 @@ main() {
     add)      cmd_add "$@" ;;
     remove|rm) cmd_remove "$@" ;;
     update)   cmd_update "$@" ;;
+    outdated) cmd_outdated ;;
     verify)   cmd_verify ;;
     ""|-h|--help) usage ;;
     *)        die "未知命令: $cmd（--help 查看用法）" ;;

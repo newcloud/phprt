@@ -81,6 +81,9 @@ phprt remove ext yaml
 # 自检
 phprt verify
 
+# 检查已安装软件有没有同系列新版本（只读，不下载不编译）
+phprt outdated
+
 # 强制重编 PHP / 清源码重来
 phprt set 8.5.12 --recompile
 phprt set 8.5.12 --clean-src
