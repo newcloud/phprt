@@ -7,7 +7,6 @@
 #   ./phprt buildroot unmount [路径]               只卸载挂载
 #   ./phprt buildroot remove [路径] [--dry-run] [--force]  安全删除
 #   ./phprt buildroot status [路径]                 查看状态
-#   ./phprt buildroot list                          列出创建过的环境
 #   ./phprt buildroot use <路径>                    设为默认
 #
 # 路径规则：
@@ -32,7 +31,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_PROJECT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONF="$HOST_PROJECT/.buildroot.conf"
-REG="$HOST_PROJECT/.buildroots.list"
 LOCK="$HOST_PROJECT/.buildroot.lock"
 MARKER=".phprt-buildroot"
 
@@ -45,7 +43,7 @@ log() { printf '[buildroot] %s\n' "$*"; }
 die() { printf '错误: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '3,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 sudo_q() {
@@ -92,10 +90,6 @@ write_conf() {
   log "默认路径: $root"
 }
 
-remember() {
-  local root="$1"
-  grep -Fxq -- "$root" "$REG" 2>/dev/null || printf '%s\n' "$root" >> "$REG"
-}
 
 # 解析路径：相对当前目录；省略则用上次使用
 resolve_path() {
@@ -183,12 +177,12 @@ chroot_procs() {
 # 逐个显式卸载（子挂载在前，父挂载在后）；-R 失败退回 lazy
 unequip() {
   local r="$1"
-  sudo umount -R "$r/dev/pts" 2>/dev/null || sudo umount -l "$r/dev/pts" 2>/dev/null || true
-  sudo umount -R "$r/dev/shm" 2>/dev/null || sudo umount -l "$r/dev/shm" 2>/dev/null || true
+  sudo_q umount -R "$r/dev/pts" 2>/dev/null || sudo_q umount -l "$r/dev/pts" 2>/dev/null || true
+  sudo_q umount -R "$r/dev/shm" 2>/dev/null || sudo_q umount -l "$r/dev/shm" 2>/dev/null || true
   sudo umount -R "$r$BIND_ROOT" 2>/dev/null || sudo umount -l "$r$BIND_ROOT" 2>/dev/null || true
-  sudo umount -R "$r/dev"     2>/dev/null || sudo umount -l "$r/dev"     2>/dev/null || true
-  sudo umount -R "$r/proc"    2>/dev/null || sudo umount -l "$r/proc"    2>/dev/null || true
-  sudo umount -R "$r/sys"     2>/dev/null || sudo umount -l "$r/sys"     2>/dev/null || true
+  sudo_q umount -R "$r/dev"     2>/dev/null || sudo_q umount -l "$r/dev"     2>/dev/null || true
+  sudo_q umount -R "$r/proc"    2>/dev/null || sudo_q umount -l "$r/proc"    2>/dev/null || true
+  sudo_q umount -R "$r/sys"     2>/dev/null || sudo_q umount -l "$r/sys"     2>/dev/null || true
 }
 
 # EXIT trap 用全局变量，避免 local 变量在脚本退出时已失效
@@ -217,10 +211,10 @@ cmd_create() {
   sudo_auth
   [ "$(mount_count "$root")" -eq 0 ] || die "rootfs 内仍有挂载，先跑：phprt buildroot unmount $root"
 
-  sudo mkdir -p -- "$root"
+  sudo_q mkdir -p -- "$root"
   log "dnf --installroot=$root（releasever=${relver:-跟随系统}）"
   log "  dnf 下载缓存: $DNF_CACHE"
-  sudo mkdir -p -- "$DNF_CACHE"
+  sudo_q mkdir -p -- "$DNF_CACHE"
   local relargs=()
   [ -n "$relver" ] && relargs=(--releasever="$relver")
   sudo dnf -y \
@@ -231,17 +225,16 @@ cmd_create() {
     --setopt=max_parallel_downloads=10 \
     install gcc gcc-c++ make cmake patchelf \
       pkgconf-pkg-config perl m4 bison re2c \
-      tar xz bzip2 unzip curl binutils diffutils gawk openssl util-linux \
+      tar xz bzip2 unzip curl binutils diffutils gawk openssl util-linux jq \
       >/dev/null 9>&-
   log "依赖安装完成（缓存: $(sudo_q du -sh -- "$DNF_CACHE" 2>/dev/null | cut -f1)）"
 
-  sudo rm -f "$root/etc/resolv.conf"
-  sudo cp -L /etc/resolv.conf "$root/etc/resolv.conf"
+  sudo_q rm -f "$root/etc/resolv.conf"
+  sudo_q cp -L /etc/resolv.conf "$root/etc/resolv.conf"
 
   # 标记：只有带标记的目录才允许 remove
   sudo_q sh -c 'printf "created_at=%s\n" "$1" > "$2"' sh "$(date -Is)" "$root/$MARKER"
   write_conf "$root"
-  remember "$root"
   log "完成：$root（$(sudo_q du -sh -- "$root" 2>/dev/null | cut -f1)）"
   log "下一步：phprt buildroot enter $root"
 }
@@ -255,7 +248,6 @@ cmd_enter() {
 
   take_lock
   write_conf "$root"
-  remember "$root"
   sudo_auth
   [ "$(mount_count "$root")" -eq 0 ] \
     || die "rootfs 内已有 $(mount_count "$root") 个挂载（上次未正常退出？），先跑：phprt buildroot unmount $root"
@@ -291,7 +283,13 @@ cmd_enter() {
   sudo chroot "$root" /bin/bash --login 9>&-
   unequip "$root"
   CLEANUP_ROOT=""
-  log "已退出，挂载已自动卸载"
+  local n; n="$(mount_count "$root")"
+  if [ "$n" -eq 0 ]; then
+    log "已退出，挂载已全部卸载"
+  else
+    log "警告: 仍有 $n 个挂载残留，执行：phprt buildroot unmount $root"
+    show_mounts "$root" >&2
+  fi
 }
 
 # ---------- unmount ----------
@@ -367,7 +365,7 @@ cmd_remove() {
     die "仍有 $n 个挂载残留，未做任何删除"
   fi
   log "挂载已清零，删除 $root"
-  sudo rm -rf --one-file-system -- "$root"
+  sudo_q rm -rf --one-file-system -- "$root"
   log "已删除: $root"
 
   load_conf
@@ -401,33 +399,12 @@ cmd_status() {
   echo "使用进程  : ${p:-无}"
 }
 
-cmd_list() {
-  load_conf
-  local cur="${ROOT_DEFAULT:-}"
-  [ -f "$REG" ] || { echo "（还没有创建过环境）"; return 0; }
-  local p
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    if [ ! -d "$p" ]; then
-      printf '  %-45s (已不存在)\n' "$p"
-      continue
-    fi
-    if looks_rootfs "$p"; then
-      printf '  %-45s %s%s\n' "$p" \
-        "$(sudo_q du -sh -- "$p" 2>/dev/null | cut -f1)" \
-        "$([ "$p" = "$cur" ] && echo '  <- 默认')"
-    else
-      printf '  %-45s %s\n' "$p" "(不像 rootfs)"
-    fi
-  done < "$REG"
-}
 
 cmd_use() {
   local root; root="$(resolve_path "${1:-}")"
   [ -d "$root" ] || die "路径不存在: $root"
   looks_rootfs "$root" || die "目录不像 rootfs: $root"
   write_conf "$root"
-  remember "$root"
 }
 
 # ---------- dispatch ----------
@@ -439,7 +416,6 @@ case "$cmd" in
   unmount) [ $# -le 1 ] || die "用法: phprt buildroot unmount [路径]"; cmd_unmount "$@" ;;
   remove)  cmd_remove "$@" ;;
   status)  [ $# -le 1 ] || die "用法: phprt buildroot status [路径]"; cmd_status "$@" ;;
-  list)    [ $# -eq 0 ] || die "用法: phprt buildroot list"; cmd_list ;;
   use)     [ $# -eq 1 ] || die "用法: phprt buildroot use <路径>"; cmd_use "$@" ;;
   help|-h|--help) usage ;;
   *) usage; die "未知命令: $cmd" ;;

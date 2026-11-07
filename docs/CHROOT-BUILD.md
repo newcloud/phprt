@@ -30,7 +30,6 @@ phprt 现在只在宿主直接源码编译。干净环境复现、隔离宿主�
 ```
 <仓库>/
   .buildroot.conf               # 记录上次使用的路径和绑定目录
-  .buildroots.list              # 记录创建过的路径（list 用）
   .buildroot.lock               # 运行期互斥锁
   scripts/buildroot.sh          # 唯一实现（create/enter/unmount/remove/status/list/use）
 ```
@@ -56,7 +55,6 @@ create 会在目标目录写一个 `.phprt-buildroot` 标记；只有带这个�
 ./phprt buildroot unmount [路径]
 ./phprt buildroot remove [路径] [--dry-run] [--force]
 ./phprt buildroot status [路径]
-./phprt buildroot list
 ./phprt buildroot use <路径>
 ```
 
@@ -66,7 +64,6 @@ create 会在目标目录写一个 `.phprt-buildroot` 标记；只有带这个�
 - `unmount`：手动清理异常残留的挂载（可随时执行，不加锁）
 - `remove`：先卸载，确认 0 挂载后再删；`--dry-run` 只预览，`--force` 跳过进程检查
 - `status`：路径、大小、包数、挂载、占用进程
-- `list`：列出创建过的路径（记录在 `.buildroots.list`）
 - `use`：改默认路径，不进入
 
 省略路径时使用上次的路径（`.buildroot.conf`）；没有记录时会要求显式给出。
@@ -134,12 +131,13 @@ create 会在目标目录写一个 `.phprt-buildroot` 标记；只有带这个�
 
 ```
 gcc gcc-c++ make cmake patchelf pkgconf-pkg-config perl m4 bison re2c
-tar xz bzip2 unzip curl binutils diffutils gawk openssl util-linux
+tar xz bzip2 unzip curl binutils diffutils gawk openssl util-linux jq
 ```
 
 - `dnf --setopt=install_weak_deps=False`（perl 会拖 130+ 个弱依赖子包）
 - `perl` 必须用完整包：`perl-interpreter` 缺 `lib.pm`，OpenSSL Configure 会失败
 - `util-linux` 提供 `flock`（构建锁，`need_cmds flock` 会 die）
+- `jq` 解析 php.net / GitHub API 的 JSON（`install`/`update`/`outdated` 会检查）
 - `git` 不需要（下载全走 curl）；`autoconf` / `re2c` 不需要（phprt 自动装到 tools/）
 
 ## 透明性提示
@@ -159,7 +157,7 @@ cd <任意目录>
 ./phprt buildroot remove ../buildrootabc --dry-run   # 预览删除对象，不做修改
 ./phprt buildroot remove ../buildrootabc             # 卸载 → 确认 0 挂载 → 删除
 ./phprt buildroot remove ../buildrootabc --force     # 仍有进程占用时强制
-./phprt buildroot status / list / use <路径>
+./phprt buildroot status / use <路径>
 ```
 
 - rootfs 位置完全由参数决定：相对路径按当前目录解析，绝对路径原样使用

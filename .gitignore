@@ -14,5 +14,4 @@ downloads/**
 /*buildroot*/
 /.buildroot.conf
 /.buildroot.lock
-/.buildroots.list
 /.buildroot.lock
