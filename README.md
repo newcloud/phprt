@@ -53,8 +53,9 @@ sudo pacman -S base-devel cmake pkgconf patchelf \
 ```bash
 cd /path/to/project
 
-# 首次：选版本和扩展，构建到项目的 .phprt/
-/path/to/phprt/phprt set 8.5.12 --ext "openssl zlib libxml2 curl sqlite mysqli mbstring zip redis" --yes
+# 首次：选系列和扩展，构建到项目的 .phprt/
+# 系列写法自动解析到该系列最新小版本（非离线先查 php.net）
+/path/to/phprt/phprt install 8.5 --ext "openssl zlib libxml2 curl sqlite mysqli mbstring zip redis" --yes
 
 # 使用
 ./myphp -v
@@ -66,11 +67,14 @@ eval "$(./myphp --shell)"
 ```
 
 ```bash
-# 看计划，不构建
-phprt set 8.5.12 --ext "sqlite redis" --plan
+# 装精确版本 / 看计划不构建
+phprt install 8.5.12
+phprt install 8.5 --ext "sqlite redis" --plan
 
-# 切版本（同一项目可以有多套）
-phprt set 8.6.0-dev --ext "openssl zlib sqlite"
+# 切换已装版本（同一项目可以有多套）；系列写法取已装最高版
+phprt use 8.5
+phprt use 8.5.12
+phprt show
 phprt current
 phprt list
 
@@ -85,11 +89,12 @@ phprt verify
 phprt outdated
 
 # 强制重编 PHP / 清源码重来
-phprt set 8.5.12 --recompile
-phprt set 8.5.12 --clean-src
+phprt install 8.5 --recompile
+phprt install 8.5 --clean-src
 ```
 
-支持 `php-8.5.12`、`php-8.6.0-dev`、`php-7.4.33`（7.4 目前只有最小档）。
+支持 `php8.5`、`php8.6`、`php7.4` 三个系列（7.4 目前只有最小档）；
+`bundles/` 下按系列存放，具体小版本由 `phprt install` 自动解析。
 
 ## Demo：用 chroot 构建（可选）
 

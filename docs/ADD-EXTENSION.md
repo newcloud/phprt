@@ -1,7 +1,7 @@
 # 给 bundle 加扩展或依赖
 
-bundle 是仓库里 `bundles/php-<版本>/` 那一套文件：版本信息、configure 逻辑和 recipe。
-加东西只改仓库，`set` / `add ext` 会把改过的 bundle 和 runner 同步到项目。
+bundle 是仓库里 `bundles/php<系列>/` 那一套文件：版本信息、configure 逻辑和 recipe。
+加东西只改仓库，`install` / `add ext` 会把改过的 bundle 和 runner 同步到项目。
 
 ## 1. 三类节点
 
@@ -37,7 +37,7 @@ LIBFOO_SHA256=""
 libfoo)    dep_dir libfoo    "${LIBFOO_VERSION:-}" ;;
 ```
 
-### 2.3 `bundles/php-<版本>/deps/libfoo.sh`
+### 2.3 `bundles/php<系列>/deps/libfoo.sh`
 
 ```bash
 #!/usr/bin/env bash
@@ -165,12 +165,12 @@ esac
 
 - [ ] `bundle.conf` 有 `*_VERSION` / `*_URL` / `*_SHA256`
 - [ ] `runner/common.sh` 的 `dep_dir_of` 有分支
-- [ ] `deps/<库>.sh` 能单独跑通：`bash bundles/php-8.5.12/deps/libfoo.sh`
+- [ ] `deps/<库>.sh` 能单独跑通：`bash bundles/php8.5/deps/libfoo.sh`
 - [ ] 依赖装完 `deps/<库>-<版本>/lib` 里有 `.so`
 - [ ] 内置扩展加了 `BUILTIN_ORDER` / `ext_modules`
 - [ ] PECL 扩展加了 `ext_version` / `ext_modules`
 - [ ] `SUPPORTED_EXTS` 里有名字
-- [ ] `phprt set 8.5.12 --ext "<新扩展>" --plan` 能看到正确的依赖顺序
+- [ ] `phprt install 8.5 --ext "<新扩展>" --plan` 能看到正确的依赖顺序
 - [ ] 构建后 `readelf -d` 里新库的 `NEEDED` 是 rt 运行时名，`RPATH` 是 `$ORIGIN`
 - [ ] `env -i ./myphp -m` 能看到扩展，`phprt verify` 全部步骤通过
 

@@ -9,7 +9,9 @@ usage() {
 phprt
 
 用法:
-  phprt set <版本> [--ext a,b] [--recompile] [--clean-src] [--plan] [--yes]
+  phprt install <系列|版本> [--ext a,b] [--recompile] [--clean-src] [--plan] [--yes]
+  phprt use <系列|版本>
+  phprt show
   phprt current
   phprt list
   phprt add ext <名字>
@@ -18,6 +20,10 @@ phprt
   phprt outdated
   phprt verify
 
+phprt install 的系列写法（8.5 / 8.6 / 7.4）会自动解析到该系列最新小版本
+（非离线先查 php.net，已装最新则停止；离线或查不到用 bundle.conf 的 pin）；
+精确写法（8.5.12）装指定版本。use 的系列写法切到该系列已装的最高版本。
+
 phprt update 只升级一个依赖库的同系列小版本（如 openssl 3.5.7 -> 3.5.8）：
 只重编该依赖并替换 lib/phprt 里的运行时库，消费方不重编、DT_NEEDED 零改写。
 
@@ -25,9 +31,10 @@ phprt outdated 只读检查已安装软件有没有同系列新版本，结果�
 .phprt/cache/update-check/，不下载、不编译、不改 bundle.conf。
 
 示例:
-  phprt set 8.5.12
-  phprt set 8.6.0-dev --ext sqlite
-  phprt set 8.5.12 --recompile --ext sqlite --yes
+  phprt install 8.5
+  phprt install 8.5.12
+  phprt use 8.5
+  phprt show
   phprt update openssl 3.5.8
   phprt update libpng 1.6.51
 EOF
@@ -37,18 +44,18 @@ repo_root() {
   printf '%s\n' "${PHPRT_REPO:-}"
 }
 
-# 取版本 bundle。仓库里有时以仓库为准并同步到项目（仓库只当模板），
-# 没有仓库时用项目内的本地副本。
+# 取系列 bundle（bundles/php<系列>，如 php8.5）。仓库里有时以仓库为准并同步到
+# 项目（仓库只当模板），没有仓库时用项目内的本地副本。
 bundle_for() {
-  local version="$1" repo dst
-  dst="$PHPRT_HOME/bundles/php-$version"
+  local series="$1" repo dst
+  dst="$PHPRT_HOME/bundles/php$series"
   repo="$(repo_root)"
-  if [ -n "$repo" ] && [ -d "$repo/bundles/php-$version" ]; then
+  if [ -n "$repo" ] && [ -d "$repo/bundles/php$series" ]; then
     ensure_base_files
     copy_runner "$repo"
     rm -rf "$dst"
     mkdir -p "$PHPRT_HOME/bundles"
-    cp -a "$repo/bundles/php-$version" "$dst"
+    cp -a "$repo/bundles/php$series" "$dst"
     printf '%s\n' "$dst"
     return 0
   fi
@@ -60,8 +67,12 @@ normalize_exts() {
   printf '%s' "$1" | tr ',' ' ' | tr -s ' '
 }
 
-cmd_set() {
-  local version="" exts="" recompile=0 assume_yes=0 plan=0 clean_src=0
+# 安装 / 重建 PHP。
+# 系列写法（8.5）自动解析到该系列最新小版本：非离线先查 php.net，
+# 本地已有不旧于目标的树就停止；离线或查不到用 bundle.conf 的 pin。
+# 精确写法（8.5.12）直接装指定版本。
+cmd_install() {
+  local arg="" exts="" recompile=0 assume_yes=0 plan=0 clean_src=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ext)       exts="${2:-}"; shift 2 ;;
@@ -72,10 +83,25 @@ cmd_set() {
       --yes|-y)    assume_yes=1; shift ;;
       -h|--help)   usage; return 0 ;;
       -*)          die "未知参数: $1" ;;
-      *)           version="$1"; shift ;;
+      *)           arg="$1"; shift ;;
     esac
   done
-  [ -n "$version" ] || die "用法: phprt set <版本>"
+  [ -n "$arg" ] || die "用法: phprt install <系列|版本>（如 install 8.5 / install 8.5.12）"
+
+  local exact=0
+  case "$arg" in
+    *.*.*) exact=1 ;;
+  esac
+  local series
+  if [ "$exact" = 1 ]; then
+    printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$' ||
+      die "版本号格式不对: $arg（精确版如 8.5.12）"
+    series="$(series_of "$arg")"
+  else
+    printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+$' ||
+      die "系列格式不对: $arg（应为 major.minor，如 8.5）"
+    series="$arg"
+  fi
 
   # 构建锁：和 update / add 互斥，防止并发改同一棵树
   need_cmds flock
@@ -83,8 +109,61 @@ cmd_set() {
   exec 9>"$PHPRT_HOME/.phprt.lock"
   flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
 
-  local bundle tree complete=0 status=""
-  tree="$(tree_of "$version")"
+  local bundle pin latest="" concrete imax
+  bundle="$(bundle_for "$series")" ||
+    die "找不到 bundle: php$series（需要 phprt 仓库或 PHPRT_REPO）"
+
+  # shellcheck disable=SC1090
+  . "$bundle/bundle.conf"
+  pin="$PHP_VERSION"
+
+  # 解析具体版本：精确版直接用；系列版非离线查 php.net 最新，查不到/离线用 pin
+  concrete="$pin"
+  if [ "$exact" = 1 ]; then
+    concrete="$arg"
+  else
+    if [ "${OFFLINE:-0}" != 1 ]; then
+      need_cmds jq
+      latest="$(uc_query_php "$series" 2>/dev/null || true)"
+    fi
+    if [ -n "$latest" ] &&
+       [ "$(printf '%s\n%s\n' "$pin" "$latest" | sort -V | tail -1)" = "$latest" ]; then
+      concrete="$latest"
+    fi
+    # 本地已有不旧于目标的同系列树：停止（不降级、不重复装）
+    # --recompile / --plan / --ext 是明确的构建意图，不拦
+    imax="$(installed_series_max "$series")"
+    if [ -n "$imax" ] &&
+       [ "$(printf '%s\n%s\n' "$imax" "$concrete" | sort -V | tail -1)" = "$imax" ] &&
+       [ "$recompile" != 1 ] && [ "$plan" != 1 ] && [ -z "$exts" ]; then
+      if [ "$imax" = "$concrete" ]; then
+        ok "PHP $concrete 已安装，无需重复安装"
+      else
+        ok "本地已装 PHP $imax（目标 $concrete 更旧），不降级"
+      fi
+      [ "$imax" = "$(current_version 2>/dev/null || true)" ] ||
+        printf '    切换: phprt use %s\n' "$series"
+      return 0
+    fi
+  fi
+
+  # 具体版与 pin 不一致时，改写项目 bundle 副本的 PHP 下载信息
+  # （URL 按 php.net 规则拼；SHA 留空不校验，与依赖库现状一致）
+  if [ "$concrete" != "$PHP_VERSION" ]; then
+    printf '%s' "$concrete" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+      die "自动解析只支持稳定版 x.y.z（$concrete 不支持）；请改 bundle.conf 的 pin"
+    log "解析到 PHP $concrete（pin $PHP_VERSION）"
+    sed -i \
+      -e "s|^PHP_VERSION=.*|PHP_VERSION=$concrete|" \
+      -e "s|^PHP_ARCHIVE=.*|PHP_ARCHIVE=php-$concrete.tar.xz|" \
+      -e "s|^PHP_URL=.*|PHP_URL=\"https://www.php.net/distributions/php-$concrete.tar.xz\"|" \
+      -e "s|^PHP_SRC_DIR=.*|PHP_SRC_DIR=php-$concrete|" \
+      -e "s|^PHP_SHA256=.*|PHP_SHA256=\"\"|" \
+      "$bundle/bundle.conf"
+  fi
+
+  local tree complete=0 status=""
+  tree="$(tree_of "$concrete")"
 
   if [ -d "$tree" ]; then
     status="$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)"
@@ -97,33 +176,17 @@ cmd_set() {
     fi
   fi
 
-  # 已完成且没有显式改扩展：直接切换，不重编
-  # （仍要同步一次 runner：仓库里改了模板/逻辑，老项目也得跟上）
-  if [ "$complete" = 1 ] && [ "$recompile" != 1 ] && [ -z "$exts" ] && [ "$plan" != 1 ]; then
-    switch_current "$version"
-    ensure_base_files
-    if [ -n "$(repo_root)" ]; then
-      copy_runner "$(repo_root)"
-      # runner 刚被替换成最新版：重新载入，老项目也能用上新加的修复函数
-      # shellcheck disable=SC1091
-      . "$PHPRT_HOME/bin/runner/common.sh"
-    fi
-    ensure_tree_config "$tree"
-    ensure_tree_ssl "$tree"
-    write_project_conf "$version" "$(project_exts)"
-    write_myphp
-    ok "切换到 PHP $version（使用已有树，未重编）"
+  # 精确版已装齐：停止（系列版走到这里说明目标高于已装最高版，不会重入）
+  if [ "$complete" = 1 ] && [ "$exact" = 1 ] &&
+     [ "$recompile" != 1 ] && [ "$plan" != 1 ] && [ -z "$exts" ]; then
+    ok "PHP $concrete 已安装"
+    [ "$concrete" = "$(current_version 2>/dev/null || true)" ] ||
+      printf '    切换: phprt use %s\n' "$concrete"
     return 0
   fi
 
   [ -d "$tree" ] && [ "$complete" != 1 ] &&
     warn "上次构建未完成，继续；已完成的依赖和 PHP 会跳过"
-
-  bundle="$(bundle_for "$version")" ||
-    die "找不到 bundle: php-$version（需要 phprt 仓库或 PHPRT_REPO）"
-
-  # shellcheck disable=SC1090
-  . "$bundle/bundle.conf"
 
   if [ -z "$exts" ]; then
     if [ -f "$tree/BUILD-STATUS" ] && [ "$(cat "$tree/BUILD-STATUS")" != ok ] &&
@@ -152,7 +215,7 @@ cmd_set() {
   for req in ${REQUIRED_EXTS:-}; do
     case " $exts " in
       *" $req "*) ;;
-      *) die "PHP $version 必须包含扩展 $req（bundle.conf 的 REQUIRED_EXTS）" ;;
+      *) die "PHP $concrete 必须包含扩展 $req（bundle.conf 的 REQUIRED_EXTS）" ;;
     esac
   done
 
@@ -160,7 +223,7 @@ cmd_set() {
   local force_php=0
   [ "$recompile" = 1 ] && force_php=1
 
-  log "构建 PHP $version"
+  log "构建 PHP $concrete"
   printf '    扩展: %s\n' "${exts:-（无）}"
   ensure_base_files
 
@@ -194,28 +257,73 @@ cmd_set() {
     die "构建结束但找不到 $tree/bin/php"
   fi
 
-  switch_current "$version"
+  activate_tree "$concrete" "$exts"
+  ok "PHP $concrete 就绪 -> $tree"
+}
+
+# 把 current 切到 concrete 并同步配置 / 入口（install 与 use 共用）
+activate_tree() {
+  local concrete="$1" exts="$2" tree old e
+  tree="$(tree_of "$concrete")"
+  switch_current "$concrete"
   ensure_base_files
+  if [ -n "$(repo_root)" ]; then
+    copy_runner "$(repo_root)"
+    # runner 刚被替换成最新版：重新载入，老项目也能用上新加的修复函数
+    # shellcheck disable=SC1091
+    . "$PHPRT_HOME/bin/runner/common.sh"
+  fi
+  ensure_tree_config "$tree"
+  ensure_tree_ssl "$tree"
   # 去掉本次未选中的扩展 ini（静态内置无法卸载，但至少不再启用）
-  local old
   for old in ${SUPPORTED_EXTS:-}; do
     case " $exts " in
       *" $old "*) ;;
       *) rm -f "$tree/etc/conf.d"/*-"$old".ini ;;
     esac
   done
-  local e
   for e in $exts; do
     enable_ext "$e" || warn "扩展 $e 没有启用"
   done
-  write_project_conf "$version" "$exts"
+  write_project_conf "$concrete" "$exts"
   write_myphp
-  ok "PHP $version 就绪 -> $tree"
+}
+
+# 切到已装树：系列写法取该系列已装最高版，精确写法指定树
+cmd_use() {
+  local arg="${1:-}" series concrete tree
+  [ -n "$arg" ] || die "用法: phprt use <系列|版本>（如 use 8.5 / use 8.5.12）"
+  series="$(series_of "$arg")"
+  case "$arg" in
+    *.*.*)
+      printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$' ||
+        die "版本号格式不对: $arg（精确版如 8.5.12）"
+      concrete="$arg" ;;
+    *)
+      printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+$' ||
+        die "系列格式不对: $arg（应为 major.minor，如 8.5）"
+      concrete="$(installed_series_max "$series")"
+      [ -n "$concrete" ] || die "还没安装 PHP $series（先跑 phprt install $series）" ;;
+  esac
+  tree="$(tree_of "$concrete")"
+  [ -x "$tree/bin/php" ] || die "树不存在或未构建: $tree"
+  activate_tree "$concrete" "$(project_exts)"
+  ok "切换到 PHP $concrete"
+}
+
+cmd_show() {
+  local ver tree
+  ver="$(current_version)" || die "还没有安装 PHP（先跑 phprt install <系列>）"
+  tree="$(tree_of "$ver")"
+  printf 'PHP %s\n' "$ver"
+  printf '    路径: %s\n' "$tree"
+  printf '    php.ini: %s\n' "$tree/etc/php.ini"
+  ( cd "$PHPRT_PROJECT" && ./myphp -v | head -1 | sed 's/^/    /' )
 }
 
 cmd_current() {
   local v
-  v="$(current_version)" || die "还没有设置 current（先跑 phprt set <版本>）"
+  v="$(current_version)" || die "还没有设置 current（先跑 phprt install <系列>）"
   printf '%s\n' "$v"
 }
 
@@ -257,7 +365,7 @@ cmd_add() {
   local ver tree bundle kind list mods m extdir ld missing=0
   ver="$(current_version)" || die "还没有 current 版本"
   tree="$(tree_of "$ver")"
-  bundle="$(bundle_for "$ver")" || die "缺少 bundle: php-$ver"
+  bundle="$(bundle_for "$(series_of "$ver")")" || die "缺少 bundle: php$(series_of "$ver")"
 
   if [ -f "$bundle/builtin/$name.sh" ]; then
     kind=builtin
@@ -362,11 +470,11 @@ cmd_update() {
   local ver tree flat repo_conf vvar urlvar oldver newver url oldurl newurl
   local bak tmp bundle old_id new_id rtver f line
   local pconf dnew dold
-  ver="$(current_version)" || die "还没有设置 current（先跑 phprt set <版本>）"
+  ver="$(current_version)" || die "还没有设置 current（先跑 phprt install <系列>）"
   tree="$(tree_of "$ver")"
   flat="$tree/lib/phprt"
   # 回滚要用的路径一次性算好（rollback 里不再拼 $ver，避免作用域意外）
-  pconf="$PHPRT_HOME/bundles/php-$ver/bundle.conf"
+  pconf="$PHPRT_HOME/bundles/php$(series_of "$ver")/bundle.conf"
   dnew="$tree/deps/$dep-$newver"
   [ -x "$tree/bin/php" ] || die "树不存在或未构建: $tree"
   [ "$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)" = ok ] || die "上次构建未完成，先修好树"
@@ -374,7 +482,7 @@ cmd_update() {
     die "当前树没有依赖 $dep（BUILD-ORDER 里没有）"
 
   vvar="$(dep_version_var "$dep")"
-  repo_conf="$PHPRT_REPO/bundles/php-$ver/bundle.conf"
+  repo_conf="$PHPRT_REPO/bundles/php$(series_of "$ver")/bundle.conf"
   [ -f "$repo_conf" ] || die "找不到 $repo_conf"
   oldver="$(sed -n "s/^$vvar=//p" "$repo_conf" | head -1)"
   [ -n "$oldver" ] || die "$repo_conf 里没有 $vvar"
@@ -387,7 +495,7 @@ cmd_update() {
   [ "$(printf '%s\n%s\n' "$oldver" "$newver" | sort -V | head -1)" = "$oldver" ] ||
     die "拒绝降级: $oldver -> $newver"
 
-  # 构建锁：和 phprt set / add 共用同一把，防止并发改同一棵树
+  # 构建锁：和 phprt install / add 共用同一把，防止并发改同一棵树
   need_cmds flock
   exec 9>"$PHPRT_HOME/.phprt.lock"
   flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
@@ -439,7 +547,7 @@ cmd_update() {
 
   # 备份：仓库 bundle.conf、项目副本、旧 deps 目录、整个 lib/phprt、wheel.map
   cp -f "$repo_conf" "$bak/bundle.conf"
-  cp -f "$PHPRT_HOME/bundles/php-$ver/bundle.conf" "$bak/project-bundle.conf"
+  cp -f "$PHPRT_HOME/bundles/php$(series_of "$ver")/bundle.conf" "$bak/project-bundle.conf"
   mv "$tree/deps/$dep-$oldver" "$bak/deps-old" || rollback_update "备份旧依赖目录失败"
   mkdir -p "$bak/flat"
   cp -af "$flat"/*.so* "$bak/flat/" || rollback_update "备份运行时库失败"
@@ -464,7 +572,7 @@ cmd_update() {
   newurl="${oldurl//$oldver/$newver}"
   sed -i "s|^$vvar=.*|$vvar=$newver|" "$repo_conf" || rollback_update "改版本变量失败"
   sed -i "s|^\($urlvar=\"\)[^\"]*\"|\1$newurl\"|" "$repo_conf" || rollback_update "改 URL 失败"
-  bundle="$(bundle_for "$ver")" || rollback_update "同步项目 bundle 副本失败"
+  bundle="$(bundle_for "$(series_of "$ver")")" || rollback_update "同步项目 bundle 副本失败"
   # 当前 shell 也要拿到新版本变量（artifact_ok / dep_dir_of 用）
   # shellcheck disable=SC1090
   . "$repo_conf"
@@ -557,12 +665,13 @@ cmd_update() {
 cmd_outdated() {
   need_cmds jq
   local ver tree conf name vvar cur deps_line i rc out st up
+  local php_latest="" php_status=""
   local -a pkg cur_l disp hasq
   local rows_file total nq n_up n_cur n_fail UC_RC UC_LATEST UC_STATUS
-  ver="$(current_version)" || die "还没有设置 current（先跑 phprt set <版本>）"
+  ver="$(current_version)" || die "还没有设置 current（先跑 phprt install <系列>）"
   tree="$(tree_of "$ver")"
   [ -x "$tree/bin/php" ] || die "树不存在或未构建: $tree"
-  conf="$PHPRT_HOME/bundles/php-$ver/bundle.conf"
+  conf="$PHPRT_HOME/bundles/php$(series_of "$ver")/bundle.conf"
   [ -f "$conf" ] || die "找不到 $conf"
   rows_file="$(mktemp "${TMPDIR:-/tmp}/phprt-outdated.XXXXXX")"
 
@@ -598,6 +707,7 @@ cmd_outdated() {
         continue
       fi
       uc_consider "${pkg[$i]}" "${cur_l[$i]}" "$rows_file"
+      if [ "${pkg[$i]}" = php ]; then php_latest="$UC_LATEST"; php_status="$UC_STATUS"; fi
       if [ "$UC_RC" = 0 ]; then
         uc_row "${disp[$i]}" "${cur_l[$i]}" "$UC_LATEST" "$UC_STATUS"
         if [ "$UC_STATUS" = '发现更新' ]; then n_up=$((n_up + 1)); else n_cur=$((n_cur + 1)); fi
@@ -606,6 +716,7 @@ cmd_outdated() {
         n_fail=$((n_fail + 1))
       fi
     done
+    uc_print_php_hint "$ver" "$php_latest" "$php_status"
     uc_cache_save "$rows_file"
     rm -f "$rows_file"
     return 0
@@ -619,6 +730,7 @@ cmd_outdated() {
     [ "${hasq[$i]}" = 1 ] || continue
     uc_write_querying "${disp[$i]}"
     uc_consider "${pkg[$i]}" "${cur_l[$i]}" "$rows_file"
+    if [ "${pkg[$i]}" = php ]; then php_latest="$UC_LATEST"; php_status="$UC_STATUS"; fi
     up=$(( total + 2 - i ))   # 从「正在查询」行上移到第 i 个数据行
     if [ "$UC_RC" = 0 ]; then
       uc_update_row "$up" "${disp[$i]}" "${cur_l[$i]}" "$UC_LATEST" "$UC_STATUS"
@@ -637,6 +749,16 @@ cmd_outdated() {
   # 统计与表格一致：暂不支持 = 总数 - 有查询器数
   printf '\n\n检查完成：发现更新 %s 个，已是最新 %s 个，查询失败 %s 个，暂不支持 %s 个\n' \
     "$n_up" "$n_cur" "$n_fail" "$(( total - nq ))"
+  uc_print_php_hint "$ver" "$php_latest" "$php_status"
+}
+
+# PHP 有同系列更新时的行动提示（只提示，不自动下载/编译）
+uc_print_php_hint() {
+  local ver="$1" latest="$2" status="$3"
+  [ -n "$latest" ] && [ "$latest" != '-' ] && [ "$status" = '发现更新' ] || return 0
+  printf '\n提示: PHP 有更新 %s → %s：phprt install %s 安装最新版\n' \
+    "$ver" "$latest" "$(series_of "$ver")"
+  printf '      旧树 .phprt/php-%s 会保留，确认不用后可手动删除\n' "$ver"
 }
 
 cmd_verify() {
@@ -668,7 +790,7 @@ cmd_verify() {
   # gd 启用时核对格式支持与 bundle.conf 的 ENABLE_GD_* 一致
   if ( cd "$PHPRT_PROJECT" && ./myphp -m 2>/dev/null | grep -qx gd ); then
     log "2b) gd 格式支持（对照 bundle.conf 的 ENABLE_GD_*）"
-    local gdconf="$PHPRT_HOME/bundles/php-$ver/bundle.conf"
+    local gdconf="$PHPRT_HOME/bundles/php$(uc_series "$ver")/bundle.conf"
     local exp_jpg=1 exp_webp=1 exp_avif=1
     if [ -f "$gdconf" ]; then
       # shellcheck disable=SC1090
@@ -791,7 +913,9 @@ main() {
   local cmd="${1:-}"
   [ $# -gt 0 ] && shift
   case "$cmd" in
-    set)      cmd_set "$@" ;;
+    install)  cmd_install "$@" ;;
+    use)      cmd_use "$@" ;;
+    show)     cmd_show ;;
     current)  cmd_current ;;
     list|ls)  cmd_list ;;
     add)      cmd_add "$@" ;;

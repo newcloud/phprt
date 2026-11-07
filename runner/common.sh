@@ -44,6 +44,29 @@ current_version() {
 
 tree_of() { printf '%s/php-%s\n' "$PHPRT_HOME" "$1"; }
 
+# 版本 -> 系列（major.minor）：8.5.12 -> 8.5；8.6.0-dev -> 8.6
+series_of() { printf '%s\n' "$1" | cut -d. -f1-2; }
+
+# 某系列已装好的最高版本（BUILD-STATUS=ok 的树；老树没有状态文件时按有 bin/php 算）
+# 没有则返回空。供 install 的「已装最新即停」和 use 的系列解析用。
+installed_series_max() {
+  local series="$1" d v st best=""
+  for d in "$PHPRT_HOME"/php-"$series".*; do
+    [ -d "$d" ] || continue
+    v="${d##*/php-}"
+    [ -x "$d/bin/php" ] || continue
+    st="$(cat "$d/BUILD-STATUS" 2>/dev/null || true)"
+    if [ -f "$d/BUILD-STATUS" ] && [ "$st" != ok ]; then continue; fi
+    if [ -z "$best" ]; then
+      best="$v"
+    else
+      best="$(printf '%s\n%s\n' "$best" "$v" | sort -V | tail -1)"
+    fi
+  done
+  [ -n "$best" ] && printf '%s\n' "$best"
+  return 0
+}
+
 ext_dir_of() {
   local tree="$1" d
   for d in "$tree"/lib/php/extensions/*/; do
@@ -312,7 +335,7 @@ enable_ext() {
     elif LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -qix "$m"; then
       any_static=1
     else
-      die "$m 没有编译；用 phprt set $ver --recompile --ext $name"
+      die "$m 没有编译；用 phprt install $ver --recompile --ext $name"
     fi
   done
 

@@ -55,7 +55,7 @@ libz.so.1        → libz-rt1.so.1
 
 openssl 那一行靠 `phprt update` 实现：同系列小版本升级只重编 openssl、
 替换运行时库，消费方签名不变、零重编。跨系列升级（SONAME 变化）会被
-`phprt update` 拒绝，走 `phprt set` 的正常重编路径。
+`phprt update` 拒绝，走 `phprt install --recompile` 的正常重编路径。
 
 更新一个组件不会自动升级它的兄弟组件；只会让依赖它的组件重新编译。
 
@@ -200,7 +200,7 @@ phprt verify
 还原。
 
 注意：升级后 PHP 构建树里的旧 `.dep`/`.la` 引用不会立刻清理（运行时不受影
-响，wheel 已经是新库）。下次 `phprt set` 真要重编 PHP 时，`php.sh` 的
+响，wheel 已经是新库）。下次 `phprt install --recompile` 真要重编 PHP 时，`php.sh` 的
 `FLAGS_SIG` 含 CPPFLAGS/LDFLAGS（依赖路径在里面），路径一变就会
 `make distclean` 后全新构建，不会拿旧 `.dep` 碰壁。
 
@@ -210,5 +210,5 @@ phprt verify
   禁止降级（wheel.map 记版本，verify 可查）。
 - 同系列内换编译选项导致 ABI 变化的情况，靠 SONAME 集合比对 + sha256 +
   功能验证兜底，不能 100% 识别。
-- 跨系列升级（如 3.5 → 3.6、OpenSSL 4.x）会被拒绝，走 `phprt set` 的
+- 跨系列升级（如 3.5 → 3.6、OpenSSL 4.x）会被拒绝，走 `phprt install --recompile` 的
   正常重编路径。

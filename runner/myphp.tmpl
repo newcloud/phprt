@@ -22,12 +22,12 @@ esac
 PREFIX="$PHPRT_ROOT/current"
 if [ ! -x "$PREFIX/bin/php" ]; then
   echo "PHP 未安装: $PREFIX/bin/php" >&2
-  echo "（先跑 phprt set <版本>）" >&2
+  echo "（先跑 phprt install <系列>）" >&2
   exit 1
 fi
 if [ ! -f "$PREFIX/etc/php.ini" ]; then
   echo "缺少 php.ini: $PREFIX/etc/php.ini" >&2
-  echo "（先跑 phprt set <版本>）" >&2
+  echo "（先跑 phprt install <系列>）" >&2
   exit 1
 fi
 

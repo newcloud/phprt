@@ -9,7 +9,7 @@
 
 把 phprt 仓库当成「软件源 + 模板」，把项目里的 `.phprt` 当成「实例」。
 
-`phprt set <版本>` 时，从仓库复制这个版本需要的脚本和源码到项目 `.phprt`，在项目内完成构建。之后运行、切换、增删扩展都只和 `.phprt` 打交道，不再读取 phprt 仓库。仓库只在安装新版本、补充未缓存的源码或显式刷新脚本时才需要。
+`phprt install <系列>` 时，从仓库复制这个系列需要的脚本和源码到项目 `.phprt`，在项目内完成构建。之后运行、切换、增删扩展都只和 `.phprt` 打交道，不再读取 phprt 仓库。仓库只在安装新版本、补充未缓存的源码或显式刷新脚本时才需要。
 
 这个模型没有全局安装根、没有跨版本共享依赖、没有 profile 继承、没有全局配置合并。每个项目的 `.phprt` 是一份完整、可搬走的实例。
 
@@ -37,8 +37,10 @@
 ## 2. 用户命令
 
 ```bash
-phprt set php8.5.15       # 安装或切换；不存在时先选扩展并构建
-phprt current             # 显示当前版本
+phprt install 8.5          # 安装；系列自动解析到最新小版本
+phprt use 8.5              # 切到该系列已装的最高版
+phprt show                 # 当前版本 + 路径
+phprt current              # 显示当前版本
 phprt add ext sqlite      # 对当前树编译或启用扩展
 phprt remove ext sqlite   # 停用扩展
 phprt verify              # 检查依赖、扩展加载和是否链到系统库
@@ -51,21 +53,19 @@ phprt list                # 项目里已安装的版本树
 phprt clean               # 删除 build/ 和未使用的源码缓存
 ```
 
-## 3. `set` 流程
+## 3. `install` 流程
 
 ```text
-phprt set php8.5.15
-├─ 版本树已存在
-│   ├─ 使用旧的
-│   │   → 切 current
-│   │   → 更新 myphp（如果 myphp 写死版本）
-│   └─ 重新编译
-│       → 进入扩展选择（预勾当前已选项）
-│       → 重跑这棵树的 recipe
+phprt install 8.5
+├─ 解析具体版本（非离线查 php.net 该系列最新；离线/查不到用 bundle.conf 的 pin）
+├─ 本地已有不旧于目标的树
+│   └─ 停止（不降级、不重复装）
+├─ 版本树已存在但不完整
+│   └─ 继续未完成的构建
 └─ 版本树不存在
     → 进入扩展选择
     → 计算源码闭包
-    → 复制 runner、bundle、源码到项目 .phprt
+    → 复制 runner、bundles/php<系列>、源码到项目 .phprt
     → 按阶段执行（deps → php → ext）
     → 成功后切 current，更新 myphp
 ```
@@ -236,7 +236,7 @@ phprt remove ext sqlite
 | 全局 `config.conf` 合并 | bundle 自带版本和参数 |
 | `lib/modules` 跨版本复用 | bundle 内各自一套 recipe |
 | stamp 判断是否重装 | 树和 `.so` 是否存在 + `BUILD-PLAN` |
-| `install.sh` / `phprt init` / `phprt build` | `phprt set` / `add ext` / `remove ext` |
+| `install.sh` / `phprt init` / `phprt build` | `phprt install` / `add ext` / `remove ext` |
 | 项目只选版本和 ini | 项目还决定编译哪些扩展 |
 
 ## 11. 新版本 phprt 仓库的样子
@@ -253,14 +253,14 @@ phprt/
 │   ├── myphp.tmpl               # 项目入口模板
 │   └── vendor/                  # perl 核心模块垫片
 ├── bundles/
-│   ├── php-8.5.12/
+│   ├── php8.5/
 │   │   ├── bundle.conf          # 版本、源码、默认扩展
 │   │   ├── php.sh               # 根据选择生成 configure 参数
 │   │   ├── builtin/*.sh         # 内置扩展（编进 PHP 本体）
 │   │   ├── deps/*.sh            # 依赖库 recipe
 │   │   └── ext/*.sh             # PECL 扩展 recipe
-│   ├── php-8.6.0-dev/
-│   └── php-7.4.33/
+│   ├── php8.6/
+│   └── php7.4/
 ├── downloads/                   # 源码缓存，作为项目的种子（tarball 不进 git）
 ├── docs/
 └── LICENSE
@@ -370,7 +370,7 @@ resolve → deps → php → ext
 
 原型已经覆盖了最小闭环：
 
-1. 三个 bundle：`php-8.5.12`、`php-8.6.0-dev` 和 `php-7.4.33`
+1. 三个 bundle：`php8.5`、`php8.6` 和 `php7.4`
    （7.4 目前是最小档：`libxml2` + 内核基础扩展）。
 2. 内置扩展：`openssl zlib libxml2 curl sqlite mysqli mbstring intl zip gd ffi`。
 3. PECL 扩展：`redis protobuf xdebug apcu yaml swoole`。
@@ -381,13 +381,13 @@ resolve → deps → php → ext
    - 依赖、PHP、扩展按签名跳过；第二次相同选择不产生编译；
    - 只加 PECL 扩展时跳过 PHP；
    - 失败后已完成步骤保留，重试从失败处继续；
-   - `php-7.4.33` 最小档构建通过，libxml2 2.9.14 来自树内，`ldd` 没有系统库；
+   - `php7.4` 最小档构建通过，libxml2 2.9.14 来自树内，`ldd` 没有系统库；
    - `verify` 确认没有链接系统库。
 
 后续按下面的顺序扩展：
 
 1. 验证 `gd` / `intl` 的递归依赖和内置扩展重编。
-2. 给 `php-7.4.33` 增加内置扩展和 PECL（OpenSSL 1.1.1w、旧版 redis/xdebug 等）。
+2. 给 `php7.4` 增加内置扩展和 PECL（OpenSSL 1.1.1w、旧版 redis/xdebug 等）。
 3. 旧依赖清理和源码缓存的显式管理。
 4. 把扩展启用状态按版本分开，避免切换版本时互相删 `conf.d` 的 ini。
 

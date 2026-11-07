@@ -1,6 +1,6 @@
 # downloads/ —— 源码种子缓存
 
-`phprt set` / `add ext` 会从这里取源码包，取到后硬链接（跨盘时复制）到项目的
+`phprt install` / `add ext` 会从这里取源码包，取到后硬链接（跨盘时复制）到项目的
 `.phprt/downloads/`，于是**完全不用联网**。
 
 **这些文件不进 git**（`.gitignore` 里排除了整个目录，只保留本 README 和 `SHA256SUMS`）。
