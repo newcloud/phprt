@@ -168,6 +168,7 @@ ext_modules() {
     gettext)   printf '%s\n' gettext ;;
     xsl)       printf '%s\n' xsl ;;
     ftp)       printf '%s\n' ftp ;;
+    bz2)       printf '%s\n' bz2 ;;
     redis)     printf '%s\n' redis ;;
     protobuf)  printf '%s\n' protobuf ;;
     xdebug)    printf '%s\n' xdebug ;;
@@ -447,6 +448,7 @@ dep_dir_of() {
     libyaml)   dep_dir libyaml   "${LIBYAML_VERSION:-}" ;;
     libsodium) dep_dir libsodium "${LIBSODIUM_VERSION:-}" ;;
     libxslt)   dep_dir libxslt   "${LIBXSLT_VERSION:-}" ;;
+    bzip2)     dep_dir bzip2     "${BZIP2_VERSION:-}" ;;
     autoconf)  printf '%s/tools/autoconf-%s\n' "$PHPRT_HOME" "${AUTOCONF_VERSION:-2.72}" ;;
     re2c)      printf '%s/tools/re2c-%s\n'     "$PHPRT_HOME" "${RE2C_VERSION:-4.6}" ;;
     perl5core) printf '%s/tools/perl5core-%s\n' "$PHPRT_HOME" "${PERL_SHIM_VERSION:-5.42.2}" ;;

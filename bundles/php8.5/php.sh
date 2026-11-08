@@ -6,7 +6,7 @@ source "${PHPRT_RUNNER:?}/common.sh"
 load_config
 need_cmds gcc make tar
 
-BUILTIN_ORDER="openssl zlib libxml2 curl sqlite mysqli mbstring intl zip gd ffi sodium gettext xsl ftp"
+BUILTIN_ORDER="openssl zlib libxml2 curl sqlite mysqli mbstring intl zip gd ffi sodium gettext xsl ftp bz2"
 
 build_args() {
   local e f sw v

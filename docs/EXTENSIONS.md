@@ -38,8 +38,8 @@ phprt php8.5 目前 `SUPPORTED_EXTS` 17 个（builtin 11 + PECL 6），框架必
 | 2 | gettext | builtin | 无（glibc） | `--with-gettext`（php.net/manual/en/gettext.installation.php） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 19/19 + verify 全过） |
 | 3 | xsl | builtin | libxslt | `--with-xsl=<deps/libxslt>`（php.net/manual/en/xsl.installation.php） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 83 passed/2 skipped/0 failed + 功能调用 + verify + 搬移测试全过） |
 | 4 | ftp | builtin | 无 | `--enable-ftp`（php.net/manual/en/ftp.installation.php；FTP-SSL 随 openssl 隐式启用） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 64/64 + 功能调用 + verify + 搬移测试全过） |
-| 5 | bz2 | builtin | bzip2 | `--with-bz2[=DIR]`（php.net/manual/en/bzip2.installation.php） | ⬜ |
-| 6 | igbinary | PECL | 无 | 待查 | ⬜ |
+| 5 | bz2 | builtin | bzip2 | `--with-bz2=<deps/bzip2>`（php.net/manual/en/bzip2.installation.php） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 25 passed/2 skipped/0 failed + 功能调用 + verify + 搬移测试全过） |
+| 6 | igbinary | PECL | 无 | `--enable-igbinary`（phpize 扩展；pecl.php.net/package/igbinary 3.2.16） | ⬜ |
 | 7 | msgpack | PECL | 无 | 待查 | ⬜ |
 | 8 | ldap | builtin | OpenLDAP | 待查 | ⬜ |
 | 9 | gmp | builtin | gmp | 待查 | ⬜ |
