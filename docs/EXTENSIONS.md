@@ -36,7 +36,7 @@ phprt php8.5 目前 `SUPPORTED_EXTS` 17 个（builtin 11 + PECL 6），框架必
 |---|------|------|--------|------------------------------|------|
 | 1 | sodium | builtin | libsodium | `--with-sodium=<deps/libsodium>`（php.net/manual/en/sodium.installation.php） | ✅ 2026-11-08（构建 + php -m + 功能调用 + 上游 .phpt 31/31 + verify + 搬移测试全过） |
 | 2 | gettext | builtin | 无（glibc） | `--with-gettext`（php.net/manual/en/gettext.installation.php） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 19/19 + verify 全过） |
-| 3 | xsl | builtin | libxslt | 待查 | ⬜ |
+| 3 | xsl | builtin | libxslt | `--with-xsl=<deps/libxslt>`（php.net/manual/en/xsl.installation.php） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 83 passed/2 skipped/0 failed + 功能调用 + verify + 搬移测试全过） |
 | 4 | ftp | builtin | 无 | 待查 | ⬜ |
 | 5 | bz2 | builtin | bzip2 | 待查 | ⬜ |
 | 6 | igbinary | PECL | 无 | 待查 | ⬜ |
@@ -65,3 +65,12 @@ phprt php8.5 目前 `SUPPORTED_EXTS` 17 个（builtin 11 + PECL 6），框架必
 2. 每个扩展先查上游官方文档定 configure 参数，再写配方；参数和文档链接记入上表。
 3. 完成一个测试一个（构建 + `php -m` + 功能调用 + `phprt verify` + 搬移测试）。
 4. 每完成一个更新上表进度并提交（不 push）。
+
+## 与 docs/RECIPE.md 的关系（v2 迁移债）
+
+docs/RECIPE.md（2026-11-08）要求新 recipe 用 `contract=v2`（头字段矩阵 +
+flags()/needs()/build() + 末行 `recipe_main "$@"`），但 driver 还没落地：
+common.sh 里没有 `recipe_main`，也没有 `legacy-recipe.list`，现有 110 个
+recipe 全是 legacy。本轮新增配方（sodium/gettext/xsl 等）先按 legacy 写
+（与现有 recipe 一致、能构建），等 Phase A/B driver 落地后统一迁移 v2，
+迁移时同步把本表参数列核对一遍。
