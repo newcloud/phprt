@@ -123,8 +123,15 @@ ensure_source() {
     else
       command -v curl >/dev/null 2>&1 || die "缺少 curl，无法下载 $name"
       log "下载 $name"
-      curl -fsSL --connect-timeout 15 --max-time 1800 -o "$dst.part" "$url" ||
-        { rm -f "$dst.part"; die "下载失败: $url"; }
+      if ! curl -fsSL --connect-timeout 15 --max-time 1800 -o "$dst.part" "$url"; then
+        # bundle.conf 的网络约定：先直连；直连失败自动走代理。
+        # 已 export https_proxy 时 curl 优先用用户的，不再叠代理。
+        [ -z "${https_proxy:-}${HTTPS_PROXY:-}" ] || { rm -f "$dst.part"; die "下载失败: $url"; }
+        log "直连失败，走代理 ${PHPRT_PROXY:-http://127.0.0.1:10808}"
+        curl -fsSL --connect-timeout 15 --max-time 1800 \
+          -x "${PHPRT_PROXY:-http://127.0.0.1:10808}" -o "$dst.part" "$url" ||
+          { rm -f "$dst.part"; die "下载失败: $url"; }
+      fi
       mv -f "$dst.part" "$dst"
     fi
   fi
