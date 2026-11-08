@@ -165,6 +165,7 @@ ext_modules() {
     gd)        printf '%s\n' gd ;;
     ffi)       printf '%s\n' ffi ;;
     sodium)    printf '%s\n' sodium ;;
+    gettext)   printf '%s\n' gettext ;;
     redis)     printf '%s\n' redis ;;
     protobuf)  printf '%s\n' protobuf ;;
     xdebug)    printf '%s\n' xdebug ;;
