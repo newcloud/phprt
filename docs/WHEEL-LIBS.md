@@ -1,5 +1,8 @@
 # 运行时库的 wheel 化：运行时 SONAME（rt）+ `$ORIGIN` rpath
 
+recipe 侧只需要遵守「按标准方式安装」，例外用 `wheel=` 声明；约定见
+[RECIPE.md 第 6 节](RECIPE.md#6-wheel-化与-soname)。本文讲 driver 侧的算法和踩过的坑。
+
 phprt 的依赖库装在 `<tree>/deps/<库>-<版本>/lib`，如果直接把这一堆目录塞进
 `LD_LIBRARY_PATH`，会遇到三个问题：
 

@@ -9,7 +9,7 @@
 存在、依赖是否正确，由构建日志、`phprt verify` 和 `phprt recipe check --deep` 负责，不在
 本文范围内。
 
-本文第 10 节是对现有 110 个 recipe 的审计结果；第 11 节记录审计后对规范做的修订。
+本文第 11 节是对现有 110 个 recipe 的审计结果；第 12 节记录审计后对规范做的修订。
 
 ## 1. 类型与目录
 
@@ -17,7 +17,7 @@
 | --- | --- | --- | --- |
 | builtin | `builtin/` | 编进 PHP 本体的扩展，向 `./configure` 提供参数 | PHP 二进制或 `extensions/*.so` |
 | ext | `ext/` | 用 `phpize` 单独编译的 PECL 扩展 | `extensions/<name>.so` + ini |
-| dep | `deps/` | PHP 或扩展链接的 C 库 | `deps/<name>-<版本>/lib` |
+| dep | `deps/` | PHP 或扩展链接的 C 库 | `deps/<name>-<版本>/lib` 或 `lib64` |
 | tool | `tools/` | 构建工具（autoconf、re2c、perl 核心模块） | `tools/<name>-<版本>` |
 
 `kind` 和 `name` 默认从路径推断：`builtin/curl.sh` → `kind=builtin name=curl`。头里写出来
@@ -76,6 +76,7 @@ recipe_main "$@"
 | `tools` | 禁止 | 必填 | 必填 | 必填 | 构建工具，可以为空 |
 | `needs` | 禁止 | 必填 | 必填 | 禁止 | 硬依赖，可以为空 |
 | `optional` | 禁止 | 可选 | 必填 | 禁止 | 条件依赖，可以为空 |
+| `wheel` | 禁止 | 禁止 | 可选 | 禁止 | wheel 化例外，默认 `auto`；见第 6 节 |
 
 说明：
 
@@ -89,6 +90,8 @@ recipe_main "$@"
 - **`version` 必须显式写变量名。** 不能按 name 猜：`curl` → `LIBCURL_VERSION`，
   `yaml` → `YAML_EXT_VERSION`，`libsodium` → `LIBSODIUM_VERSION`。
 - **dep 禁止 `switch`。** 条件依赖由消费者的 `needs`/`optional` 表达，不在 dep 自己身上。
+- **`wheel` 只对 dep 开放。** SONAME 是编译产物，不在 recipe 里描述；这个字段只表达
+  例外（静态库、`dlopen` 别名、singleton 组），见第 6 节。
 - **`modules` 的多模块情况必须写全**：`libxml2` → `dom,xml,simplexml,xmlreader,xmlwriter,soap`，
   `sqlite` → `sqlite3,pdo_sqlite`，`mysqli` → `mysqli,pdo_mysql`。ext 单模块可省略，默认 name。
 - `version` 变量在兼容期可以定义在 `bundle.conf`，目标是在 recipe 内给默认值、允许
@@ -163,7 +166,90 @@ dep/tool 不写 ini，不碰 PHP 配置。tool 可以依赖另一个 tool，用 
 - 构建动词可以输出日志，但不能改写其他 recipe 的产物。
 - 所有写文件操作必须落在 `$TREE`、`$DEPS`、`$PHPRT_HOME` 之内；不允许写系统目录。
 
-## 6. 校验
+## 6. wheel 化与 SONAME
+
+运行时库整理（wheel 化）由 driver 在构建收尾和 `phprt update` 时统一做一次，算法见
+[WHEEL-LIBS.md](WHEEL-LIBS.md)。recipe 里**不写** SONAME、不写运行时名、不写 rpath。
+
+### 6.1 为什么 SONAME 不进 recipe
+
+- SONAME 是编译产物，只有 `make install` 之后才存在。recipe 里写死预期值，等于把上游的
+  事实抄一遍，升级就漂移。
+- wheel 化的输入是 `deps/*/lib{,64}/*.so*` 的 ELF 头。它要回答的是「整棵树里谁引用了
+  谁」，单个 recipe 看不到二三级依赖。
+- 消费方（`bin/php`、各扩展 `.so`）可能引用 recipe 根本不知道的库，只有扫描 ELF 才能
+  全部改写。
+
+所以默认情况下，recipe 对 wheel 化的义务只有「按标准方式安装」；只有例外才需要声明。
+
+### 6.2 recipe 必须保证的事
+
+1. 共享库装在 `deps/<name>-<版本>/lib/` 或 `lib64/` 的**根目录**。子目录
+   （`lib/engines-3/`、`lib/ossl-modules/`）不会被扫描。
+2. 真实文件名以 `.so.` 开头（`libfoo.so.N`，完整版 `libfoo.so.N.M.P` 也算），
+   `DT_SONAME` 带 ABI 版本号（`libfoo.so.N`）。缺 SONAME 或 SONAME 没有版本号，wheel 化
+   直接失败（`SONAME 没有 ABI 版本号，无法生成运行时名`）。
+3. `.so`、`.so.N` 这类软链可以保留。wheel 化只取真实文件；不要删上游软链，后续
+   `add ext` 链接还要用。
+4. 只产静态库（`.a`）或只装头文件的依赖写 `wheel=none`。wheel 化本来就会跳过没有 `.so`
+   的 dep，声明的作用是让校验能断言「这个 dep 不该有共享库」，而不是漏装。
+5. 不要在 `build()` 里 `patchelf`、不要手工改 `DT_NEEDED`、不要把 `deps/*/lib/*.so`
+   软链到 `lib/phprt`（原因见 WHEEL-LIBS 6.1、6.2）。
+6. 构建期可以写 rpath（CMake 的 `CMAKE_INSTALL_RPATH`、`-Wl,-rpath`），它只对 `deps/`
+   里的中间产物有效；运行时产物由 wheel 化统一覆盖。不要往 `lib/phprt` 或扩展里写
+   绝对路径。
+7. 安装目录名必须是 `<name>-<版本>`：`wheel.map` 的版本列取自目录名，`dep_dir_of`
+   必须给出同样的名字。
+8. 不要在两个 dep 里装同一个 SONAME。同名 SONAME 出现两份时 wheel 化直接失败
+   （旧版本目录没清干净是常见原因，`prune_stale_deps` 负责清理）。
+
+### 6.3 例外声明 `wheel=`
+
+只有 dep 需要这个字段，可省略（等于 `wheel=auto`）：
+
+```bash
+# phprt: contract=v2 kind=dep name=openssl version=OPENSSL_VERSION needs= optional= tools=perlshim wheel=singleton:libssl+libcrypto
+```
+
+| 值 | 含义 |
+| --- | --- |
+| `auto` | 默认：所有 `.so.N` 拍平 |
+| `none` | 不参与 wheel 化（只产 `.a`、可执行文件或数据） |
+| `exclude:a+b` | 装出来但不复制到 `lib/phprt`（已知没有消费者） |
+| `alias:libzip.so.5` | 代码里有 `dlopen("libzip.so.5")`，在 `lib/phprt` 补一个指向 rt 名的软链 |
+| `singleton:libssl+libcrypto` | 组内每个 SONAME 恰好一份，且 map 里的版本列一致 |
+
+多条指令用 `;` 连接，指令内的名字用 `+` 分隔：
+
+```bash
+wheel=singleton:libssl+libcrypto;exclude:libicutest+libicutu
+```
+
+`singleton` 用来替代校验代码里写死的 `libssl.so.3`；跨 ABI 系列（`libssl.so.4`）时不用
+改校验逻辑。
+
+### 6.4 校验里的 wheel 项
+
+| 层 | 检查 |
+| --- | --- |
+| L1 | `wheel` 只允许出现在 dep；值只能是 `auto`、`none` 或上表的指令；`alias:` 的值必须是 `*.so.*`；`exclude`/`singleton` 的值不能带路径 |
+| L2 | 构建后扫描 `deps/<name>-<版本>/lib{,64}/*.so.*`：每个真实文件必须有带 ABI 版本号的 SONAME；`wheel=none` 的 dep 不得产出 `.so.*`；`exclude` 的库不得出现在任何消费方的 `DT_NEEDED` 里；`alias` 的名字必须在 `lib/phprt` 能解析到 |
+| L3 | `phprt verify` 的 wheel 完整性检查遍历 `wheel.map` 加所有 `singleton`/`alias` 声明，不再写死 SONAME |
+
+L2 的「消费方」指 `bin/*`、`lib/php/extensions/*/*.so` 和 `lib/phprt/*.so*`。
+
+### 6.5 现状（PHP 8.5.12）
+
+- `wheel.map` 27 行；`bin/php` 和所有扩展的 `DT_NEEDED` 全是 rt 名，没有原始 SONAME 残留。
+- `libffi` 只装到 `lib64/`，靠 glob 覆盖，不需要额外声明。
+- OpenSSL 的 `lib/engines-3/*.so`、`lib/ossl-modules/legacy.so` 不在 `lib/` 根目录，没有
+  被拍平。`OPENSSLDIR` 是 `/etc/pki/tls`，这些模块本来也只从系统目录加载；树里要用
+  legacy provider 需要显式设 `OPENSSL_MODULES`，不靠 wheel。这是已知边界。
+- 4 个库被拍平但没有消费方 `NEEDED`：`libicutest`、`libwebpdecoder`、`libwebpdemux`、
+  `libwebpmux`。可以用 `exclude` 去掉，体积都不大，不做也不算错。
+- 目前没有 dep 需要 `alias`，也没有 SONAME 缺版本号的情况。
+
+## 7. 校验
 
 校验分三层，避免每次构建都做重检查。
 
@@ -203,7 +289,7 @@ L1 必须检查的字段规则：
   `warn "legacy recipe: ... 请迁移到 v2"`。
 - allowlist 只减不增；迁移一个删一个。
 
-## 7. 模板
+## 8. 模板
 
 ### builtin
 
@@ -260,7 +346,7 @@ recipe_main "$@"
 
 ```bash
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=dep name=curl version=LIBCURL_VERSION needs= optional=openssl,zlib tools=
+# phprt: contract=v2 kind=dep name=curl version=LIBCURL_VERSION needs= optional=openssl,zlib tools= wheel=auto
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 load_config
@@ -286,9 +372,9 @@ build() { ... }
 recipe_main "$@"
 ```
 
-## 8. 迁移
+## 9. 迁移
 
-### 8.1 阶段
+### 9.1 阶段
 
 1. **Phase A：补头。** 给所有 recipe 加 `contract=legacy` 和缺失字段，登记 allowlist。此阶段
    L1 头校验立即生效，能挡住新文件漏字段。
@@ -299,16 +385,17 @@ recipe_main "$@"
    默认值，`bundle.conf` 只做覆盖。
 4. **Phase D：去掉硬编码表。** `BUILTIN_ORDER`（`php.sh` + `build.sh`）、`ext_modules`、
    `ext_version`、`dep_sig` 里的 `case curl|libxml2|libzip` 都改为读 recipe 的
-   `modules`/`version`/`optional`。
+   `modules`/`version`/`optional`；`wheel_integrity_check` 和 `update` 里写死的
+   `libssl.so.3` / `libcrypto-rt3.so.3` 改为读 dep 的 `wheel=singleton:...`。
 
-### 8.2 顺序问题
+### 9.2 顺序问题
 
 依赖图目前是列表，不是拓扑序；`--ext` 的输入顺序仍可能影响构建顺序。审计已确认
 `deps/curl.sh` 的 openssl/zlib 边没有声明，`--ext "curl openssl"` 会先编 libcurl。
 Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型，只要求 `needs`/`optional`
 声明完整，顺序由 driver 统一排序。
 
-## 9. 提交前检查
+## 10. 提交前检查
 
 - [ ] 新文件从模板复制，`contract=v2`
 - [ ] 头部字段齐全，字段矩阵里的禁止项没有出现
@@ -320,18 +407,24 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
 - [ ] `build()` 不写 ini，`enable()` 只写 ini
 - [ ] `needs`/`tools` 里的每个名字都能解析
 - [ ] 关闭时 `flags` 输出负向参数，或说明当前 PHP 版本已移除该参数
+- [ ] dep 的共享库装在 `lib/` 或 `lib64/` 根目录，真实文件是 `.so.N` 且 SONAME 带 ABI 版本号
+- [ ] recipe 里没有手工 `patchelf`、没有把 `deps/*/lib/*.so` 软链到 `lib/phprt`
+- [ ] 只产静态库或需要 `dlopen` 别名时，已写 `wheel=none` / `wheel=alias:...`
 - [ ] `phprt install <版本> --plan` 能看到新 recipe
 - [ ] `phprt recipe check --all` 通过
 
-## 10. 审计结果（2026-11-08）
+## 11. 审计结果（2026-11-08）
 
 范围：`php8.5` / `php8.6` / `php7.4` 三个 bundle，共 110 个 recipe。
+
+统计基线是提交 `ee8cd5b`。之后新增的 recipe（`gettext` builtin、`xsl`/`libxslt` 等）没有计入
+本节计数，但适用同一规范。
 
 审计方法：遍历三个 bundle 的 `{builtin,ext,deps,tools}/*.sh`，解析 `phprt` 头、函数定义、
 顶层命令、ini 写入、版本变量引用，并把 `needs`/`tools` 解析到实际文件；同时核对
 `common.sh` 里的 `ext_modules`/`ext_version` 和 `bundle.conf` 的版本变量。
 
-### 10.1 汇总
+### 11.1 汇总
 
 | bundle | builtin | ext | dep | tool | 合计 |
 | --- | --- | --- | --- | --- | --- |
@@ -352,7 +445,7 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
 
 结论：规范不能直接切 error 模式，必须先走 Phase A/allowlist；否则现有构建全部失败。
 
-### 10.2 builtin（php8.5）
+### 11.2 builtin（php8.5）
 
 | recipe | switch | modules | ini |
 | --- | --- | --- | --- |
@@ -375,7 +468,7 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
 - `zlib`、`sqlite` 是共享模块，`ini` 不是 `-`；其余 builtin 静态编入。
 - `mbstring` 的开关叫 `ENABLE_ONIGURUMA`，`zip` 叫 `ENABLE_LIBZIP`，不能按 name 推断。
 
-### 10.3 ext（php8.5）
+### 11.3 ext（php8.5）
 
 | recipe | switch | version | modules | ini | tools | needs |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -395,7 +488,7 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
 - 6/6 没有 `recipe_main`，顶层直接构建；直接问版本会触发构建。
 - `yaml` 的版本变量是 `YAML_EXT_VERSION`，不是 `YAML_VERSION`。
 
-### 10.4 dep（php8.5）
+### 11.4 dep（php8.5）
 
 | recipe | version | needs | optional | tools |
 | --- | --- | --- | --- | --- |
@@ -428,7 +521,7 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
 - `openssl` 使用 `dep_dir_of perl5core` 并在体内补 perl 模块，但头里没有 `tools=perlshim`。
 - 17/17 顶层直接构建，没有 `recipe_main`。
 
-### 10.5 tool（php8.5）
+### 11.5 tool（php8.5）
 
 | recipe | version | tools |
 | --- | --- | --- |
@@ -443,7 +536,7 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
   perl 模块。
 - `deps/openssl.sh` 也依赖 perlshim，说明 tool 依赖不只出现在 tool 之间。
 
-### 10.6 php7.4 / php8.6 差异
+### 11.6 php7.4 / php8.6 差异
 
 结构与 8.5 相同，差异只在版本和 recipe 集合：
 
@@ -453,7 +546,29 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
 - 8.6 是 dev 分支，PHP 源码需要 `buildconf`，`php.sh` 的 tool 依赖是条件性的；这是 PHP 本体
   特例，不走 recipe 注册表。
 
-## 11. 审计后对规范的修订
+### 11.7 wheel 化与 SONAME
+
+审计对象是构建产物（PHP 8.5.12，`lib/phprt/wheel.map` 27 行），不是 recipe 字段：
+
+| 项 | 结果 |
+| --- | --- |
+| 消费方残留原始 SONAME | 0（`bin/php`、9 个扩展 `.so` 全是 rt 名） |
+| `lib/phprt` 里有文件不在 `wheel.map` | 0 |
+| SONAME 缺 ABI 版本号 | 0 |
+| 装在 `lib64/` 而非 `lib/` | 1（`libffi`），靠 glob 覆盖 |
+| 子目录库未拍平 | OpenSSL 的 `lib/engines-3/*.so`、`lib/ossl-modules/legacy.so` |
+| 拍平但无消费者 NEEDED | 4（`libicutest`、`libwebpdecoder`、`libwebpdemux`、`libwebpmux`） |
+| 需要 `dlopen` 别名 | 0 |
+
+校验代码里的硬编码：
+
+- `runner/common.sh` 的 `wheel_integrity_check` 写死 `libssl.so.3` / `libcrypto.so.3`；
+- `runner/commands.sh` 的 `update` 写死 `libcrypto-rt3.so.3`。
+
+三个 bundle 现在都是 OpenSSL 3.5.9，所以能跑通；换成 OpenSSL 1.1 或 4.x 时这两处会静默
+失效。规范里用 dep 的 `wheel=singleton:libssl+libcrypto` 替代，跨 ABI 系列不用改代码。
+
+## 12. 审计后对规范的修订
 
 审计暴露了 v1 草案里几个不现实的默认值，最终版做了这些调整：
 
@@ -475,8 +590,14 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
    单模块且等于 name，默认 name 足够。
 10. **`legacy` 只减不增。** 新文件必须是 v2；AI 复制旧文件不会自动获得 legacy 豁免，必须
     显式进 allowlist，而 allowlist 由人维护。
+11. **wheel 化不写进 recipe，只写例外。** SONAME 是编译产物，写进头会漂移；新增
+    `wheel=` 字段，只表达静态库、`dlopen` 别名、singleton 组和排除列表。
+12. **recipe 禁止手工碰 ELF。** 不许 `patchelf`、不许改 `DT_NEEDED`、不许把
+    `deps/*/lib/*.so` 软链到 `lib/phprt`；这些都会和 wheel 化冲突。
+13. **`singleton` 替代校验里的写死 SONAME。** `libssl.so.3` / `libcrypto-rt3.so.3` 这类
+    硬编码应在 Phase D 改为读 dep 的 `wheel=singleton:...`。
 
-## 12. 已知边界
+## 13. 已知边界
 
 校验能抓「漏写」，抓不了「写错」：
 
@@ -486,3 +607,9 @@ Phase D 之后应在 resolver 里做拓扑排序；本文不做完整图模型�
 - 依赖图目前只做列表，不做拓扑排序；`--ext` 的输入顺序仍可能影响构建顺序，Phase D 后单独修。
 - 版本/URL/SHA 完全下沉到 recipe 之前，“加一个扩展只加一个文件”只在 headers + build 层面
   成立；完全成立要等 Phase C。
+- wheel 化只扫 `deps/*/lib{,64}/` 根目录，子目录里的库（OpenSSL engines/providers）不拍平，
+  运行时也不会自动找到；需要时用 `OPENSSL_MODULES` 等变量显式指定。
+- `dlopen("libfoo.so.1")` 这类字符串不会改写，只能靠 `wheel=alias:` 补软链；不声明就会在
+  运行时报找不到库。
+- `wheel=` 的四个指令里，`none` 和 `exclude` 只需要 driver 少复制；`alias` 和 `singleton`
+  目前在代码里还是 OpenSSL 特判，Phase D 才变成通用逻辑。
