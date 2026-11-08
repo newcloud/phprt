@@ -23,7 +23,7 @@
      -j24 -w failed.list \
      Zend/tests tests ext/standard/tests ext/openssl/tests ext/curl/tests \
      ext/intl/tests ext/mbstring/tests ext/zip/tests ext/sockets/tests ext/gd/tests \
-     ext/sodium/tests ext/gettext/tests ext/xsl/tests
+     ext/sodium/tests ext/gettext/tests ext/xsl/tests ext/ftp/tests
    ```
 
 4. 不要用 `make test`：
