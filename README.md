@@ -144,6 +144,7 @@ ABI 版本号）、SONAME 同步改写，所有消费方的 `DT_NEEDED` 一起�
 
 - [运行时库的 wheel 化](docs/WHEEL-LIBS.md)
 - [给 bundle 加扩展或依赖](docs/ADD-EXTENSION.md)
+- [recipe 规范与审计](docs/RECIPE.md)
 - [从 v1 重构到 v2](docs/REFACTOR-V1-TO-V2.md)
 - [项目本地自包含模型](docs/PROJECT-LOCAL.md)
 - [多 PHP 版本的配置组织](docs/PHP-VERSIONS.md)
