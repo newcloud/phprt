@@ -164,6 +164,7 @@ ext_modules() {
     zip)       printf '%s\n' zip ;;
     gd)        printf '%s\n' gd ;;
     ffi)       printf '%s\n' ffi ;;
+    sodium)    printf '%s\n' sodium ;;
     redis)     printf '%s\n' redis ;;
     protobuf)  printf '%s\n' protobuf ;;
     xdebug)    printf '%s\n' xdebug ;;
@@ -441,6 +442,7 @@ dep_dir_of() {
     avif)      dep_dir avif      "${AVIF_VERSION:-}" ;;
     libffi)    dep_dir libffi    "${LIBFFI_VERSION:-}" ;;
     libyaml)   dep_dir libyaml   "${LIBYAML_VERSION:-}" ;;
+    libsodium) dep_dir libsodium "${LIBSODIUM_VERSION:-}" ;;
     autoconf)  printf '%s/tools/autoconf-%s\n' "$PHPRT_HOME" "${AUTOCONF_VERSION:-2.72}" ;;
     re2c)      printf '%s/tools/re2c-%s\n'     "$PHPRT_HOME" "${RE2C_VERSION:-4.6}" ;;
     perl5core) printf '%s/tools/perl5core-%s\n' "$PHPRT_HOME" "${PERL_SHIM_VERSION:-5.42.2}" ;;

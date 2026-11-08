@@ -44,7 +44,7 @@ if [ "${PHPRT_CLEAN_SRC:-0}" = 1 ]; then
   rm -rf "$TREE/.phprt-state"
 fi
 
-BUILTIN_ORDER="openssl zlib libxml2 curl sqlite mysqli mbstring intl zip gd ffi"
+BUILTIN_ORDER="openssl zlib libxml2 curl sqlite mysqli mbstring intl zip gd ffi sodium"
 
 # ---------------------------------------------------------------- 解析 ----
 BUILTINS=""
