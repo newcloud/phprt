@@ -3,7 +3,7 @@
 #  libzip（PHP zip 扩展；Composer 解包用）
 #  安装到: deps/libzip-<版本>/
 #  可单独执行: lib/modules/deps/libzip.sh
-#  phprt: needs=openssl
+#  phprt: needs=openssl,zlib
 # =============================================================================
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
@@ -37,11 +37,11 @@ fi
 
 ZLIB_D="$(dep_dir_of zlib)"
 OPENSSL_D="$(dep_dir_of openssl)"
-ZLIB_FLAG=(-DENABLE_ZLIB=OFF)
-PREFIX_PATH="$OPENSSL_D;$D"
-[ "${ENABLE_ZLIB:-0}" = 1 ] && { ZLIB_FLAG=(-DENABLE_ZLIB=ON); PREFIX_PATH="$(dep_dir_of zlib);$OPENSSL_D;$D"; }
+# libzip 1.12 没有 ENABLE_ZLIB 选项：zlib 是必需依赖，由 CMake 自动探测。
+# 固定把项目自编的 zlib 放进搜索路径，避免回落到系统 libz。
+PREFIX_PATH="$ZLIB_D;$OPENSSL_D;$D"
 
-log "cmake 配置（openssl 提供 zip 加密；关闭 bzip2/lzma/zstd/tools）"
+log "cmake 配置（openssl 提供 zip 加密；zlib 必需；关闭 bzip2/lzma/zstd/tools）"
 cmake -S "$SRC" -B "$BDIR" \
   -DCMAKE_INSTALL_PREFIX="$D" \
   -DCMAKE_BUILD_TYPE=Release \
@@ -49,7 +49,6 @@ cmake -S "$SRC" -B "$BDIR" \
   -DCMAKE_INSTALL_RPATH="$D/lib;$OPENSSL_D/lib;$ZLIB_D/lib" \
   -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
   -DBUILD_SHARED_LIBS=ON \
-  "${ZLIB_FLAG[@]}" \
   -DENABLE_BZIP2=OFF -DENABLE_LZMA=OFF -DENABLE_ZSTD=OFF -DENABLE_OPENSSL=ON \
   -DBUILD_TOOLS=OFF -DBUILD_REGRESS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOC=OFF \
   -DCMAKE_PREFIX_PATH="$PREFIX_PATH" \

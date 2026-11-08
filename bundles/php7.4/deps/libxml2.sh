@@ -38,9 +38,14 @@ ZLIB_ARG=(--without-zlib)
 
 cd "$SRC"
 export PKG_CONFIG_PATH="$(dep_pc_path zlib)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+# libxml2 2.15 起删除了 LZMA 与 FTP 支持，对应参数也随之消失；
+# 2.9.x（php7.4 bundle）仍需要显式关闭。按 configure 实际支持的参数传。
+XML_OPTS=(--without-python --without-http)
+CONFIGURE_HELP="$(./configure --help 2>/dev/null || true)"
+case "$CONFIGURE_HELP" in *--with-lzma*) XML_OPTS+=(--without-lzma) ;; esac
+case "$CONFIGURE_HELP" in *--with-ftp*)  XML_OPTS+=(--without-ftp) ;; esac
 log "configure + make -j$JOBS"
-./configure --prefix="$D" "${ZLIB_ARG[@]}" \
-    --without-lzma --without-python --without-http --without-ftp \
+./configure --prefix="$D" "${ZLIB_ARG[@]}" "${XML_OPTS[@]}" \
     > "$LOGS/libxml2-configure.log" 2>&1 \
   || { tail -30 "$LOGS/libxml2-configure.log"; die "libxml2 configure 失败"; }
 make -j"$JOBS" > "$LOGS/libxml2-make.log" 2>&1 \

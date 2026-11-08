@@ -7,7 +7,7 @@
 # swoole 与 OpenSSL 的依赖关系（这段说明不要删除）
 #
 # swoole 依赖 OpenSSL。swoole 6.x 的 SSL 代码是无条件编译的，上游已移除
-# --enable-openssl；本脚本里的该参数会被 configure 忽略。phprt 的
+# --enable-openssl；本脚本不再传该参数（传了只会得到 configure 警告）。phprt 的
 # `needs=openssl` 只负责构建顺序和头/库路径，不会写成 DT_NEEDED。
 #
 # `ldd swoole.so` / `readelf -d swoole.so` 看不到 libssl.so 是预期现象：
@@ -92,9 +92,9 @@ phpize > "$LOGS/swoole-phpize.log" 2>&1 \
   || { tail -30 "$LOGS/swoole-phpize.log"; die "phpize 失败"; }
 
 # 用我们自己编的 OpenSSL；brotli 用不到就关掉（否则会链系统 libbrotli*）
-log "configure（--enable-swoole --enable-openssl --enable-sockets --enable-mysqlnd）"
+log "configure（--enable-swoole --with-openssl-dir --enable-sockets --enable-mysqlnd）"
 ./configure --with-php-config="$PREFIX/bin/php-config" \
-  --enable-swoole --enable-openssl --with-openssl-dir="$D_OPENSSL" \
+  --enable-swoole --with-openssl-dir="$D_OPENSSL" \
   --enable-sockets --enable-mysqlnd --disable-brotli \
   > "$LOGS/swoole-configure.log" 2>&1 \
   || { tail -40 "$LOGS/swoole-configure.log"; die "swoole configure 失败"; }

@@ -14,6 +14,9 @@ case "${1:-}" in
   --flags)
     if [ "${ENABLE_OPENSSL:-0}" = 1 ]; then
       printf '%s\n' "--with-openssl=$(dep_dir_of openssl)"
+      # PHP 8.5+：用已编好的 OpenSSL 3.2+ 提供 argon2i/argon2id，
+      # 不引入额外的 libargon2（PHP 8.4 及以前没有这个参数）
+      printf '%s\n' --with-openssl-argon2
     else
       printf '%s\n' "--without-openssl"
     fi ;;

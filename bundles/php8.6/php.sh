@@ -26,7 +26,7 @@ build_args() {
     --with-config-file-scan-dir="$TREE/etc/conf.d"
     --enable-cli --disable-cgi
     --without-pear
-    --enable-opcache
+    # OPcache 自 PHP 8.5 起固定编入 PHP，--enable-opcache 已被上游移除
     --enable-filter --enable-phar --enable-fileinfo
     --enable-bcmath --enable-calendar --enable-exif
     --enable-pcntl --enable-posix --enable-sockets

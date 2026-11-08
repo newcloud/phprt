@@ -14,7 +14,8 @@ case "${1:-}" in
   --flags)
     # intl 默认关闭，不需要负向参数
     if [ "${ENABLE_INTL:-0}" = 1 ]; then
-      printf '%s\n' --enable-intl "--with-icu-dir=$(dep_dir_of icu)"
+      # PHP 8.5+ 只用 pkg-config 定位 ICU（--with-icu-dir 已被上游移除）
+      printf '%s\n' --enable-intl
     fi ;;
   --needs)
     if [ "${ENABLE_INTL:-0}" = 1 ]; then printf '%s\n' icu; fi ;;
