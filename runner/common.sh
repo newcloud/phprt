@@ -169,6 +169,7 @@ ext_modules() {
     xsl)       printf '%s\n' xsl ;;
     ftp)       printf '%s\n' ftp ;;
     bz2)       printf '%s\n' bz2 ;;
+    igbinary)  printf '%s\n' igbinary ;;
     redis)     printf '%s\n' redis ;;
     protobuf)  printf '%s\n' protobuf ;;
     xdebug)    printf '%s\n' xdebug ;;
@@ -480,7 +481,7 @@ module_sh() {
 
 stamp_file() {
   case "$1" in
-    php|redis|protobuf|xdebug|apcu|yaml|swoole)
+    php|redis|protobuf|xdebug|apcu|yaml|swoole|igbinary)
       printf '%s/.phprt-stamp-%s\n' "$TREE" "$1" ;;
     perlshim)
       printf '%s/.phprt-stamp-perlshim\n' "$(dep_dir_of perl5core)" ;;
@@ -698,6 +699,7 @@ ext_version() {
     apcu)     printf '%s\n' "${APCU_VERSION:-}" ;;
     yaml)     printf '%s\n' "${YAML_EXT_VERSION:-}" ;;
     swoole)   printf '%s\n' "${SWOOLE_VERSION:-}" ;;
+    igbinary) printf '%s\n' "${IGBINARY_VERSION:-}" ;;
     *)        printf '\n' ;;
   esac
 }
