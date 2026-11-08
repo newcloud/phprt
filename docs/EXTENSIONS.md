@@ -34,7 +34,7 @@ phprt php8.5 目前 `SUPPORTED_EXTS` 17 个（builtin 11 + PECL 6），框架必
 
 | # | 扩展 | 类型 | 依赖库 | configure 参数（查文档后填） | 状态 |
 |---|------|------|--------|------------------------------|------|
-| 1 | sodium | builtin | libsodium | `--with-sodium=<deps/libsodium>`（php.net/manual/en/sodium.installation.php） | ✅ 2026-11-08（构建 + php -m + 功能调用 + verify + 搬移测试全过） |
+| 1 | sodium | builtin | libsodium | `--with-sodium=<deps/libsodium>`（php.net/manual/en/sodium.installation.php） | ✅ 2026-11-08（构建 + php -m + 功能调用 + 上游 .phpt 31/31 + verify + 搬移测试全过） |
 | 2 | gettext | builtin | 无（glibc） | 待查 | ⬜ |
 | 3 | xsl | builtin | libxslt | 待查 | ⬜ |
 | 4 | ftp | builtin | 无 | 待查 | ⬜ |

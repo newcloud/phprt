@@ -22,7 +22,8 @@
      -d extension=sqlite3 -d extension=pdo_sqlite -d extension=zlib \
      -j24 -w failed.list \
      Zend/tests tests ext/standard/tests ext/openssl/tests ext/curl/tests \
-     ext/intl/tests ext/mbstring/tests ext/zip/tests ext/sockets/tests ext/gd/tests
+     ext/intl/tests ext/mbstring/tests ext/zip/tests ext/sockets/tests ext/gd/tests \
+     ext/sodium/tests
    ```
 
 4. 不要用 `make test`：
