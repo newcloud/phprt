@@ -40,7 +40,7 @@ phprt php8.5 目前 `SUPPORTED_EXTS` 17 个（builtin 11 + PECL 6），框架必
 | 4 | ftp | builtin | 无 | `--enable-ftp`（php.net/manual/en/ftp.installation.php；FTP-SSL 随 openssl 隐式启用） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 64/64 + 功能调用 + verify + 搬移测试全过） |
 | 5 | bz2 | builtin | bzip2 | `--with-bz2=<deps/bzip2>`（php.net/manual/en/bzip2.installation.php） | ✅ 2026-11-08（构建 + php -m + 上游 .phpt 25 passed/2 skipped/0 failed + 功能调用 + verify + 搬移测试全过） |
 | 6 | igbinary | PECL | 无 | `--enable-igbinary`（phpize 扩展；pecl.php.net/package/igbinary 3.2.16） | ✅ 2026-11-08（构建 + php -m + 功能调用 + verify + 搬移测试全过；上游 .phpt 147/151，4 败为 PHP 8.5 Deprecated 输出污染：report_memleaks 指令废弃 + 字符串自增语法废弃，非功能问题） |
-| 7 | msgpack | PECL | 无 | 待查 | ⬜ |
+| 7 | msgpack | PECL | 无 | `--with-msgpack`（phpize 扩展，源码自带 bundled msgpack-c；pecl.php.net/package/msgpack 3.0.1） | ✅ 2026-11-08（构建 + php -m + 功能调用 + 上游 .phpt 134 passed/9 skipped/0 failed/1 expected fail + verify + 搬移测试全过） |
 | 8 | ldap | builtin | OpenLDAP | 待查 | ⬜ |
 | 9 | gmp | builtin | gmp | 待查 | ⬜ |
 | 10 | memcached | PECL | libmemcached | 待查 | ⬜ |
