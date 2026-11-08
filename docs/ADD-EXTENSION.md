@@ -168,13 +168,17 @@ esac
 - [ ] `deps/<库>.sh` 能单独跑通：`bash bundles/php8.5/deps/libfoo.sh`
 - [ ] 依赖装完 `deps/<库>-<版本>/lib` 里有 `.so`
 - [ ] 内置扩展加了 `BUILTIN_ORDER` / `ext_modules`
-- [ ] PECL 扩展加了 `ext_version` / `ext_modules`
+- [ ] PECL 扩展加了 `ext_version` / `ext_modules` / `stamp_file`（漏 stamp_file 会报 `/.phprt-stamp-<名>: 权限不够`）
 - [ ] `SUPPORTED_EXTS` 里有名字
 - [ ] `phprt install 8.5 --ext "<新扩展>" --plan` 能看到正确的依赖顺序
 - [ ] 构建后 `readelf -d` 里新库的 `NEEDED` 是 rt 运行时名，`RPATH` 是 `$ORIGIN`
 - [ ] `env -i ./myphp -m` 能看到扩展，`phprt verify` 全部步骤通过
 
 ## 6. 常见坑
+
+**改了 `runner/` 后项目树不会自动同步。** `copy_runner` 只在 `phprt install` / `phprt use`
+的 `activate_tree` 里触发，`phprt add ext` 不触发。改完仓库 `runner/` 要手动
+`copy_runner <仓库根>`（或跑一次 `phprt use`）再构建，否则项目用的是旧副本。
 
 **libtool 会把依赖目录写成绝对 RPATH。** 有些库的 `.la` 里记着绝对路径，链接时被塞进
 `DT_RUNPATH`。构建完用 `readelf -d` 检查，出现绝对路径就要在 recipe 里
