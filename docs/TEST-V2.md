@@ -560,6 +560,44 @@ php -n -d memory_limit=256M "$SRC/ext/hash/bench.php"
 - `ext/hash/bench.php` 里 xxh128 +4.2%、crc32 -4.1%，其它哈希基本不变；
   总计 -0.1%，没有一致趋势。
 
+### libxml2：XML 解析与 XPath
+
+`libxml2` recipe 现在默认 `--enable-static`，因此 `--static-all` 和
+`--static-all-lto` 都能拿到 `libxml2.a`。两棵树都加上 `libxml2` 扩展：
+
+```bash
+phprt install 8.5 --static-all \
+  --ext "openssl zlib libxml2 curl sqlite mbstring"
+phprt install 8.5 --static-all-lto \
+  --ext "openssl zlib libxml2 curl sqlite mbstring"
+```
+
+- `v2sa`：static 非 LTO，`libxml2.a` 没有 `.gnu.lto` 段。
+- `v2salto`：static LTO，`libxml2.a` 有 3865 个 `.gnu.lto` 段。
+- `bin/php`：45.9 MB vs 71.5 MB，`ldd` 仍只有 glibc；`phprt verify` 全绿。
+
+负载：2.57 MB XML、12000 个 `<item>`，`taskset -c 2`，`-n`，
+A/B 交替 11 轮取中位数：
+
+| 用例 | 非 LTO | LTO | 变化 |
+| --- | ---: | ---: | ---: |
+| `DOMDocument::loadXML` | 725.01 ms | 709.65 ms | -2.12% |
+| `simplexml_load_string` | 698.49 ms | 701.84 ms | +0.48%（噪声内） |
+| `XMLReader` 全量遍历 | 227.37 ms | 227.15 ms | -0.10% |
+| `xml_parse`（SAX） | 217.80 ms | 215.49 ms | -1.06%（噪声内） |
+| XPath `//item[@category='c7']/value` | 418.33 ms | 422.75 ms | +1.06%（噪声内） |
+| XPath `//item[name='item-6000']/value` | 432.78 ms | 432.40 ms | -0.09% |
+| XPath `count(//item/tags/tag)` | 208.04 ms | 207.68 ms | -0.17% |
+| `DOMDocument::saveXML` | 148.05 ms | 142.70 ms | -3.61% |
+
+结论：
+
+- DOM 解析和序列化有约 2%–3.6% 的小幅收益，11 轮里方向比较一致。
+- SimpleXML、XMLReader、SAX、XPath 都没有稳定变化；XPath 引擎本身
+  没有从这个负载里得到可见加速。
+- 收益远小于二进制体积增长，XML 密集型项目可以开，普通项目不必为了
+  XML 单独开 LTO。
+
 结论：
 
 - 整体 VM 负载仍然在 ±1% 内，和 v1 只开 PHP LTO 的结论一致。

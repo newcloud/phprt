@@ -151,7 +151,7 @@ readelf -S deps/<名字>/lib/*.a | grep -q '\.gnu\.lto'
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
 | v0 | `openssl zlib curl sqlite oniguruma` | 已实现（2026-11-09） |
-| v1 | 补 `libxml2`、`libzip`、`libsodium` 的静态库和 LTO，默认集完整 | 待做 |
+| v1 | `libxml2` 已接入静态库和 LTO；`libzip`、`libsodium` 待做 | 部分完成（2026-11-09） |
 | v2 | 其余 autotools 依赖 | 待做 |
 | v3 | CMake 类依赖（aom/avif/jpeg/libzip/tidy/webp 等） | 待做 |
 | v4 | 需要额外静态库或 C++ 运行库的依赖 | 待做 |
