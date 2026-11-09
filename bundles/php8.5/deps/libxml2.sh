@@ -18,6 +18,7 @@ needs() {
 
 build() {
   need_cmds gcc make tar
+  lto_on deps && need_cmds gcc-ar gcc-ranlib
 
   local D SIG TAR SRC CONFIGURE_HELP
   local -a ZLIB_ARG XML_OPTS
@@ -50,18 +51,29 @@ build() {
   cd "$SRC"
   export PKG_CONFIG_PATH="$(dep_pc_path zlib)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
   # libxml2 2.15 起删除了 LZMA 与 FTP 支持，参数也随之消失；按 configure 实际支持的传
-  XML_OPTS=(--without-python --without-http)
+  XML_OPTS=(--enable-static --without-python --without-http)
   CONFIGURE_HELP="$(./configure --help 2>/dev/null || true)"
   case "$CONFIGURE_HELP" in *--with-lzma*) XML_OPTS+=(--without-lzma) ;; esac
   case "$CONFIGURE_HELP" in *--with-ftp*)  XML_OPTS+=(--without-ftp) ;; esac
 
+  local ar_bin ranlib_bin lto_c lto_ld
+  ar_bin="$(dep_ar)"
+  ranlib_bin="$(dep_ranlib)"
+  lto_c="$(dep_lto_cflags)"
+  lto_ld="$(dep_lto_ldflags)"
+  local -a cfg_env=(AR="$ar_bin" RANLIB="$ranlib_bin")
+  [ -n "$lto_c" ] && cfg_env+=(CFLAGS="${CFLAGS:--g -O2} $lto_c")
+  [ -n "$lto_ld" ] && cfg_env+=(LDFLAGS="${LDFLAGS:+$LDFLAGS }$lto_ld")
+
   log "configure + make -j$JOBS"
-  ./configure --prefix="$D" "${ZLIB_ARG[@]}" "${XML_OPTS[@]}" \
+  env "${cfg_env[@]}" \
+    ./configure --prefix="$D" "${ZLIB_ARG[@]}" "${XML_OPTS[@]}" \
       > "$LOGS/libxml2-configure.log" 2>&1 \
     || { tail -30 "$LOGS/libxml2-configure.log"; die "libxml2 configure 失败"; }
-  make -j"$JOBS" > "$LOGS/libxml2-make.log" 2>&1 \
+  make -j"$JOBS" AR="$ar_bin" RANLIB="$ranlib_bin" \
+      > "$LOGS/libxml2-make.log" 2>&1 \
     || { tail -20 "$LOGS/libxml2-make.log"; die "libxml2 make 失败"; }
-  make install >> "$LOGS/libxml2-make.log" 2>&1
+  make AR="$ar_bin" RANLIB="$ranlib_bin" install >> "$LOGS/libxml2-make.log" 2>&1
 
   stamp_write libxml2 "$SIG"
   ok "libxml2 $LIBXML2_VERSION -> $D"
