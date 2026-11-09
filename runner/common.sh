@@ -1012,6 +1012,7 @@ buildroot_set_env() {  # $1=chroot|host
 }
 
 # host: 直接执行；chroot: scripts/buildroot.sh exec 挂载后执行
+BUILDROOT_JOB_PID=""
 run_build_env() {
   if [ "$(build_env_get)" != chroot ]; then
     "$@"
@@ -1048,10 +1049,23 @@ run_build_env() {
     bind="$bind:$(realpath -m -- "$d")"
   done
 
+  # 后台跑 buildroot.sh，父进程收到 INT/TERM 时先转给子进程，让它按
+  # 自己的 trap 卸载挂载，再退出。
+  PHPRT_CHROOT_DETACH=1 \
   PHPRT_CHROOT_BINDS="${bind#:}" \
   PHPRT_PROJECT="$PHPRT_PROJECT" \
   PHPRT_HOME="$PHPRT_HOME" \
-    "$script" exec "$root" -- "$@"
+    "$script" exec "$root" -- "$@" &
+  BUILDROOT_JOB_PID=$!
+  trap 'kill -TERM "$BUILDROOT_JOB_PID" 2>/dev/null; wait "$BUILDROOT_JOB_PID" 2>/dev/null; exit 143' TERM
+  trap 'kill -TERM "$BUILDROOT_JOB_PID" 2>/dev/null; wait "$BUILDROOT_JOB_PID" 2>/dev/null; exit 130' INT
+  trap 'kill -TERM "$BUILDROOT_JOB_PID" 2>/dev/null; wait "$BUILDROOT_JOB_PID" 2>/dev/null; exit 129' HUP
+
+  local rc=0
+  wait "$BUILDROOT_JOB_PID" || rc=$?
+  BUILDROOT_JOB_PID=""
+  trap - INT TERM HUP
+  return "$rc"
 }
 
 

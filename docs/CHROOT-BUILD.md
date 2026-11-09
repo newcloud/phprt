@@ -104,6 +104,10 @@ phprt install 8.5 --host          # 切回宿主
 - `--plan` 只打印计划，不进 chroot。
 - 自动模式只包住 `runner/build.sh`；`activate_tree`、ini、`myphp` 仍在宿主执行。
 - 构建锁在宿主持有；进入 chroot 前关闭锁 fd，避免子进程继承。
+- 自动构建的 chroot 在后台跑（`PHPRT_CHROOT_DETACH=1`），父进程收到
+  `INT/TERM/HUP` 时先终止 chroot 进程树，再卸载挂载。成功、失败、Ctrl+C
+  都会走同一套 `trap`。
+- `SIGKILL` 无法捕获；异常残留用 `phprt buildroot unmount` 兜底。
 
 ### 环境变量
 
@@ -148,6 +152,8 @@ ca-certificates
 - 拒绝符号链接、`/`、`$HOME`。
 - 删除前先卸载，确认 0 挂载；有进程占用时默认拒绝，`--force` 跳过。
 - `create` / `enter` / `remove` / `exec` 用 `flock` 互斥。
+- `trap EXIT INT TERM HUP` 统一清理；信号处理先递归终止 chroot 进程树，
+  再按记录卸载，最后用 `findmnt` 兜底扫一遍。
 - `/dev` 不 rbind 宿主，只创建最小设备节点；用户命名空间下 mknod 失败时
   退回 bind 单个宿主设备节点。
 
@@ -161,6 +167,8 @@ ca-certificates
 - `phprt add ext tidy --shared --chroot`：只编 tidy 和它的依赖，宿主功能调用通过。
 - 产物属主是宿主 `1000:1000`（`--userspec`），不是 root。
 - `exec` / `enter` 结束、构建成功或失败后，rootfs 下挂载数都是 0。
+- 中断测试：`exec -- sleep 300` 挂载后向脚本发 `SIGTERM`，挂载数回到 0；
+  `run_build_env` 外层被 `SIGTERM` 时也会先终止 chroot 进程树再清理。
 - 用户命名空间（`unshare -rmp`）也验证过：`sysfs` 失败只警告、mknod 退回
   bind 宿主设备节点；真实 root 下正常 mknod。
 - 项目 / 仓库路径在 chroot 内保持不变；`HOME` 是绑定到 `/home/phprt`

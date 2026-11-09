@@ -72,13 +72,36 @@ BUILD_ENV="host"
 BINDS=()
 MOUNTS=()
 CLEANUP_ROOT=""
+CHROOT_PID=""
 
 log() { printf '[buildroot] %s\n' "$*"; }
 warn() { printf '  ! %s\n' "$*" >&2; }
 die() { printf '错误: %s\n' "$*" >&2; exit 1; }
 
+# 递归终止 chroot 里的进程树；只杀 PID 可能留下 make/gcc 子进程，
+# 挂载就卸不掉。
+kill_tree() {
+  local pid="$1" c
+  if [ -r "/proc/$pid/task/$pid/children" ]; then
+    for c in $(<"/proc/$pid/task/$pid/children"); do
+      kill_tree "$c"
+    done
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+}
+
+on_signal() {
+  local code="$1"
+  trap - INT TERM HUP EXIT
+  [ -n "${CHROOT_PID:-}" ] && kill_tree "$CHROOT_PID"
+  [ -n "${CHROOT_PID:-}" ] && wait "$CHROOT_PID" 2>/dev/null || true
+  CHROOT_PID=""
+  cleanup_mounts || true
+  exit "$code"
+}
+
 usage() {
-  awk 'NR >= 3 {
+  awk 'NR >= 4 {
     if ($0 ~ /^set -euo pipefail/) exit
     sub(/^# ?/, "")
     print
@@ -338,6 +361,8 @@ cleanup_mounts() {
       run_root umount -l "${MOUNTS[i]}" 2>/dev/null || true
   done
   MOUNTS=()
+  # 兜底：异常退出时按 findmnt 再清一遍，处理没进 MOUNTS 的残留
+  unmount_under "$root" || true
   CLEANUP_ROOT=""
 }
 
@@ -470,13 +495,12 @@ cmd_enter() {
   [ "$(mount_count "$root")" -eq 0 ] ||
     die "rootfs 内已有挂载（上次未正常退出？），先跑：phprt buildroot unmount $root"
 
-  trap cleanup_mounts EXIT INT TERM
+  trap cleanup_mounts EXIT
   mount_all "$root"
   log "进入 $root（exit 退出，自动卸载）"
   local rc=0
   run_chroot "$root" "$as_root" "$PROJECT_ROOT" /bin/bash --login 9>&- || rc=$?
   cleanup_mounts
-  trap - EXIT INT TERM
   local n; n="$(mount_count "$root")"
   if [ "$n" -eq 0 ]; then
     log "已退出，挂载已全部卸载"
@@ -519,7 +543,7 @@ cmd_exec() {
   [ "$(mount_count "$root")" -eq 0 ] ||
     die "rootfs 内已有挂载，先跑：phprt buildroot unmount $root"
 
-  trap cleanup_mounts EXIT INT TERM
+  trap cleanup_mounts EXIT
   mount_all "$root"
   local rc=0 cwd="$PWD" p inside=0
   case "$cwd/" in
@@ -531,9 +555,15 @@ cmd_exec() {
       [ "$inside" = 1 ] || cwd="$PROJECT_ROOT"
       ;;
   esac
-  run_chroot "$root" "$as_root" "$cwd" "${cmds[@]}" 9>&- || rc=$?
+  if [ "${PHPRT_CHROOT_DETACH:-0}" = 1 ]; then
+    run_chroot "$root" "$as_root" "$cwd" "${cmds[@]}" 9>&- &
+    CHROOT_PID=$!
+    wait "$CHROOT_PID" || rc=$?
+    CHROOT_PID=""
+  else
+    run_chroot "$root" "$as_root" "$cwd" "${cmds[@]}" 9>&- || rc=$?
+  fi
   cleanup_mounts
-  trap - EXIT INT TERM
   exit "$rc"
 }
 
@@ -707,6 +737,11 @@ cmd_env() {
 }
 
 # ---------- dispatch ----------
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+trap 'on_signal 129' HUP
+trap cleanup_mounts EXIT
+
 cmd="${1:-help}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
