@@ -158,6 +158,10 @@ phprt buildroot remove
 - 首次构建要下载和编译，耗时较长，构建区占磁盘。
 - 构建区可以随时删，删了只影响该版本的增量重建。
 
+## 开发说明
+
+项目由 newcloud 与 DeepSeek V4.1 Flash 1017 持续开发。欢迎加入。
+
 ## 相关文档
 
 - [开发者文档](docs/DEVELOPMENT.md)
