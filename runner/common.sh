@@ -915,13 +915,22 @@ dep_pc_path() {
   printf '%s\n' "${out%:}"
 }
 
+dep_names() {
+  local f
+  for f in "$BUNDLE"/deps/*.sh; do
+    [ -f "$f" ] || continue
+    basename "$f" .sh
+  done
+}
+
+# 已构建的依赖名。名字以 recipe 注册表为准，不从目录名反推：
+# 版本号可以带连字符（ImageMagick 7.1.2-35），`${b%-*}` 会截错。
 enabled_dep_names() {
-  local d b
-  for d in "$DEPS"/*; do
-    [ -d "$d" ] || continue
-    b="$(basename "$d")"
-    printf '%s\n' "${b%-*}"
-  done | awk 'NF && !seen[$0]++'
+  local n d
+  for n in $(dep_names); do
+    d="$(dep_dir_of "$n")" || continue
+    [ -d "$d" ] && printf '%s\n' "$n"
+  done
 }
 
 dep_env() {
