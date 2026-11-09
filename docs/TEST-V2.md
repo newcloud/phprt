@@ -691,7 +691,7 @@ rootfs 可见性和清理逻辑：
 | `run_build_env` | 在 chroot 内执行命令，`HOME`、`BUILD_ROOT`、项目路径正确 |
 | `remove`（真实 rootfs） | 先卸载再删除，默认路径重置，无残留挂载 |
 | `create` 用户条目 | rootfs 的 `/etc/passwd` / `/etc/group` 加入宿主用户，`id` 正常 |
-| 中断清理 | 挂载后发 `SIGTERM`：终止 chroot 进程树，挂载数回到 0 |
+| 中断清理 | `exec -- sleep` / `add ext gd --chroot` 挂载后发 `SIGTERM`：终止 chroot 进程树，挂载数回到 0 |
 | 失败清理 | curl 下载失败导致构建退出：挂载数同样回到 0 |
 
 ## `phprt update`（2026-11-09）

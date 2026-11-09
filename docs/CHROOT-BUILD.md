@@ -168,7 +168,8 @@ ca-certificates
 - 产物属主是宿主 `1000:1000`（`--userspec`），不是 root。
 - `exec` / `enter` 结束、构建成功或失败后，rootfs 下挂载数都是 0。
 - 中断测试：`exec -- sleep 300` 挂载后向脚本发 `SIGTERM`，挂载数回到 0；
-  `run_build_env` 外层被 `SIGTERM` 时也会先终止 chroot 进程树再清理。
+  `run_build_env` / `phprt add ext gd --shared --chroot` 构建中被 `SIGTERM`
+  时也会先终止 chroot 进程树再清理。
 - 用户命名空间（`unshare -rmp`）也验证过：`sysfs` 失败只警告、mknod 退回
   bind 宿主设备节点；真实 root 下正常 mknod。
 - 项目 / 仓库路径在 chroot 内保持不变；`HOME` 是绑定到 `/home/phprt`
