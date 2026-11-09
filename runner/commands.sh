@@ -361,6 +361,10 @@ cmd_install() {
     die "构建结束但找不到 $tree/bin/php"
   fi
 
+  # build.sh 已经把状态写成 ok；启用 ini / 生成 myphp 还没做。
+  # 先改成 activating，这一步失败时下次 install 会重新启用而不是直接跳过。
+  printf 'activating\n' > "$tree/BUILD-STATUS"
+
   # 记录本次选择的编译方式：后续 install/add 不再重复询问
   local pair
   for pair in $mode_env; do
@@ -368,6 +372,7 @@ cmd_install() {
   done
 
   activate_tree "$concrete" "$exts"
+  printf 'ok\n' > "$tree/BUILD-STATUS"
   ok "PHP $concrete 就绪 -> $tree"
 }
 
@@ -713,8 +718,11 @@ cmd_add() {
     die "扩展 $name 构建失败"
   fi
 
+  # enable 失败时不要把树标成 ok，否则下次 add 会以为已经装好
+  printf 'activating\n' > "$tree/BUILD-STATUS"
   TREE="$tree" mode_set "$name" "$mode"
   enable_ext "$name"
+  printf 'ok\n' > "$tree/BUILD-STATUS"
 }
 
 cmd_remove() {

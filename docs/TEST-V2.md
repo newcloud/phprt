@@ -372,4 +372,26 @@ $ scripts/recipe-check.sh --deep
 - shared builtin 的 phpize 构建必须带树内 `CPPFLAGS` / `LDFLAGS` / `PKG_CONFIG_PATH`；
   否则 intl 会链接系统 ICU。
 - 默认安装把 zlib / sqlite 从 shared 改成 static；空项目默认安装的最终结果
-  在验收完成后补记。
+  见下。
+
+### 空项目默认安装（v2mode，2026-11-09）
+
+`rm -rf v2mode && mkdir v2mode && cd v2mode && phprt install 8.5.12`
+
+| 检查 | 结果 |
+| --- | --- |
+| 构建 | `BUILD-STATUS=ok`；11 个默认扩展全部 static |
+| 产物 | `lib/php/extensions/` 不存在（没有任何 `.so`） |
+| 模块 | `zlib`、`sqlite3`、`pdo_sqlite`、`Phar` 等都在 `php -m` 里 |
+| phar gzip | `Phar::canCompress(Phar::GZ) === true` |
+| `phprt show` | `curl(static) … zlib(static)`，无 `?` |
+| `phprt verify` | 7 项全绿，wheel 完整性通过 |
+| 追装 shared | `add ext gmp --shared` 建出扩展目录，`gmp_add()` 可用 |
+
+顺带修了两个只会在“全 static 树”出现的问题：
+
+- `enable_ext` 假定 `lib/php/extensions/` 一定存在；全 static 安装没有这个目录，
+  现在允许缺失，按 `php -m` 判断已编入的模块。
+- 启用 ini / 生成 `myphp` 在 `build.sh` 之后，失败时树已经被标成 `ok`，
+  下次 `install` 会直接跳过。现在启用前先写 `activating`，成功后才写 `ok`；
+  `add ext` 同样处理。

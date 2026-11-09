@@ -175,7 +175,11 @@ tools `autoconf perlshim`。
 - libxml2 / mysqli / pgsql / sqlite 暂只 static：一个 recipe 对应多个 `.so`，
   当前构建器只产一个模块。
 - zlib / sqlite 原先默认 shared，现在默认 static；默认安装的产物从 `.so`
-  改成编入 PHP（空项目安装验收完成后在此确认）。
+  改成编入 PHP。空项目默认安装已验证：11 个默认扩展全部 static，
+  `lib/php/extensions/` 不存在，`Phar::canCompress(Phar::GZ)` 仍为 true，
+  `phprt verify` 全绿。
+- 全 static 的树没有 `lib/php/extensions/`，`enable_ext` 和后续 `add ext`
+  必须容忍这个目录不存在。
 
 已知构建细节：
 

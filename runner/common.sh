@@ -819,7 +819,8 @@ enable_ext() {
   tree="$(tree_of "$ver")"
   inidir="$tree/etc/conf.d"
   mkdir -p "$inidir"
-  extdir="$(ext_dir_of "$tree")" || die "找不到扩展目录: $tree"
+  # 全 static 安装可能根本没有 lib/php/extensions/（没有任何 .so）
+  extdir="$(ext_dir_of "$tree" 2>/dev/null || true)"
   mods="$(ext_modules "$name")"
   ld="$tree/lib:$(ls -d "$tree"/deps/*/lib 2>/dev/null | tr '\n' ':')"
 
@@ -839,7 +840,7 @@ enable_ext() {
   fi
 
   for m in $mods; do
-    if [ -f "$extdir/$m.so" ]; then
+    if [ -n "$extdir" ] && [ -f "$extdir/$m.so" ]; then
       any_shared=1
     elif LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -qix "$m"; then
       any_static=1
