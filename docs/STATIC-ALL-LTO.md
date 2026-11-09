@@ -3,6 +3,38 @@
 本文定义 `phprt install --static-all-lto`。它是 `--static-all` 的加强版：
 在单个 `bin/php` 的基础上，PHP 本体和第三方依赖都用 LTO 编译。
 
+## 总结
+
+- **状态**：v0 已实现；默认仍是 `--static-all`，`--static-all-lto` 是可选实验项。
+- **用法**：
+
+  ```bash
+  phprt install 8.5 --static-all-lto \
+    --ext "openssl zlib libxml2 curl sqlite mbstring"
+  ```
+
+- **当前覆盖**：
+  - PHP 本体 + 依赖：`openssl zlib curl sqlite oniguruma libxml2`；
+  - `--static-all` 的扩展和依赖全部编入单个 `bin/php`，glibc 仍动态；
+  - `libzip`、`libsodium` 还未接，所以 `zip`、`sodium` 暂时不能进 LTO 集合；
+  - `type=shared` 的扩展（xdebug/swoole）自动排除。
+- **做法**：
+  - 保留各 recipe 的 `-O2`/`-O3` 基线，只追加 `-flto=auto`；
+  - 依赖 `.a` 用 `gcc-ar`/`gcc-ranlib` 生成，构建后检查 `.gnu.lto` 段；
+  - PHP 静态链接沿用 `static-libs` 目录 + 重复 `EXTRA_LIBS`；
+  - 最终 `bin/php` 检查 `NEEDED` 只允许 glibc，且不残留 `.gnu.lto` 段。
+- **实测结论**：
+  - 官方 `Zend/bench.php` 三组（bare/opcache/JIT）都是 0%；
+  - `micro_bench.php` -1.2%~-1.5%，在噪声内；
+  - `json_encode` 依赖数据形态：深嵌套 -11.55%、两层嵌套 -8.24%，
+    普通记录 -3%~-5%，大 Unicode 字符串约 0%；
+  - libxml2：DOM 解析 -2.12%、序列化 -3.61%，XPath 无稳定变化；
+  - 代价：5 扩展树 38 MB → 61 MB；加 libxml2 后 46 MB → 71 MB；
+    启动时间基本不变。
+- **建议**：默认不要开；主要跑“小记录、深嵌套 JSON”或 DOM 解析/序列化、
+  且能接受体积增长时再试。不要期待通用 Web/VM 负载加速。
+- **下一步**：补 `libzip`、`libsodium` 的静态库和 LTO，再评估 PECL 扩展。
+
 ## 1. 目标与非目标
 
 目标：
