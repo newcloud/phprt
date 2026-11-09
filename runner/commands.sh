@@ -3,29 +3,62 @@
 
 usage() {
   cat <<'EOF'
-phprt
+phprt —— 为项目安装一套隔离的 PHP 运行环境
 
 用法:
-  phprt install <系列|版本> [--ext a,b] [--recompile] [--clean-src] [--plan] [--yes]
-  phprt outdated [--all] [--json] [系列]
-  phprt use <系列|版本>
-  phprt show
-  phprt current
-  phprt list
+  phprt install <系列|版本> [选项]
+      系列写法（8.5）用 bundle.conf 的 pin；精确写法（8.5.12）装指定版本。
+      --ext "a b"   选择扩展，默认用 bundle.conf 的 DEFAULT_EXTS
+      --plan        只打印构建计划（依赖、PHP、扩展），不构建
+      --recompile   强制重编 PHP（依赖和扩展签名保留）
+      --clean-src   清空已解压源码，重新解压后再编
+      --yes         对提示一律回答“是”
+
   phprt add ext <名字>
+      在当前版本树里加一个扩展。PECL 扩展只编它自己；
+      builtin 扩展需要重新 configure PHP，会重编 PHP（依赖仍复用）。
+
   phprt remove ext <名字>
+      停用扩展：删掉对应的 conf.d ini。静态编入 PHP 的 builtin
+      需要重新 configure 才能去掉。
+
+  phprt use <系列|版本>
+      切换 current 软链。系列写法切到该系列已装的最高版本。
+
+  phprt show
+      显示当前 PHP 版本、安装路径、php.ini、已启用扩展和 -v 输出。
+
+  phprt current
+      只打印当前版本号。
+
+  phprt list
+      列出已安装的版本，当前版本前面标 *。
+
+  phprt outdated [--all] [--json] [系列]
+      检查上游版本。默认只查当前 php.ini 启用的扩展及其依赖；
+      --all 查全部已接入模块；--json 输出机器可读结果。
+      退出码：0 查询成功，3 网络或上游不可用。
+
   phprt verify
+      自检：PHP、扩展、动态库、RPATH、配置路径、CA、wheel 完整性。
 
-phprt install 的系列写法（8.5）使用 bundle.conf 的 pin；精确写法（8.5.12）
-装指定版本。use 的系列写法切到该系列已装的最高版本。
+环境变量:
+  PHPRT_REPO      phprt 仓库位置（默认是脚本所在仓库）
+  PHPRT_WORK      构建区基目录（默认 <项目>/.phprt）
+  OFFLINE=1       不联网（outdated 会直接报告未查询）
+  https_proxy / HTTPS_PROXY / http_proxy / HTTP_PROXY
+                  查询和下载使用的代理；直连失败会自动尝试
 
-扩展清单由 bundles/php<系列>/{builtin,ext}/*.sh 决定：新增一个 recipe 文件
-就会出现在可选清单里，不需要改 driver。
+扩展清单由 bundles/php<系列>/{builtin,ext}/*.sh 决定；新增一个 recipe
+文件就会出现在可选清单里，不需要改 driver。
 
 示例:
   phprt install 8.5
   phprt install 8.5.12
   phprt install 8.5 --ext "openssl curl zip swoole"
+  phprt install 8.5 --plan
+  phprt add ext redis
+  phprt remove ext redis
   phprt outdated
   phprt outdated --all --json
   phprt use 8.5

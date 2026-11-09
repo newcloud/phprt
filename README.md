@@ -101,8 +101,27 @@ phprt install 8.5 --recompile
 phprt install 8.5 --clean-src
 ```
 
-这份 `phprtv2` 只保留 PHP 8.5，扩展清单由 `bundles/php8.5/{builtin,ext}/*.sh`
-决定（当前为 openssl / curl / zip / swoole）；新增扩展只要加一个 recipe 文件。
+这份 `phprtv2` 只保留 PHP 8.5。默认扩展集是
+`openssl zlib libxml2 curl sqlite mysqli mbstring zip sodium gettext`，
+可选清单由 `bundles/php8.5/{builtin,ext}/*.sh` 决定（当前 34 个扩展）；
+新增扩展只要加一个 recipe 文件。
+
+### 命令一览
+
+| 命令 | 作用 |
+| --- | --- |
+| `phprt install <系列\|版本>` | 安装 PHP 和扩展。`8.5` 用 pin，`8.5.12` 装指定版本 |
+| `phprt add ext <名字>` | 在当前版本树加一个扩展；builtin 会重编 PHP |
+| `phprt remove ext <名字>` | 停用扩展（删 conf.d ini）；静态 builtin 需重编 |
+| `phprt use <系列\|版本>` | 切换 current；系列取已装最高版 |
+| `phprt show` | 当前版本、路径、php.ini、已启用扩展 |
+| `phprt current` | 只打印当前版本号 |
+| `phprt list` | 列出已安装版本，当前标 `*` |
+| `phprt outdated [--all] [--json]` | 检查上游版本；默认只看已启用的扩展及依赖 |
+| `phprt verify` | 自检 PHP、扩展、库、RPATH、配置、CA、wheel |
+
+`install` 选项：`--ext "a b"`、`--plan`、`--recompile`、`--clean-src`、`--yes`。
+完整说明用 `phprt --help`。
 
 ## 目录结构
 
