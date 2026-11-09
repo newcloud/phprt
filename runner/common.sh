@@ -214,6 +214,16 @@ module_sh() {
   die "没有模块 $n（bundles/<版本>/{deps,ext,tools,builtin}/$n.sh 都不存在）"
 }
 
+# 扩展名（builtin / PECL）专用解析：同名 dep 不能抢。
+# 例：libxml2 / sqlite / zlib 的 builtin 与 dep 同名，依赖解析仍走 module_sh
+# 的 deps 优先顺序，扩展解析走这里。
+ext_recipe_sh() {
+  local n="$1"
+  [ -f "$BUNDLE/builtin/$n.sh" ] && { printf '%s\n' "$BUNDLE/builtin/$n.sh"; return 0; }
+  [ -f "$BUNDLE/ext/$n.sh" ] && { printf '%s\n' "$BUNDLE/ext/$n.sh"; return 0; }
+  return 1
+}
+
 # 安装位置：dep -> deps/<名字>-<版本>；tool -> tools/<名字>-<版本>；
 # builtin/ext -> PHP 树本身（.so 由 phpize 装进扩展目录）
 recipe_dir_of() {
@@ -273,7 +283,7 @@ builtin_apply_switches() {
 
 ext_modules() {  # $1=扩展名 -> 产出的 PHP 模块名（空格分隔）
   local sh m
-  sh="$(module_sh "$1")"
+  sh="$(ext_recipe_sh "$1")" || sh="$(module_sh "$1")"
   m="$(recipe_field "$sh" modules)"
   [ -n "$m" ] || m="$1"
   printf '%s\n' "${m//,/ }"
@@ -687,7 +697,7 @@ enable_ext() {
 
   # ext recipe 声明了 ini 时由 recipe 自己写（可带扩展专属配置）
   local sh kind ini
-  sh="$(module_sh "$name")"
+  sh="$(ext_recipe_sh "$name")" || sh="$(module_sh "$name")"
   kind="$(recipe_kind_of "$sh")"
   ini="$(recipe_field "$sh" ini)"
   if [ "$any_shared" = 1 ] && [ "$kind" = ext ] && [ -n "$ini" ] && [ "$ini" != - ]; then

@@ -98,6 +98,10 @@ recipe_main "$@"
   `sqlite` → `sqlite3,pdo_sqlite`，`mysqli` → `mysqli,pdo_mysql`。ext 单模块可省略，默认 name。
 - `version` 变量在兼容期可以定义在 `bundle.conf`，目标是在 recipe 内给默认值、允许
   `bundle.conf` 覆盖。driver 通过 `recipe_main --version` 取值，不直接读 bundle.conf。
+- **同名解析分两套。** 扩展名（builtin / PECL）用 `ext_recipe_sh`：builtin → ext；
+  依赖名（`needs` / `tools`）用 `module_sh`：deps → ext → tools → builtin。
+  `libxml2`、`sqlite`、`zlib`、`curl`、`openssl` 都有同名的 builtin 和 dep，
+  两套解析不能混用。
 
 ### 3.2 兼容别名
 
@@ -356,28 +360,43 @@ builtin 的 `ini` 为 `-` 时不需要 `enable()`；为 `20-zlib.ini` 这类共�
 
 ### ext
 
+PECL 扩展用 `ext_pecl_build`（`runner/recipe-ext.sh`），recipe 只写差异：
+
 ```bash
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=redis switch=ENABLE_REDIS version=REDIS_VERSION modules=redis ini=20-redis.ini tools=autoconf,perlshim needs= optional=
+# phprt: contract=v2 kind=ext name=redis switch=ENABLE_REDIS version=REDIS_VERSION modules=redis ini=20-redis.ini tools=autoconf,perlshim needs= optional= upstream=pecl:redis
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
-load_config
 
 build() {
-  need_cmds gcc make tar
-  # 下载、phpize、configure、make、make install
+  ext_pecl_build redis "$REDIS_VERSION" "$REDIS_URL" "$REDIS_SHA256" \
+    --enable-redis --enable-redis-session --enable-redis-json
 }
 
 enable() {
   mkdir -p "$PREFIX/etc/conf.d"
-  cat > "$PREFIX/etc/conf.d/20-redis.ini" <<EOF
+  cat > "$PREFIX/etc/conf.d/20-redis.ini" <<INI
 ; 由 phprt 生成（redis $REDIS_VERSION）
 extension=redis.so
-EOF
+INI
 }
 
 recipe_main "$@"
 ```
+
+`ext_pecl_build <名字> <版本> <URL> <SHA256> [configure 参数...]` 负责：下载、按 PHP
+版本分源码目录解压、autoconf/perlshim 环境、phpize、configure、make、install、
+检查 `.so`、写 stamp。需要额外处理时用钩子：
+
+| 钩子 | 用途 |
+| --- | --- |
+| `ext_prepare()` | 解压后、phpize 前执行，cwd 是源码目录（打补丁） |
+| `EXT_MODULE` | 产物模块名，默认等于 `<名字>`（多模块扩展用） |
+| `EXT_SIG_EXTRA` | 追加到内层 stamp 的签名内容（一般不需要） |
+| `enable()` | 仍然由 recipe 写，因为 ini 内容各不相同 |
+
+需要额外库时在 `build()` 里先 `dep_env <名字>`，再把库路径作为 configure 参数传入。
+`apcu`（22 行）、`igbinary`（31 行）、`redis`、`xdebug`、`yaml` 都是现成例子。
 
 ### dep
 

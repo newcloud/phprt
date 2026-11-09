@@ -96,9 +96,10 @@ tools `autoconf perlshim`。
 
 ### 4.2 PECL 扩展（7）
 
-> 2026-11-09：`apcu`（82 行）/ `igbinary`（88 行）已写完并构建通过，
-> 功能调用（apcu 存取、igbinary 序列化往返）和 `verify` 都通过。
-> 其余 5 个等“是否加通用助手”的评估结果。
+> 2026-11-09：7 个 PECL 全部写完，全部用 `phprt add ext` 增量构建并做了功能调用。
+> `apcu` / `igbinary` 先按自包含写法验证（82 / 88 行），归一化后只差 18 行，
+> 据此加了 `runner/recipe-ext.sh`；两者改成助手版后降到 22 / 31 行并重新构建通过。
+> 状态仍是 `🚧`：升级轮（基线 → 目标）未做。
 
 | 名称 | 依赖 | 版本变量 | ini | 基线 | 目标 | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -115,7 +116,9 @@ tools `autoconf perlshim`。
 
 ### 4.3 builtin（14）
 
-> 2026-11-09：14 个 recipe 已写完并通过静态检查；等依赖构建完后一次性重编 PHP。
+> 2026-11-09：14 个 recipe 已写完，一次性重编 PHP 后全部编译成功，功能调用 14 项
+> 全部通过（`intl` 因首次 `--ext` 列表漏写，补编一次后通过）。搬移测试也通过。
+> 状态仍是 `🚧`：升级轮未做。
 
 | 名称 | 依赖 | modules | ini | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- |
@@ -250,9 +253,10 @@ tools `autoconf perlshim`。
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-09 | `php_sig` 只算有效参数 | `php_sig` 把 `php.sh` 和 `builtin/*.sh` 原文都算进签名 | 改注释不再触发 PHP 重编 | `common.sh` 构建逻辑变化仍靠 `--recompile` | 已实施 |
 | 2026-11-09 | `dep_sig` 纳入版本号 | 版本变化靠“新目录不存在”兜底，旧目录残留会误判 | 语义正确，降级/重装不再漏建 | 消费者仍按 SONAME 决定是否重编 | 已实施 |
-| 2026-11-09 | 通用 PECL 构建助手 | 7 个 PECL 共 776 行，其中约 500 行是同一段 phpize 流程 | 15 个扩展省约 1300 行重复 | 先迁移 apcu / igbinary 看真实代码再评估 | 待定 |
+| 2026-11-09 | 通用 PECL 构建助手 | 7 个 PECL 共 776 行；apcu / igbinary 归一化后只差 18 行 | 两个样本从 170 行降到 53 行 | 需要 ext_prepare 钩子（igbinary 补丁）和自定义 ini | 已实施 |
 | 2026-11-09 | `php_sig` 只算选中的 builtin | 原来 `cat` 整个 `builtin/*.sh`，未选中的改动也会触发 PHP 重编 | 加 recipe 不再影响其它项目 | 选中集合由 `SELECTED_EXTS` 决定 | 已实施 |
 | 2026-11-09 | `upstream_norm_version` 截断数字结尾包名 | `bzip2-1.0.8` 被解析成 `2` | 修好可少写特例 | 需改公共函数；本轮在 recipe 里剥前缀 | 不采纳（保持现状） |
+| 2026-11-09 | 同名 builtin / dep 解析 | `module_sh` deps 优先，`ext_modules libxml2` 取到 dep | 启用 builtin 不再误判 | 新增 `ext_recipe_sh`，只改扩展名解析 | 已实施 |
 
 状态：`待定` / `已批准` / `已实施` / `不采纳`。
 
@@ -298,6 +302,62 @@ tools `autoconf perlshim`。
 
 - `apcu` 1 分 28 秒、`igbinary` 26 秒，都是增量构建，没有重编 PHP；
   `php -m` 出现两个模块，功能调用通过，`phprt verify` 全绿。
+
+### 2026-11-09 Phase 1b：7 个 PECL
+
+全部用 `phprt add ext <名字>` 增量安装（不重编 PHP），随后各做一次功能调用：
+
+| 扩展 | 耗时 | 功能调用 |
+| --- | --- | --- |
+| apcu 5.1.28 | 1 分 28 秒 | `apcu_store` / `apcu_fetch` |
+| igbinary 3.2.16 | 26 秒 | `igbinary_serialize` / `unserialize` 往返 |
+| msgpack 3.0.1 | 25 秒 | `msgpack_pack` / `msgpack_unpack` |
+| protobuf 5.36.2 | 约 30 秒 | `Google\Protobuf\Internal\Message` 可反射 |
+| redis 6.3.0 | 约 30 秒 | `new Redis()` 可用 |
+| xdebug 3.5.3 | 约 30 秒 | `XDEBUG_MODE=develop` 时 `xdebug_info("mode")` 为 develop |
+| yaml 2.3.0 | 约 30 秒 | `yaml_parse` 解析映射和序列 |
+
+- 7 个都通过 `phprt verify`（wheel 完整性）。
+- 通用助手落地后，`apcu` / `igbinary` 从 82 / 88 行降到 22 / 31 行，重建后功能不变。
+
+### 2026-11-09 Phase 1c：builtin 全量重编
+
+一次重编 PHP（24 个扩展），编译全部成功。功能调用结果：
+
+| 扩展 | 验证 | 扩展 | 验证 |
+| --- | --- | --- | --- |
+| bz2 | `bzcompress`/`bzdecompress` | mysqli | `mysqli_get_client_info` |
+| ffi | `FFI` 类可反射 | sodium | `sodium_crypto_box_keypair` |
+| ftp | `ftp_connect` 存在 | sqlite | `new SQLite3(':memory:')` + `select 1+1` |
+| gd | JPEG/WebP/AVIF/FreeType 都是 yes | xsl | `XSLTProcessor` 类存在 |
+| gettext | `gettext` 存在 | zlib | `gzcompress`/`gzuncompress` |
+| ldap | `ldap_connect` 存在 | zip | `ZipArchive` 类存在 |
+| libxml2 | DOM 解析 + XMLReader + SoapClient | mbstring | `mb_strlen("中文")` |
+| intl | `NumberFormatter` 格式化 `1,234,567.89` | | |
+
+- 搬移测试：把 `php-8.5.12` 整棵树复制到 `/tmp` 后直接跑 `bin/php`，66 个模块全部加载，
+  intl / gd / dom / sqlite / zlib 功能正常。
+- `DEFAULT_EXTS` 改成 v1 的 10 个（`openssl zlib libxml2 curl sqlite mysqli mbstring
+  zip sodium gettext`），在空项目里跑默认 `install` 验证。
+
+### 2026-11-09 框架修复：同名 builtin / dep 解析
+
+现象：`install` 在启用 `libxml2` 时报“没有编译”，但 PHP 已经编出来了。
+
+原因：`module_sh` 为了不让 `curl` 取错 builtin，解析顺序是 **deps 优先**。于是
+`ext_modules libxml2` 读到了 `deps/libxml2.sh`（没有 `modules`），默认成模块名
+`libxml2`，而实际模块是 `dom/xml/simplexml/xmlreader/xmlwriter/soap`。
+同名的还有 `curl`、`openssl`、`sqlite`、`zlib` 四组。
+
+修复（方案 A）：新增 `ext_recipe_sh`（builtin → ext），`ext_modules` 和
+`enable_ext` 改用它；`module_sh` 保持 deps 优先，供 `needs`/`tools` 使用。
+PHP 不用重编，重跑 `install` 只补 ini。
+
+### 2026-11-09 签名稳定性
+
+- `--ext` 的书写顺序曾影响 `php_sig`：`PHP_DEPS` 和 builtin 文件列表按输入顺序拼接。
+  已改成 `sort -u`。实测 `"openssl curl zip ..."` 与 `"igbinary swoole zip curl openssl apcu"`
+  两次构建，第二次输出 `跳过 php（configure 和依赖都没变）`。
 
 ## 12. 明确不做
 
