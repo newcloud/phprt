@@ -148,9 +148,9 @@ tools `autoconf perlshim`。
 | gmp | builtin | gmp 6.3.0 | 8.5 编译通过 | `--with-gmp=<deps/gmp>` | — | — | 无（builtin） | ✅ |
 | tidy | builtin | tidy-html5 5.8.0 | 8.5 编译通过 | `--with-tidy=<deps/tidy>` | — | — | 无（builtin） | ✅ |
 | ssh2 | ext | libssh2 1.11.1 | 8.5 编译通过 | `--with-ssh2=<deps/libssh2>` | 1.5.0 | 1.5.0 | 无（首个 8.5 版本） | ✅ |
-| pgsql + pdo_pgsql | builtin | libpq | 待查 | 待查 | — | — | 无（builtin） | ⬜ |
-| memcached | ext | libmemcached-awesome | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
-| mongodb | ext | mongo-c-driver（libbson + libmongoc） | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
+| pgsql + pdo_pgsql | builtin | libpq 18.6 | 8.5 编译通过 | `--with-pgsql=<deps/libpq>`、`--with-pdo-pgsql=` | — | — | 无（builtin） | ✅ |
+| memcached | ext | libmemcached-awesome 1.1.4 | 8.5 编译通过 | `--with-libmemcached-dir=`、`--disable-memcached-sasl` | 3.4.0 | 3.4.0 | 无（首个 8.5 版本） | ✅ |
+| mongodb | ext | 自带 libmongoc/libbson | 8.5 编译通过 | `--with-mongodb-zstd=no --with-mongodb-snappy=no` | 2.5.7 | 2.5.7 | 无（首个 8.5 版本） | ✅ |
 | amqp | ext | rabbitmq-c | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
 | imagick | ext | ImageMagick 7 | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
 | rdkafka | ext | librdkafka | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
@@ -248,6 +248,8 @@ tools `autoconf perlshim`。
 | 2026-11-09 | igbinary | 框架 | PECL 的 `3.2.17RC1` 被标成 stable，归一化后变成 `3.2.17`，下载 404 | PECL 解析丢弃 RC/alpha/beta；3.2.16 即最新 | 已修复 | 是 |
 | 2026-11-09 | gmp | 扩展内部 | GMP 6.3.0 的编译器探测程序依赖隐式函数声明，GCC 15 默认 gnu23 报“could not find a working compiler” | recipe 里 `CC=gcc -std=gnu17` | 已修复 | 否 |
 | 2026-11-09 | tidy | 依赖内部 | tidy-html5 5.8.0 的 `cmake_minimum_required(<3.5)` 被 CMake 4 拒绝 | 加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` | 已修复 | 否 |
+| 2026-11-09 | mongodb | 扩展内部 | 默认 `zstd=auto` 链接系统 `libzstd.so.1`，`verify` 报借用安装根外的库 | `--with-mongodb-zstd=no --with-mongodb-snappy=no` | 已修复 | 否 |
+| 2026-11-09 | libpq | 依赖内部 | PostgreSQL 生成 catalog 头的脚本要 `FindBin.pm` 等 perl 核心模块，系统 perl 缺 | `tools=perlshim`，构建前导出 `PERL5LIB` | 已修复 | 否 |
 | 2026-11-09 | aom | 依赖内部 | libaom 源码自带 `build/`（上游 cmake 模块），构建目录不能用 `$SRC/build`，清缓存时会把上游模块删掉 | 构建目录改为 `$SRCDIR/aom-build-<版本>` | 已修复 | 否 |
 | 2026-11-09 | avif | 依赖内部 | aom 升级换目录后，`$SRC/build/CMakeCache.txt` 还指着 `aom-3.12.0` | cmake 类依赖每次重新配置前 `rm -rf "$SRC/build"`（avif/aom/webp/jpeg/tidy） | 已修复 | 否 |
 | 2026-11-09 | 依赖升级 | 框架 | libpng 升级后旧目录被 prune，freetype 的 `.la` 仍记着旧绝对路径，PHP 链接失败 | 依赖安装目录名（含版本）进入 `dep_sig` / `ext_sig` / `php_sig` | 已修复 | 是 |
@@ -362,6 +364,19 @@ tools `autoconf perlshim`。
 修复（方案 A）：新增 `ext_recipe_sh`（builtin → ext），`ext_modules` 和
 `enable_ext` 改用它；`module_sh` 保持 deps 优先，供 `needs`/`tools` 使用。
 PHP 不用重编，重跑 `install` 只补 ini。
+
+### 2026-11-09 Phase 2b：pgsql / memcached / mongodb
+
+| 扩展 | 类型 | 依赖 | 验证 |
+| --- | --- | --- | --- |
+| pgsql + pdo_pgsql | builtin | libpq 18.6（只编客户端） | `pg_connect` / `pg_escape_literal` / PDO pgsql 驱动 |
+| memcached 3.4.0 | ext | libmemcached-awesome 1.1.4 | `new Memcached()`；无服务端时 `getStats()` 返回 false |
+| mongodb 2.5.7 | ext | 自带 libmongoc/libbson/libmongocrypt | `MongoDB\Driver\Manager` 构造；连接失败抛 `ConnectionTimeoutException` |
+
+- libpq 只构建 `src/interfaces/libpq` + `pg_config`，不编服务端；构建需要 perlshim
+  提供 `FindBin.pm`。
+- mongodb 关掉 zstd/snappy，避免链接系统库；`verify` 全绿。
+- 两个 PECL 的 SHA256 都是真值。
 
 ### 2026-11-09 Phase 2a：gmp / tidy / ssh2
 
