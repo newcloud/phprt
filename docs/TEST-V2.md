@@ -526,6 +526,40 @@ phprt install 8.5 --static-all-lto --ext "..." # 切回 LTO 1
 | OpenSSL AES | 152.70 ms | 152.85 ms | +0.10% |
 | SQLite 内存库 | 15.15 ms | 14.51 ms | -4.22% |
 
+### 官方脚本（php-src）
+
+使用 php-src 自带的三个脚本，`taskset -c 2`，A/B 交替 7 轮取中位数：
+
+```bash
+SRC=.phprt/build-php-8.5.12/src/php-8.5.12
+php -n -d memory_limit=256M "$SRC/Zend/bench.php"
+php -n -d memory_limit=256M "$SRC/Zend/micro_bench.php"
+php -n -d memory_limit=256M "$SRC/ext/hash/bench.php"
+
+# 另加两组
+-d opcache.enable_cli=1 -d opcache.jit=off
+-d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_buffer_size=64M
+```
+
+| 脚本 / 选项 | 非 LTO | LTO | 变化 |
+| --- | ---: | ---: | ---: |
+| `Zend/bench.php` | 171 ms | 171 ms | 0% |
+| `Zend/bench.php` + opcache | 110 ms | 110 ms | 0% |
+| `Zend/bench.php` + opcache + JIT | 40 ms | 40 ms | 0% |
+| `Zend/micro_bench.php` | 745 ms | 736 ms | -1.21% |
+| `Zend/micro_bench.php` + opcache | 598 ms | 589 ms | -1.51% |
+| `Zend/micro_bench.php` + opcache + JIT | 241 ms | 243 ms | +0.83%（噪声内） |
+| `ext/hash/bench.php` 全部用例求和 | 4494 ms | 4489 ms | -0.10% |
+
+说明：
+
+- `Zend/bench.php` 和 `micro_bench.php` 的输出精度是 1 ms；`bench.php`
+  总计三组都相同，说明 VM 主路径没有可见变化。
+- `micro_bench.php` 的 -1.2% / -1.5% 在 7 轮极差（约 10 ms）内，接近噪声；
+  JIT 组反而 +0.8%，不构成稳定收益。
+- `ext/hash/bench.php` 里 xxh128 +4.2%、crc32 -4.1%，其它哈希基本不变；
+  总计 -0.1%，没有一致趋势。
+
 结论：
 
 - 整体 VM 负载仍然在 ±1% 内，和 v1 只开 PHP LTO 的结论一致。
