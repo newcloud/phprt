@@ -41,9 +41,10 @@ tools `autoconf perlshim`。
 | 11 | **不写系统目录、不引入第二份 CA**；CA 固定在 `etc/ssl/cert.pem` | `AGENTS.md` 9/10 |
 | 12 | **重编代价**：改 builtin 会改 PHP 签名 → PHP 全量重编；dep / ext 只重编自己 | `build.sh` |
 | 13 | **下载/离线**：源码包优先仓库 `downloads/`（当前软链到 v1 的），缺的进 `build-php-<版本>/downloads/`；`OFFLINE=1` 是全局离线开关 | `common.sh:find_source` |
-| 14 | **尚未实现**：`phprt update`、install / add 的在线检查（M2）、`--no-update-check`、`--offline` 参数；多数 `*_SHA256` 仍为空（TOFU） | 代码现状 |
-| 15 | **v1 / v2 不能共用一个 `.phprt`**，会互相覆盖。测试项目分开：`v2demo` 最小集、`v2ext` 扩展开发集 | 实测 |
-| 16 | **暂缓/不做**：buildroot / chroot；imap、grpc、mcrypt、odbc、snmp、pspell、dba、solr、oauth、readline、sqlsrv、oci8 | v1 文档 |
+| 14 | **尚未实现**：`phprt update`、install / add 的在线检查（M2）、`--no-update-check`、`--offline` 参数 | 代码现状 |
+| 15 | **所有 pin 都填了真实 `*_SHA256`**（PHP 与全部依赖/扩展），下载即校验 | 2026-11-09 回填 |
+| 16 | **v1 / v2 不能共用一个 `.phprt`**，会互相覆盖。测试项目分开：`v2demo` 最小集、`v2ext` 扩展开发集 | 实测 |
+| 17 | **暂缓/不做**：buildroot / chroot；imap、grpc、mcrypt、odbc、snmp、pspell、dba、solr、oauth、readline、sqlsrv、oci8 | v1 文档 |
 
 ## 3. 三类节点与命名
 
@@ -368,6 +369,15 @@ tools `autoconf perlshim`。
 修复（方案 A）：新增 `ext_recipe_sh`（builtin → ext），`ext_modules` 和
 `enable_ext` 改用它；`module_sh` 保持 deps 优先，供 `needs`/`tools` 使用。
 PHP 不用重编，重跑 `install` 只补 ini。
+
+### 2026-11-09 Phase 3：SHA256 回填
+
+- 所有 `*_SHA256` 都用实际下载的源码包计算并回填，PHP 除外（原本就是真值）。
+- 回填后做了逐项比对：bundle.conf 里的值与缓存包的 sha256 全部一致。
+- `fetch` 现在对每一个源码包都会强制校验，不再依赖 TOFU。
+- 默认集在空项目（`v2default`）里重新安装验证：6 分 45 秒，48 个 recipe 参与，
+  `zlib/libxml2/curl/sqlite/mysqli/mbstring/zip/sodium/gettext` 功能调用全部通过，
+  `phprt verify` 全绿。
 
 ### 2026-11-09 Phase 2c：amqp / imagick / rdkafka
 

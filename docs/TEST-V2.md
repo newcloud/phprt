@@ -1,4 +1,4 @@
-# phprtv2 实测记录（PHP 8.5 + 4 个扩展）
+# phprtv2 实测记录（PHP 8.5）
 
 测试时间：2026-11-08（第一轮：v2 重构实测；同日稍晚：目录整理后复测；
 再后：构建目录按 PHP 版本拆分、精确版不再复制 bundle）。环境：Fedora 43，
@@ -290,6 +290,21 @@ $ scripts/recipe-check.sh --deep
 - 升级轮（v2up 副本）：libpng 1.6.51→1.6.59、aom 3.12.0→3.12.1、
   jpeg 3.1.2→3.1.4.1、swoole 6.2.4→6.2.5；jpeg 升级只重编自己，
   PHP 跳过（同 ABI），基线树 v2ext 保留旧版本。
+
+## 扩展覆盖最终状态（2026-11-09）
+
+| 类别 | 数量 |
+| --- | --- |
+| builtin | 20 |
+| ext（PECL） | 14 |
+| deps | 28 |
+| tools | 3 |
+| recipe 合计 | 65 |
+
+- 默认集：`openssl zlib libxml2 curl sqlite mysqli mbstring zip sodium gettext`。
+- 空项目默认安装、全量项目（30 个扩展）安装都通过；`phprt verify` 全绿。
+- 所有 pin 的 `*_SHA256` 已回填并与源码包逐一比对。
+- 扩展计划、两轮验证、问题台账见 `docs/EXTENSIONS.md`。
 
 ## 过程中修掉的问题
 
