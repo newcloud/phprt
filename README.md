@@ -42,7 +42,7 @@ eval "$(./myphp --shell)"   # 想直接敲 php / composer 时
     │   ├── logs/            # configure / make 日志
     │   ├── downloads/       # 下载的源码包
     │   └── tools/           # 构建工具
-    └── buildroots/          # 可选，chroot 构建环境
+    └── buildroots/          # 可选，chroot 构建环境（需要 sudo）
 ```
 
 **`php-8.5.12/`**：编译出的 PHP 版本树，实际运行用的就是它。
@@ -166,26 +166,36 @@ sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config patchelf \
 
 ## 用 chroot 构建（可选）
 
-宿主工具链太杂，或者想要干净可复现的构建环境时，可以在 chroot 里构建：
+宿主工具链太杂，或者想要干净可复现的构建环境时，可以在 chroot 里构建。
 
 ```bash
-# 方式一：直接让 phprt 在 chroot 里构建
-phprt buildroot create          # 默认放在 .phprt/buildroots/default
-phprt install 8.5 --chroot --ext "openssl curl zip mbstring intl redis"
+# 创建 chroot 环境：需要 sudo；也可以先用 PHPRT_CHROOT_PASS 传密码
+# 默认放在 .phprt/buildroots/default
+phprt buildroot create
 
-# 方式二：进入 chroot 手动操作
+# 方式一：phprt 自动进入 chroot 构建，结束自动退出并卸载
+phprt install 8.5 --chroot --ext "openssl curl zip mbstring intl redis"
+phprt add ext swoole --shared --chroot
+
+# 方式二：进入 chroot 手动操作，exit 时自动卸载
 phprt buildroot enter
 phprt install 8.5 --ext "openssl curl zip mbstring intl redis"
 exit
 
+# 查看状态；不需要时删除
 phprt buildroot status
 phprt buildroot remove
 ```
 
-- 默认绑定当前项目和 phprt 仓库。
+- `create`、`--chroot`、`enter`、`remove` 都需要 sudo。可以提前传密码：
+  `PHPRT_CHROOT_PASS='...' phprt buildroot create`。
+- `--chroot` 只包住构建过程：自动挂载、进入 chroot、构建，结束后自动卸载，
+  不需要手动 `unmount`。`add ext` 仍要带 `--shared` 或 `--static`。
+- `buildroots/` 不需要时用 `phprt buildroot remove` 删除。不要直接 `rm -rf`，
+  避免留下挂载。
 - rootfs 在项目 `.phprt/buildroots/` 里，`create` 也可以指定名字或路径。
 - `--host` 切回宿主构建。
-- `create` 需要 sudo 和 dnf，第一次会下载几百 MB。
+- 第一次 `create` 会下载几百 MB。
 
 ## 注意事项
 
