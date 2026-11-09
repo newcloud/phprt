@@ -124,20 +124,20 @@ tools `autoconf perlshim`。
 
 | 名称 | 依赖 | modules | ini | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| bz2 | bzip2 | bz2 | - | 无（builtin） | ⬜ |
-| ffi | libffi | ffi | - | 无（builtin） | ⬜ |
-| ftp | — | ftp | - | 无（builtin） | ⬜ |
-| gd | zlib, libpng, jpeg, freetype, webp, aom, avif | gd | - | 无（builtin） | ⬜ |
-| gettext | —（glibc） | gettext | - | 无（builtin） | ⬜ |
-| intl | icu | intl | - | 无（builtin） | ⬜ |
-| ldap | openldap | ldap | - | 无（builtin） | ⬜ |
-| libxml2 | libxml2 | dom,xml,simplexml,xmlreader,xmlwriter,soap | - | 无（builtin） | ⬜ |
-| mbstring | oniguruma | mbstring | - | 无（builtin） | ⬜ |
-| mysqli | —（mysqlnd） | mysqli,pdo_mysql | - | 无（builtin） | ⬜ |
-| sodium | libsodium | sodium | - | 无（builtin） | ⬜ |
-| sqlite | sqlite | sqlite3,pdo_sqlite | `20-sqlite.ini` | 无（builtin） | ⬜ |
-| xsl | libxslt | xsl | - | 无（builtin） | ⬜ |
-| zlib | zlib | zlib | `20-zlib.ini` | 无（builtin） | ⬜ |
+| bz2 | bzip2 | bz2 | - | 无（builtin） | ✅ |
+| ffi | libffi | ffi | - | 无（builtin） | ✅ |
+| ftp | — | ftp | - | 无（builtin） | ✅ |
+| gd | zlib, libpng, jpeg, freetype, webp, aom, avif | gd | - | 无（builtin） | ✅ |
+| gettext | —（glibc） | gettext | - | 无（builtin） | ✅ |
+| intl | icu | intl | - | 无（builtin） | ✅ |
+| ldap | openldap | ldap | - | 无（builtin） | ✅ |
+| libxml2 | libxml2 | dom,xml,simplexml,xmlreader,xmlwriter,soap | - | 无（builtin） | ✅ |
+| mbstring | oniguruma | mbstring | - | 无（builtin） | ✅ |
+| mysqli | —（mysqlnd） | mysqli,pdo_mysql | - | 无（builtin） | ✅ |
+| sodium | libsodium | sodium | - | 无（builtin） | ✅ |
+| sqlite | sqlite | sqlite3,pdo_sqlite | `20-sqlite.ini` | 无（builtin） | ✅ |
+| xsl | libxslt | xsl | - | 无（builtin） | ✅ |
+| zlib | zlib | zlib | `20-zlib.ini` | 无（builtin） | ✅ |
 
 > builtin 的版本跟 PHP 走，没有独立的“降级/升级”。等价验证是：关闭时 `php -m` 里没有，
 > 开启并重编后有；PHP 自身升级单独做一轮（8.5.11 → 8.5.12）。
