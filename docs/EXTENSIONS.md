@@ -259,6 +259,7 @@ tools `autoconf perlshim`。
 | 2026-11-09 | avif | 依赖内部 | aom 升级换目录后，`$SRC/build/CMakeCache.txt` 还指着 `aom-3.12.0` | cmake 类依赖每次重新配置前 `rm -rf "$SRC/build"`（avif/aom/webp/jpeg/tidy） | 已修复 | 否 |
 | 2026-11-09 | 依赖升级 | 框架 | libpng 升级后旧目录被 prune，freetype 的 `.la` 仍记着旧绝对路径，PHP 链接失败 | 依赖安装目录名（含版本）进入 `dep_sig` / `ext_sig` / `php_sig` | 已修复 | 是 |
 | 2026-11-09 | jpeg | 框架 | `3.1.90` 是 3.2.0 的预发布编号，被当成补丁更新 | `version_is_prerelease`：最后一段 ≥ 90 视为预发布 | 已修复 | 是 |
+| 2026-11-09 | add ext | 框架 | `add ext tidy` 期间 swoole 因签名变化重编，`build.sh` 先删 ini、结束只启用新加的扩展，swoole 变成“编了但没启用” | 构建成功后按 recipe 重写 ini；不再在构建前删 ini（失败时也不会顺带停用） | 已修复 | 是 |
 
 分类：`框架` / `扩展内部` / `依赖内部` / `文档`。
 

@@ -193,9 +193,14 @@ for e in $PECL; do
   fi
   log "执行 ext/$e"
   ini="$(recipe_field "$BUNDLE/ext/$e.sh" ini)"
-  [ "$ini" = - ] || rm -f "$TREE/etc/conf.d/$ini"
   # 外层 ext_sig 已判定要重编；强制绕过配方内部的 stamp
   FORCE=1 bash "$BUNDLE/ext/$e.sh" build 2>&1 | tee -a "$LOGS/build.log"
+  # 构建成功后再重写 ini。不要在这里提前删 ini：构建失败会把这个扩展
+  # 顺带停掉；成功后重写还能让 ini 跟上 recipe 的模板变化。
+  if [ "$ini" != - ]; then
+    bash "$BUNDLE/ext/$e.sh" enable >> "$LOGS/build.log" 2>&1 \
+      || die "扩展 $e 的 enable() 失败（见 $LOGS/build.log）"
+  fi
   state_set "ext/$e" "$sig"
 done
 
