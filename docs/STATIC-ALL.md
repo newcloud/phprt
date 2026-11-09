@@ -165,6 +165,7 @@ cd /tmp/php-onefile
 - v0 只覆盖第 5 节列出的五个扩展；其它扩展需要先补依赖的 `.a`。
 - `--static-all` 的树不能再 `add ext --shared`，因为不存在可用的依赖 `.so` 链接路径。
 - `add ext --static` 在静态树里可用，但对应依赖必须有静态库。
-- 不静态 glibc：DNS/NSS、locale、用户查询仍走系统 glibc。
+- 不静态 glibc：DNS/NSS、locale、用户查询仍走系统 glibc；全静态的
+  可行性和发布限制见 [STATIC-LIBC.md](STATIC-LIBC.md)。
 - 依赖 `.so` 可能仍留在 `deps/`，但不会出现在 `bin/php` 的 `NEEDED` 里；
   复制时只需要 `bin/php`。

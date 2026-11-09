@@ -46,7 +46,7 @@
 
 非目标：
 
-- 不静态链接 glibc。
+- 不静态链接 glibc；全静态 libc 的分析见 [STATIC-LIBC.md](STATIC-LIBC.md)。
 - 不改变 `--static-all` 的语义；不带 LTO 时行为完全不变。
 - 不保证所有依赖立刻支持 LTO。支持范围按第 7 节逐步扩大。
 - 不承诺整体性能提升；LTO 的收益集中在库密集路径。
