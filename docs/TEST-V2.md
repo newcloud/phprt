@@ -309,3 +309,9 @@ $ scripts/recipe-check.sh --deep
 12. recipe 头部新增的 `upstream=` 原来没有任何校验：写错类型或包名只会让 `outdated`
     显示 `-`。现在 `recipe_validate` 检查格式，并要求有版本的模块必须声明
     `upstream=`（可为 `none`）或实现 `versions()`；`--deep` 再确认上游能查到 pin。
+13. `php_sig` 原来把 `php.sh` 和 `builtin/*.sh` 原文全算进签名，改一行注释就触发
+    PHP 全量重编。现在只算去掉行首注释和空行后的内容；`--flags` / `--needs` 的输出
+    仍然入签名。实测：加注释后仍是 `跳过 php`，改一个 `--with-*` 签名变化。
+14. `dep_sig` 原来不含版本号，版本变化只能靠“新版本目录不存在”兜底；旧目录残留时
+    会误判为已完成。现在签名里加了 `version=`。实测 `ZLIB_VERSION` 从 1.3.2 改到
+    1.3.3，`dep_sig` 从 `b66e32b6…` 变成 `c155d468…`；消费者是否重编仍由 SONAME 决定。

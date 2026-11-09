@@ -1022,6 +1022,9 @@ dep_sig() {
   local n="$1" x
   {
     printf 'recipe=%s\n' "$(recipe_hash "$n")"
+    # 版本进签名：同版本目录残留（降级后再升级、手工塞目录）不能算已完成。
+    # 消费者是否重编仍由 recipe_id 的 SONAME 列表决定，同 ABI 补丁不牵连。
+    printf 'version=%s\n' "$(ext_version "$n")"
     recipe_switch_state "$n"
     # 条件依赖是否参与构建已经体现在 module_needs 的解析结果里
     for x in $(module_needs "$n"); do

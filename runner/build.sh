@@ -149,7 +149,10 @@ PHP_SIG="$(
     if lto_on php; then
       printf 'lto=%s|%s\n' "$LTO_CFLAGS" "$LTO_LDFLAGS"
     fi
-    cat "$BUNDLE/php.sh" "$BUNDLE"/builtin/*.sh 2>/dev/null
+    # 只算有效内容：注释和空行不进签名，改说明文字不再触发 PHP 重编。
+    # 行首 # 才是注释；参数值和字符串里的 # 保留。
+    grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' \
+      "$BUNDLE/php.sh" "$BUNDLE"/builtin/*.sh 2>/dev/null || true
     for d in $PHP_DEPS; do
       printf 'dep=%s:%s\n' "$d" "$(recipe_id "$d")"
     done
