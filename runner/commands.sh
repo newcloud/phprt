@@ -33,7 +33,12 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
       --clean-src          清空已解压源码，重新解压后再编
       --yes                对提示一律回答“是”
 
-  phprt add ext <名字> --shared|--static
+      构建环境:
+      --chroot             在 phprt buildroot 的 chroot 里构建（并记为默认）
+      --host               切回宿主构建（并记为默认）
+      --plan               只打印构建计划，不进入 chroot
+
+  phprt add ext <名字> --shared|--static [--chroot|--host]
       在当前版本树里加一个扩展。必须先读契约再显式选方式：
 
         --shared   编译成 <名字>.so，不重编 PHP，可随时停用
@@ -50,6 +55,10 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
 
   phprt use <系列|版本>
       切换 current 软链。系列写法切到该系列已装的最高版本。
+
+  phprt buildroot <create|enter|exec|unmount|remove|status|list|use|env>
+      chroot 构建环境；rootfs 默认在 <项目>/.phprt/buildroots/。
+      详见 phprt buildroot --help。
 
   phprt show [--tree [扩展]]
       显示当前 PHP 版本、安装路径、php.ini、已启用扩展（含 static/shared）。
@@ -99,6 +108,8 @@ contract（recipe 头部）:
   phprt outdated --all --json
   phprt use 8.5
   phprt show --tree curl
+  phprt buildroot create
+  phprt install 8.5 --chroot --ext "curl redis"
 EOF
 }
 
@@ -193,6 +204,7 @@ resolve_install_modes() {
 cmd_install() {
   local arg="" exts="" recompile=0 assume_yes=0 plan=0 clean_src=0
   local build_spec="" global_mode="" static_all=0 lto=0 saw_shared=0
+  local chroot_mode="" env_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ext)       exts="${2:-}"; shift 2 ;;
@@ -203,6 +215,8 @@ cmd_install() {
       --static-all) static_all=1; lto=0; global_mode=static; shift ;;
       --static-all-lto) static_all=1; lto=1; global_mode=static; shift ;;
       --shared)    global_mode=shared; saw_shared=1; shift ;;
+      --chroot)    chroot_mode=chroot; env_set=1; shift ;;
+      --host)      chroot_mode=host; env_set=1; shift ;;
       --recompile) recompile=1; shift ;;
       --plan)      plan=1; shift ;;
       --clean-src) clean_src=1; shift ;;
@@ -213,6 +227,7 @@ cmd_install() {
     esac
   done
   [ -n "$arg" ] || die "用法: phprt install <系列|版本>（如 install 8.5 / install 8.5.12）"
+  [ "$env_set" = 1 ] && buildroot_set_env "$chroot_mode"
 
   if [ "$static_all" = 1 ]; then
     [ "$saw_shared" != 1 ] || die "--static-all / --static-all-lto 和 --shared 不能同时用"
@@ -395,7 +410,7 @@ cmd_install() {
        PHPRT_SEED="${PHPRT_SEED:-}" \
        PHPRT_FORCE_PHP="$force_php" \
        PHPRT_CLEAN_SRC="$clean_src" \
-       bash "$PHPRT_RUNNER/build.sh" \
+       run_build_env bash "$PHPRT_RUNNER/build.sh" \
          --bundle "$build_bundle" \
          --tree "$tree" \
          --exts "$exts"; then
@@ -1019,7 +1034,7 @@ cmd_add() {
   [ -n "$name" ] || die "用法: phprt add ext <名字> --shared|--static"
   shift 2 || true
 
-  local mode="" a
+  local mode="" a chroot_mode="" env_set=0
   for a in "$@"; do
     case "$a" in
       --shared)
@@ -1028,11 +1043,14 @@ cmd_add() {
       --static)
         [ -z "$mode" ] || [ "$mode" = static ] || die "--shared 和 --static 不能同时用"
         mode=static ;;
+      --chroot) chroot_mode=chroot; env_set=1 ;;
+      --host)   chroot_mode=host; env_set=1 ;;
       --yes|-y) ;;
       -h|--help) usage; return 0 ;;
-      *) die "未知参数: $a（add ext 只接受 --shared / --static）" ;;
+      *) die "未知参数: $a（add ext 接受 --shared / --static / --chroot / --host）" ;;
     esac
   done
+  [ "$env_set" = 1 ] && buildroot_set_env "$chroot_mode"
 
   local ver tree bundle sh types dflt cur extdir ld list m present=0 tree_link=""
   ver="$(current_version)" || die "还没有 current 版本"
@@ -1113,7 +1131,7 @@ cmd_add() {
        PHPRT_SEED="${PHPRT_SEED:-}" \
        PHPRT_FORCE_PHP=0 \
        PHPRT_CLEAN_SRC=0 \
-       bash "$PHPRT_RUNNER/build.sh" \
+       run_build_env bash "$PHPRT_RUNNER/build.sh" \
          --bundle "$bundle" \
          --tree "$tree" \
          --exts "$list"; then

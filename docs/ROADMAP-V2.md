@@ -417,16 +417,23 @@ phprt update --dry-run       # 只打印计划
 - 无法关闭已编译进 PHP 的 builtin 时给出明确提示，而不是静默忽略。
 - `PHPRT_KEYS` 脚本化用例覆盖：全选、子菜单、Esc 取消、确认退出。
 
-## 8. M5：buildroot / chroot（暂缓）
+## 8. M5：buildroot / chroot
 
-v1 有 `phprt buildroot`，v2 入口还保留分支，但 `scripts/buildroot.sh` 不存在。
-这一块**先不展开**，等前面任务稳定后在开发过程中单独讨论实现选型（bwrap / chroot、
-挂载布局、权限模型）再写进本文件。
+v1 的 standalone `phprt buildroot` 已移植到 v2，并补上自动 `--chroot` 构建。
 
-只保留两点约束，避免以后返工：
+- 实现：`scripts/buildroot.sh`（入口转发已在 `phprt`）。
+- rootfs：`<项目>/.phprt/buildroots/<名字>/`，配置在 `.phprt/buildroots/.config`。
+- 默认绑定项目 + phprt 仓库；自动构建额外绑定 `BUILD_ROOT` 等。
+- rootfs 在项目内时，chroot 内会通过项目 bind 再看到一次；构建只使用精确路径，不做递归扫描。
+- `install` / `add ext` 支持 `--chroot` / `--host`；`--plan` 不进 chroot。
+- 构建用户默认用 `chroot --userspec=<宿主uid:gid>`，产物属主不变。
+- 详见 [CHROOT-BUILD.md](CHROOT-BUILD.md)。
 
-- 构建目录必须已经按版本隔离（`build-php-<版本>/`），沙箱只挂这个目录可写。
-- 沙箱内构建出的树必须能在外层直接 `phprt verify`，产物不能依赖沙箱路径。
+验收：
+
+- `phprt buildroot create/enter/exec/status/remove` 可用，退出后挂载为 0；
+- `phprt install --chroot` 产物在宿主 `phprt verify` 全绿；
+- `--host` 切回后宿主构建无回归。
 
 ## 9. 任务顺序与里程碑
 
@@ -437,7 +444,7 @@ v1 有 `phprt buildroot`，v2 入口还保留分支，但 `scripts/buildroot.sh`
 | M2 | install 时的更新检查 + `phprt update` | M1 | 安全更新可安装、可回退、可验证 |
 | M3 | 扩展扩容（三批） | M0 | 每批只改 `bundles/`，verify 全绿 |
 | M4 | `phprt select` | M1/M3 | 非交互可测，结果可直接喂给 install |
-| M5 | buildroot/chroot | M0 | 暂缓，开发时再讨论 |
+| M5 | buildroot/chroot | M0 | 已完成：standalone + 自动 `--chroot`，真实构建已验证 |
 | M6 | 文档与测试矩阵 | 全部 | README/TEST-V2/RECIPE 同步 |
 
 ## 10. 待决问题
@@ -470,7 +477,9 @@ v1 有 `phprt buildroot`，v2 入口还保留分支，但 `scripts/buildroot.sh`
 
 ### 10.5 buildroot 的实现选型
 
-暂缓。等 M1–M4 稳定后在开发过程中单独讨论，结论再补进第 8 节。
+已定：chroot + dnf rootfs，rootfs 在项目 `.phprt/buildroots/`；
+默认绑定项目 + phprt 仓库，自动构建额外绑定 `BUILD_ROOT`。实现见第 8 节和
+[CHROOT-BUILD.md](CHROOT-BUILD.md)。
 
 ## 11. 非目标
 

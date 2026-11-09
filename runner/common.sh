@@ -978,6 +978,83 @@ phprt_set_build_root() {
   export BUILD_ROOT SRCDIR LOGS DOWNLOADS
 }
 
+# ---------------------------------------------------------------------------
+# chroot 构建（phprt buildroot）
+# 状态在 <project>/.phprt/buildroots/.config：ROOT_DEFAULT / BUILD_ENV。
+# 默认宿主构建；--chroot / --host 或 PHPRT_BUILD_ENV 覆盖。
+# ---------------------------------------------------------------------------
+
+buildroot_conf_get() {  # $1=ROOT_DEFAULT|BUILD_ENV
+  local key="$1" f="$PHPRT_HOME/buildroots/.config"
+  [ -f "$f" ] || return 0
+  # 文件由 buildroot.sh 生成，可信；用子 shell 避免污染当前变量
+  ( . "$f"; eval "printf '%s\n' \"\${$key:-}\"" )
+}
+
+build_env_get() {
+  local env="${PHPRT_BUILD_ENV:-}"
+  [ -n "$env" ] && { printf '%s\n' "$env"; return 0; }
+  env="$(buildroot_conf_get BUILD_ENV)"
+  printf '%s\n' "${env:-host}"
+}
+
+buildroot_default_root() {
+  local root
+  root="$(buildroot_conf_get ROOT_DEFAULT)"
+  [ -n "$root" ] || root="$PHPRT_HOME/buildroots/default"
+  printf '%s\n' "$root"
+}
+
+buildroot_set_env() {  # $1=chroot|host
+  local script="$PHPRT_REPO/scripts/buildroot.sh"
+  [ -x "$script" ] || die "缺少 scripts/buildroot.sh（chroot 构建需要在 phprt 仓库里运行）"
+  "$script" env "$1" || die "设置构建环境失败: $1"
+}
+
+# host: 直接执行；chroot: scripts/buildroot.sh exec 挂载后执行
+run_build_env() {
+  if [ "$(build_env_get)" != chroot ]; then
+    "$@"
+    return
+  fi
+
+  local script="$PHPRT_REPO/scripts/buildroot.sh"
+  [ -x "$script" ] || die "缺少 scripts/buildroot.sh（chroot 构建需要在 phprt 仓库里运行）"
+  local root="${PHPRT_CHROOT_ROOT:-$(buildroot_default_root)}"
+  [ -d "$root" ] ||
+    die "chroot rootfs 不存在: $root（先跑 phprt buildroot create）"
+
+  # build.sh 在 chroot 里重新读这些环境变量；先确保它们进入子进程环境
+  local v
+  for v in SELECTED_EXTS PHPRT_SEED PHPRT_FORCE_PHP PHPRT_CLEAN_SRC \
+           PHPRT_EXT_MODES PHPRT_PHP_VERSION PHPRT_WORK PHPRT_DOWNLOADS \
+           JOBS OFFLINE PHPRT_PROXY https_proxy HTTPS_PROXY \
+           http_proxy HTTP_PROXY NO_PROXY no_proxy GITHUB_TOKEN; do
+    [ -n "${!v:-}" ] && export "$v"
+  done
+
+  # 项目外的构建区也必须按原绝对路径绑定；项目/仓库由 buildroot.sh 默认绑定
+  local bind="${BUILD_ROOT:-}"
+  if [ -n "${PHPRT_SEED:-}" ] && [ -d "$PHPRT_SEED" ]; then
+    bind="$bind:$PHPRT_SEED"
+  fi
+  if [ -n "${DOWNLOADS:-}" ] && [ -d "$DOWNLOADS" ]; then
+    bind="$bind:$DOWNLOADS"
+  fi
+  # 仓库/项目的 downloads 可能是指向仓库外的软链；把真实目录也绑进去
+  local d
+  for d in "$PHPRT_REPO/downloads" "$PHPRT_PROJECT/downloads"; do
+    [ -d "$d" ] || continue
+    bind="$bind:$(realpath -m -- "$d")"
+  done
+
+  PHPRT_CHROOT_BINDS="${bind#:}" \
+  PHPRT_PROJECT="$PHPRT_PROJECT" \
+  PHPRT_HOME="$PHPRT_HOME" \
+    "$script" exec "$root" -- "$@"
+}
+
+
 # recipe 子进程从环境继承这些路径。直接单独跑 recipe（不经过 driver）时，
 # 只派生出 DOWNLOADS 的兜底位置，避免写进空路径。
 if [ -n "${BUILD_ROOT:-}" ]; then

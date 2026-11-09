@@ -33,7 +33,7 @@ tools `autoconf perlshim`。
 | 3 | **契约 v2**：builtin 写 `flags()` / `needs()`，ext 写 `build()` / `enable()`，dep / tool 写 `build()`；末行必须是 `recipe_main "$@"` | `docs/RECIPE.md` |
 | 4 | **门禁**：`scripts/recipe-check.sh --deep` 必须通过。它是开发脚本，不挂 `phprt` 子命令 | 本轮已定 |
 | 5 | **版本源在 `bundle.conf`**：recipe 头部只写变量名（`version=LIBZIP_VERSION`）。Phase C（版本下沉到 recipe）未做 | `bundle.conf` |
-| 6 | **目录**：dep → `<tree>/deps/<名>-<版本>`；tool → `.phprt/build-php-<版本>/tools/`；builtin / ext → PHP 树。`.phprt` 顶层只允许 `current`、`php-*`、`build-php-*` | `AGENTS.md` 17 |
+| 6 | **目录**：dep → `<tree>/deps/<名>-<版本>`；tool → `.phprt/build-php-<版本>/tools/`；builtin / ext → PHP 树。`.phprt` 顶层只允许 `current`、`php-*`、`build-php-*`、`buildroots` | `AGENTS.md` 17 |
 | 7 | **没有 `SUPPORTED_EXTS`**：扩展清单就是 `{builtin,ext}/*.sh` 的文件名 | `common.sh:builtin_names` |
 | 8 | **扩展状态不落盘**：启用状态由 `php -m` 推导，不写 `project.conf`；用户删 ini 或 `.so` 后结果仍要准 | `AGENTS.md` 16 |
 | 9 | **ini 必须显式**：builtin 静态写 `ini=-`，共享模块写 `20-<名>.ini`；ext 必须实现 `enable()` | `RECIPE.md` 3.1 |
@@ -44,7 +44,7 @@ tools `autoconf perlshim`。
 | 14 | **尚未实现**：`phprt update`、install / add 的在线检查（M2）、`--no-update-check`、`--offline` 参数 | 代码现状 |
 | 15 | **所有 pin 都填了真实 `*_SHA256`**（PHP 与全部依赖/扩展），下载即校验 | 2026-11-09 回填 |
 | 16 | **v1 / v2 不能共用一个 `.phprt`**，会互相覆盖。测试项目分开：`v2demo` 最小集、`v2ext` 扩展开发集 | 实测 |
-| 17 | **暂缓/不做**：buildroot / chroot；imap、grpc、mcrypt、odbc、snmp、pspell、dba、solr、oauth、readline、sqlsrv、oci8 | v1 文档 |
+| 17 | **暂缓/不做**：imap、grpc、mcrypt、odbc、snmp、pspell、dba、solr、oauth、readline、sqlsrv、oci8 | v1 文档 |
 
 ## 3. 三类节点与命名
 
@@ -536,4 +536,4 @@ PHP 不用重编，重跑 `install` 只补 ini。
 
 imap（uw-imap 维护成本高）、grpc（构建链过重）、mcrypt（已废弃）、
 odbc / snmp / pspell / dba / solr / oauth（小众）、readline（`php -a` 非刚需）、
-sqlsrv / oci8（私有驱动）、buildroot / chroot（暂缓）。
+sqlsrv / oci8（私有驱动）。

@@ -664,3 +664,30 @@ A/B 交替 11 轮取中位数：
   zlib 和 OpenSSL 在这组用例里没有明显收益。
 - 二进制从 38 MB 增到 61 MB，启动时间不变；是否值得取决于项目是否
   主要跑 JSON、mbstring、SQLite 这类路径。
+
+## buildroot / chroot（2026-11-09）
+
+standalone 和自动 `--chroot` 已接入。真实环境用 sudo 跑通了 `create` 和
+`install --chroot`；用户命名空间（`unshare -rmp`）另外验证挂载、bind、
+rootfs 可见性和清理逻辑：
+
+| 检查 | 结果 |
+| --- | --- |
+| `phprt buildroot help/status/list/env` | 正常；不存在的 rootfs 直接报“不存在” |
+| `create`（真实 dnf） | 409 包 / 659M；`.phprt-buildroot`、`.config`、默认路径正确 |
+| `create`（fake dnf / 用户命名空间） | 写出 rootfs、标记、配置；`list` 标默认；`remove` 后清空 |
+| `install --chroot` | `openssl zlib curl sqlite mbstring` 在 chroot 内构建成功 |
+| `add ext --chroot` | `tidy --shared` 构建成功，功能调用通过 |
+| 宿主 verify | `phprt verify` 7 项全绿 |
+| `--host` / `--chroot` | 配置在 host/chroot 间切换，不触发无意义重编 |
+| `create` 目标安全 | 拒绝非空非 rootfs 目录；拒绝仓库目录 |
+| `remove` 安全 | 缺 `.phprt-buildroot` 标记时拒绝删除 |
+| `exec` 挂载 | `/proc`、`/dev`、项目、仓库、home 均挂载成功；用户命名空间下 `sysfs` 失败只警告 |
+| rootfs 在项目内 | chroot 内可再看到一次 rootfs；构建只用精确路径，不递归扫描 |
+| 项目 / 仓库可见 | `pwd`、`PHPRT_PROJECT`、`PHPRT_REPO` 路径保持不变 |
+| HOME | `/home/phprt` 指向 `<项目>/.phprt/buildroots/.home` |
+| 退出清理 | `exec` / `enter` 结束后 `findmnt` 中 rootfs 下挂载数为 0 |
+| 产物属主 | `bin/php`、依赖 `.so`、测试文件均为宿主 `1000:1000` |
+| `run_build_env` | 在 chroot 内执行命令，`HOME`、`BUILD_ROOT`、项目路径正确 |
+| `remove`（真实 rootfs） | 先卸载再删除，默认路径重置，无残留挂载 |
+| `create` 用户条目 | rootfs 的 `/etc/passwd` / `/etc/group` 加入宿主用户，`id` 正常 |

@@ -101,6 +101,32 @@ phprt install 8.5 --recompile
 phprt install 8.5 --clean-src
 ```
 
+### chroot 构建（可选）
+
+宿主工具链太杂时，可以在项目自己的 rootfs 里构建：
+
+```bash
+cd /path/to/project
+
+# rootfs 默认在 .phprt/buildroots/default
+phprt buildroot create
+
+# 自动进入 chroot 构建；后续 add ext 也沿用
+phprt install 8.5 --chroot --ext "openssl zlib curl sqlite"
+phprt add ext tidy --shared --chroot
+
+# 切回宿主
+phprt install 8.5 --host
+
+# 手动进入 / 查看 / 删除
+phprt buildroot enter
+phprt buildroot status
+phprt buildroot remove --dry-run
+```
+
+`--plan` 不进 chroot；构建产物属主默认是宿主用户。详见
+[docs/CHROOT-BUILD.md](docs/CHROOT-BUILD.md)。
+
 这份 `phprtv2` 只保留 PHP 8.5。默认扩展集是
 `openssl zlib libxml2 curl sqlite mysqli mbstring zip sodium gettext`，
 可选清单由 `bundles/php8.5/{builtin,ext}/*.sh` 决定（当前 34 个扩展）；
@@ -115,6 +141,8 @@ phprt install 8.5 --clean-src
 | `phprt install ... --static` / `--shared` | 全局指定；不支持的类型自动保持原方式并提示 |
 | `phprt install ... --static-all` | 扩展和依赖都静态链接，生成单个 `bin/php`；`type=shared` 自动排除 |
 | `phprt install ... --static-all-lto` | 在 `--static-all` 基础上给 PHP 和依赖都开 LTO |
+| `phprt install ... --chroot` / `--host` | 在项目 rootfs 里构建 / 切回宿主构建 |
+| `phprt buildroot create\|enter\|exec\|remove\|status\|list\|use\|env` | chroot 构建环境管理 |
 | `phprt add ext <名字> --shared\|--static` | 加一个扩展；必须显式选方式，static 会重编 PHP |
 | `phprt remove ext <名字>` | 停用 shared 扩展（删 conf.d ini）；static 需重编 |
 | `phprt use <系列\|版本>` | 切换 current；系列取已装最高版 |
@@ -196,6 +224,7 @@ recipe 文件（头部一行 `# phprt:` 声明字段，`build()`/`flags()`/`need
 
 - [单个 PHP 可执行文件（--static-all）](docs/STATIC-ALL.md)
 - [全静态 + LTO（--static-all-lto）](docs/STATIC-ALL-LTO.md)
+- [chroot 构建环境（buildroot）](docs/CHROOT-BUILD.md)
 - [recipe 规范与审计](docs/RECIPE.md)
 - [v2 开发任务](docs/ROADMAP-V2.md)
 - [运行时库的 wheel 化](docs/WHEEL-LIBS.md)
