@@ -460,7 +460,7 @@ phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring libxml2"
 - configure 自动加的依赖 rpath 必须删掉；`-static-libgcc`/`-static-libstdc++`
   让产物不依赖项目外的 GCC 运行库。
 
-## `--static-all-lto` 验收（v0，待实测）
+## `--static-all-lto` 验收（v0，2026-11-09）
 
 目标：PHP 本体和依赖都开 LTO，仍然生成单个 `bin/php`。
 完整说明见 [STATIC-ALL-LTO.md](STATIC-ALL-LTO.md)。
@@ -470,27 +470,66 @@ phprt install 8.5 --static-all-lto \
   --ext "openssl zlib curl sqlite mbstring"
 ```
 
-| 检查 | 预期 | 结果 |
-| --- | --- | --- |
-| 构建 | `BUILD-STATUS=ok` | 待测 |
-| 链接方式 | `.phprt-state/link` 为 `static` | 待测 |
-| LTO | `.phprt-state/lto` 为 `1` | 待测 |
-| `BUILD-INFO` | `lto_php=1`、`lto_deps=1` | 待测 |
-| 依赖日志 | 出现 `-flto=auto` | 待测 |
-| 依赖 `.a` | 存在 `.gnu.lto` 段 | 待测 |
-| `ldd bin/php` | 只有 glibc 和动态加载器 | 待测 |
-| `readelf -S bin/php` | 没有 `.gnu.lto` 残留 | 待测 |
-| 单文件复制 | `php -v`、`php -m` 正常 | 待测 |
-| 功能 | sqlite、mbstring、openssl、curl 正常 | 待测 |
-| `phprt verify` | 全绿 | 待测 |
+测试树：`/home/z/testphp/v2salto`。
 
-切换检查：
+| 检查 | 结果 |
+| --- | --- |
+| 构建 | `BUILD-STATUS=ok` |
+| 链接方式 | `.phprt-state/link` 为 `static` |
+| LTO | `.phprt-state/lto` 为 `1` |
+| `BUILD-INFO` | `lto_php=1`、`lto_deps=1` |
+| 依赖 `.a` | 全部有 `.gnu.lto` 段：openssl 32704+4904、zlib 411、curl 5309、sqlite 3317、oniguruma 2232 |
+| `ldd bin/php` | 只有 `libm.so.6`、`libc.so.6` 和动态加载器 |
+| `readelf -S bin/php` | 没有 `.gnu.lto` 残留 |
+| 单文件复制 | `php -v`、`php -m` 正常 |
+| 功能 | sqlite、mbstring、openssl、curl HTTPS 200 正常 |
+| `phprt verify` | 全部通过，含新增的 `3c) LTO` |
+
+依赖日志：
+
+- openssl / zlib / oniguruma 的 make 日志能看到 `-flto=auto`。
+- curl 走 libtool，make 日志是静默的；以生成的 `Makefile` 和 `.a` 的
+  `.gnu.lto` 段为准。
+- sqlite 直接调用编译器，不产生独立 make 日志；`.a` 的段检查通过。
+
+切换验证：
 
 ```bash
-phprt install 8.5 --static-all --ext "..."     # LTO 关闭，依赖重编
-phprt install 8.5 --ext "..."                  # 沿用 LTO 记录，不重编
-phprt install 8.5 --shared --ext "..."         # 回到普通安装，LTO 关闭
+phprt install 8.5 --static-all --ext "..."     # LTO 0，依赖重编
+phprt install 8.5 --ext "..."                  # 跳过 php，沿用 LTO 0
+phprt install 8.5 --static-all-lto --ext "..." # 切回 LTO 1
 ```
 
-性能对比使用 `v2sa`（static 非 LTO）：体积、启动、`Zend/bench.php`、
-JSON、mbstring、PCRE（`pcre.jit=0`）、zlib、OpenSSL、SQLite。
+结果：
+
+- `--static-all` 后 `.phprt-state/lto` 为 `0`，所有依赖 `.a` 的
+  `.gnu.lto` 计数变 0，`bin/php` 回到约 38 MB。
+- 不带链接参数时显示 `跳过 php（configure 和依赖都没变）`。
+- 再执行 `--static-all-lto` 恢复 LTO，`verify` 仍全绿。
+
+### 性能对比（v2sa 非 LTO vs v2salto LTO）
+
+`taskset -c 2`，A/B 交替 5 轮取中位数：
+
+| 用例 | 非 LTO | LTO | 变化 |
+| --- | ---: | ---: | ---: |
+| `bin/php` 大小 | 38,142,920 | 61,410,416 | +61.0% |
+| 启动（200 次，3 轮） | 约 0.78 s | 约 0.78 s | 0% |
+| `Zend/bench.php` 总计 | 0.167 s | 0.168 s | +0.6%（噪声内） |
+| JSON encode | 98.91 ms | 95.06 ms | -3.89% |
+| JSON decode | 253.09 ms | 252.75 ms | -0.13% |
+| `mb_strtolower` | 348.63 ms | 337.10 ms | -3.31% |
+| `mb_substr` | 30.28 ms | 30.95 ms | +2.21%（噪声内） |
+| PCRE `preg_match_all` | 32.95 ms | 33.37 ms | +1.27%（噪声内） |
+| zlib `gzcompress` | 187.40 ms | 188.67 ms | +0.68% |
+| SHA-256 | 113.96 ms | 113.62 ms | -0.30% |
+| OpenSSL AES | 152.70 ms | 152.85 ms | +0.10% |
+| SQLite 内存库 | 15.15 ms | 14.51 ms | -4.22% |
+
+结论：
+
+- 整体 VM 负载仍然在 ±1% 内，和 v1 只开 PHP LTO 的结论一致。
+- 依赖 LTO 后，JSON 编码、mbstring、SQLite 出现 3%–4% 的局部变化；
+  zlib 和 OpenSSL 在这组用例里没有明显收益。
+- 二进制从 38 MB 增到 61 MB，启动时间不变；是否值得取决于项目是否
+  主要跑 JSON、mbstring、SQLite 这类路径。

@@ -14,6 +14,7 @@ versions() {
 
 build() {
   need_cmds gcc ar unzip
+  lto_on deps && need_cmds gcc-ar
 
   local D SIG ZIP WORK AMALG VER
   D="$(dep_dir_of sqlite)"
@@ -40,11 +41,18 @@ build() {
 
   cd "$WORK"
   log "编译 libsqlite3（共享库 + 静态库）"
+  local cc ar_bin lto_c lto_ld
+  cc="${CC:-gcc}"
+  ar_bin="$(dep_ar)"
+  lto_c="$(dep_lto_cflags)"
+  lto_ld="$(dep_lto_ldflags)"
   CFLAGS="-O2 -fPIC -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_RTREE -DSQLITE_ENABLE_JSON1"
-  gcc $CFLAGS -c sqlite3.c -o sqlite3.o
-  gcc -shared -Wl,-soname,libsqlite3.so.0 -o libsqlite3.so.0 sqlite3.o -lm -lpthread -ldl
+  [ -n "$lto_c" ] && CFLAGS="$CFLAGS $lto_c"
+  "$cc" $CFLAGS -c sqlite3.c -o sqlite3.o
+  "$cc" -shared -Wl,-soname,libsqlite3.so.0 $lto_ld \
+    -o libsqlite3.so.0 sqlite3.o -lm -lpthread -ldl
   ln -sf libsqlite3.so.0 libsqlite3.so
-  ar rcs libsqlite3.a sqlite3.o
+  "$ar_bin" rcs libsqlite3.a sqlite3.o
 
   mkdir -p "$D/lib" "$D/include" "$D/lib/pkgconfig"
   install -m 755 libsqlite3.so.0 "$D/lib/"

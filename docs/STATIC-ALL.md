@@ -100,7 +100,7 @@ PHP 签名包含链接方式：`static` ↔ `shared` 切换会重编 PHP。
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
 | v0 | `openssl zlib curl sqlite mbstring` | 已实现（2026-11-09） |
-| LTO | `--static-all-lto`：PHP + `openssl zlib curl sqlite oniguruma` | 见 [STATIC-ALL-LTO.md](STATIC-ALL-LTO.md) |
+| LTO | `--static-all-lto`：PHP + `openssl zlib curl sqlite oniguruma` | v0 已实现（2026-11-09） |
 | v1 | 补齐 `libxml2`、`libzip`、`libsodium`，默认集完整 | 待做 |
 | v2 | PECL：redis、yaml、ssh2、apcu、msgpack、igbinary、protobuf、amqp、memcached、mongodb、rdkafka | 待做 |
 | v3 | intl/ICU、gd 图片链、xsl、ldap、pgsql、gmp、ffi、tidy | 待做 |

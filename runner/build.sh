@@ -41,6 +41,12 @@ export SELECTED_EXTS="$EXTS"
 export DEPS="$TREE/deps"
 # 链接方式：命令显式指定（PHPRT_LINK_MODE）优先，否则用树上记录。
 export PHPRT_LINK_MODE="$(link_mode)"
+# LTO：命令显式指定（PHPRT_LTO）优先，否则用树上记录。必须早于 dep_sig。
+# 树记录为 0 时不要导出 PHPRT_LTO=0：bundle.conf 里手工设的 LTO_PHP=1
+# 仍应能只给 PHP 开 LTO。
+if [ -z "${PHPRT_LTO:-}" ] && [ "$(lto_mode_get "$TREE" 2>/dev/null || true)" = 1 ]; then
+  export PHPRT_LTO=1
+fi
 export JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 export VENDOR="$PHPRT_RUNNER/vendor"
 [ -d "$VENDOR" ] || die "缺少 $VENDOR（runner/vendor）"
@@ -132,6 +138,7 @@ if [ "$PLAN" = 1 ]; then
   printf '  deps: %s\n' "${ALL_DEPS:-（无）}"
   printf '  php\n'
   printf '  link: %s\n' "$(link_mode)"
+  printf '  lto: %s\n' "$(lto_mode)"
   printf '  static: %s\n' "$(printf '%s\n' $STATIC_BUILTINS $STATIC_PECL | sed '/^$/d' | tr '\n' ' ')"
   printf '  shared: %s\n' "$(printf '%s\n' $SHARED_BUILTINS $SHARED_PECL | sed '/^$/d' | tr '\n' ' ')"
   exit 0
@@ -163,6 +170,7 @@ PHP_SHA256="$PHP_SHA256"
 EXTENSIONS="$SELECTED_EXTS"
 MODES="$MODES"
 LINK_MODE="$(link_mode)"
+LTO_MODE="$(lto_mode)"
 EOF
 
 {
@@ -176,10 +184,14 @@ log "PHP $PHP_VERSION"
 log "deps:  ${ALL_DEPS:-（无）}"
 log "php"
 log "link:   $(link_mode)"
+log "lto:    $(lto_mode)"
 log "static: ${STATIC_BUILTINS}${STATIC_PECL:-（无）}"
 log "shared: ${SHARED_BUILTINS}${SHARED_PECL:-（无）}"
 
 # ---------------------------------------------------------------- deps ----
+if lto_on deps; then
+  need_cmds gcc-ar gcc-ranlib readelf
+fi
 for d in $ALL_DEPS; do
   ensure_dep "$d"
 done
@@ -251,6 +263,8 @@ PHP_SIG="$(
     bash "$BUNDLE/php.sh" --flags | sed -E -e 's|(deps/[A-Za-z0-9_+]+)-[^/]+/|\1/|g' -e 's|(deps/[A-Za-z0-9_+]+)-[^/ ]+$|\1|g'
     printf 'php=%s\n' "$PHP_VERSION"
     printf 'link_mode=%s\n' "$(link_mode)"
+    printf 'lto_php=%s\n' "$(lto_state php)"
+    printf 'lto_deps=%s\n' "$(lto_state deps)"
     printf 'php_cflags=%s|%s\n' "${PHP_CFLAGS:-}" "${PHP_CXXFLAGS:-}"
     if lto_on php; then
       printf 'lto=%s|%s\n' "$LTO_CFLAGS" "$LTO_LDFLAGS"
@@ -396,6 +410,7 @@ ensure_tree_ssl "$TREE"
 {
   printf 'built_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
   printf 'lto_php=%s\n' "$(lto_state php)"
+  printf 'lto_deps=%s\n' "$(lto_state deps)"
   if lto_on php; then
     printf 'lto_flags=%s|%s\n' "$LTO_CFLAGS" "$LTO_LDFLAGS"
   fi

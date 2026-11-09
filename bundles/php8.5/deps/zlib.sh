@@ -5,6 +5,7 @@ source "${PHPRT_RUNNER:?}/common.sh"
 
 build() {
   need_cmds gcc make tar
+  lto_on deps && need_cmds gcc-ar gcc-ranlib
 
   local D SIG TAR SRC
   D="$(dep_dir_of zlib)"
@@ -31,12 +32,21 @@ build() {
   fi
 
   cd "$SRC"
+  local ar_bin ranlib_bin
+  ar_bin="$(dep_ar)"
+  ranlib_bin="$(dep_ranlib)"
+  if lto_on deps; then
+    # zlib configure 用 CFLAGS 覆盖默认的 -O3；显式保留基线再加 LTO。
+    export CFLAGS="${CFLAGS:--O3} $LTO_CFLAGS"
+    export LDFLAGS="${LDFLAGS:+$LDFLAGS }$LTO_LDFLAGS"
+  fi
   log "configure + make -j$JOBS"
   ./configure --prefix="$D" > "$LOGS/zlib-configure.log" 2>&1 \
     || { tail -20 "$LOGS/zlib-configure.log"; die "zlib configure 失败"; }
-  make -j"$JOBS" > "$LOGS/zlib-make.log" 2>&1 \
+  make -j"$JOBS" AR="$ar_bin" RANLIB="$ranlib_bin" \
+      > "$LOGS/zlib-make.log" 2>&1 \
     || { tail -20 "$LOGS/zlib-make.log"; die "zlib make 失败"; }
-  make install >> "$LOGS/zlib-make.log" 2>&1
+  make AR="$ar_bin" RANLIB="$ranlib_bin" install >> "$LOGS/zlib-make.log" 2>&1
 
   stamp_write zlib "$SIG"
   ok "zlib $ZLIB_VERSION -> $D"

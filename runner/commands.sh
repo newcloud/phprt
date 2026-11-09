@@ -23,6 +23,8 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
                            type=shared 的扩展（如 xdebug）自动排除。
                            glibc 仍动态，产物可单独复制运行。
                            当前支持：openssl zlib curl sqlite mbstring
+      --static-all-lto     在 --static-all 基础上给 PHP 本体和依赖都开 LTO；
+                           状态记录在 .phprt-state/lto。
       不指定时按 recipe 的 default=（builtin 默认 static，PECL 默认 shared）。
 
       其他:
@@ -88,6 +90,7 @@ contract（recipe 头部）:
   phprt install 8.5 --ext "tidy curl" --build "tidy=static,curl=shared"
   phprt install 8.5 --ext "tidy redis xdebug" --static
   phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
+  phprt install 8.5 --static-all-lto --ext "openssl zlib curl sqlite mbstring"
   phprt add ext tidy --shared
   phprt add ext gmp --static
   phprt add ext redis --shared
@@ -187,7 +190,7 @@ resolve_install_modes() {
 
 cmd_install() {
   local arg="" exts="" recompile=0 assume_yes=0 plan=0 clean_src=0
-  local build_spec="" global_mode="" static_all=0 saw_shared=0
+  local build_spec="" global_mode="" static_all=0 lto=0 saw_shared=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ext)       exts="${2:-}"; shift 2 ;;
@@ -195,7 +198,8 @@ cmd_install() {
       --build)     build_spec="${build_spec:+$build_spec,}${2:-}"; shift 2 ;;
       --build=*)   build_spec="${build_spec:+$build_spec,}${1#*=}"; shift ;;
       --static)    global_mode=static; shift ;;
-      --static-all) static_all=1; global_mode=static; shift ;;
+      --static-all) static_all=1; lto=0; global_mode=static; shift ;;
+      --static-all-lto) static_all=1; lto=1; global_mode=static; shift ;;
       --shared)    global_mode=shared; saw_shared=1; shift ;;
       --recompile) recompile=1; shift ;;
       --plan)      plan=1; shift ;;
@@ -209,9 +213,9 @@ cmd_install() {
   [ -n "$arg" ] || die "用法: phprt install <系列|版本>（如 install 8.5 / install 8.5.12）"
 
   if [ "$static_all" = 1 ]; then
-    [ "$saw_shared" != 1 ] || die "--static-all 和 --shared 不能同时用"
+    [ "$saw_shared" != 1 ] || die "--static-all / --static-all-lto 和 --shared 不能同时用"
     case ",$build_spec," in
-      *,*=shared,*) die "--static-all 下不能有 --build 名字=shared" ;;
+      *,*=shared,*) die "全静态模式下不能有 --build 名字=shared" ;;
     esac
   fi
 
@@ -345,10 +349,13 @@ cmd_install() {
   # 链接方式只在显式指定时覆盖；不指定就沿用树上记录（新树默认 shared）
   if [ "$static_all" = 1 ]; then
     export PHPRT_LINK_MODE=static
+    # --static-all 显式关 LTO，--static-all-lto 显式开；两者共用同一状态文件
+    export PHPRT_LTO="$lto"
   elif [ "$global_mode" = shared ]; then
     export PHPRT_LINK_MODE=shared
+    export PHPRT_LTO=0
   else
-    unset PHPRT_LINK_MODE
+    unset PHPRT_LINK_MODE PHPRT_LTO
   fi
 
   # 编译方式：--build > --static/--shared > 契约 default
@@ -410,6 +417,11 @@ cmd_install() {
     link_mode_set "$PHPRT_LINK_MODE" "$tree"
   else
     link_mode_set "$(link_mode_get "$tree" 2>/dev/null || printf shared)" "$tree"
+  fi
+  if [ -n "${PHPRT_LTO:-}" ]; then
+    lto_mode_set "$PHPRT_LTO" "$tree"
+  else
+    lto_mode_set "$(lto_mode_get "$tree" 2>/dev/null || printf 0)" "$tree"
   fi
 
   activate_tree "$concrete" "$exts"
@@ -476,9 +488,14 @@ cmd_show() {
   printf 'PHP %s\n' "$ver"
   printf '    路径: %s\n' "$tree"
   printf '    php.ini: %s\n' "$tree/etc/php.ini"
-  local lm
+  local lm lt
   lm="$(link_mode_get "$tree" 2>/dev/null || true)"
-  printf '    链接方式: %s\n' "${lm:-shared}"
+  lt="$(lto_mode_get "$tree" 2>/dev/null || true)"
+  if [ "${lm:-shared}" = static ] && [ "${lt:-0}" = 1 ]; then
+    printf '    链接方式: static（LTO）\n'
+  else
+    printf '    链接方式: %s\n' "${lm:-shared}"
+  fi
   bundle="$(bundle_for "$(series_of "$ver")")" || true
   if [ -n "$bundle" ]; then
     export BUNDLE="$bundle"
@@ -864,6 +881,22 @@ cmd_verify() {
       return 1
     fi
     ok "bin/php 只依赖 glibc，且没有共享扩展"
+  fi
+
+  if [ "$(lto_mode_get "$tree" 2>/dev/null || true)" = 1 ]; then
+    log "3c) LTO（PHP 和依赖）"
+    local bi="$tree/BUILD-INFO"
+    if [ ! -f "$bi" ] ||
+       ! grep -qx 'lto_php=1' "$bi" ||
+       ! grep -qx 'lto_deps=1' "$bi"; then
+      printf '    ✗ BUILD-INFO 没有记录 lto_php=1 / lto_deps=1\n'
+      return 1
+    fi
+    if readelf -S "$tree/bin/php" 2>/dev/null | grep -c '\.gnu\.lto' >/dev/null; then
+      printf '    ✗ bin/php 仍残留 .gnu.lto 段\n'
+      return 1
+    fi
+    ok "PHP 和依赖都按 LTO 构建"
   fi
 
   log "4) RPATH（只允许 \$ORIGIN 相对路径）"

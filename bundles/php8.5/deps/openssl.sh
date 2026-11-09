@@ -5,6 +5,7 @@ source "${PHPRT_RUNNER:?}/common.sh"
 
 build() {
   need_cmds gcc make perl tar
+  lto_on deps && need_cmds gcc-ar gcc-ranlib
 
   local D PERL_DIR SIG TAR SRC
   D="$(dep_dir_of openssl)"
@@ -40,14 +41,23 @@ build() {
   perl -MTime::Piece -e1 >/dev/null 2>&1 || export PERL5LIB="$PERL5LIB:$VENDOR/perl-optional"
 
   cd "$SRC"
+  if lto_on deps; then
+    # OpenSSL 的 target 默认是 -Wall -O3；用户 CFLAGS 会覆盖 target，
+    # 所以这里显式带上基线，避免 LTO 构建反而降优化。
+    export CFLAGS="${CFLAGS:--Wall -O3} $LTO_CFLAGS"
+    export LDFLAGS="${LDFLAGS:+$LDFLAGS }$LTO_LDFLAGS"
+    export AR=gcc-ar RANLIB=gcc-ranlib
+  fi
   log "Configure + make -j$JOBS"
   ./config --prefix="$D" --openssldir="$(system_ssldir)" --libdir=lib \
       shared no-tests > "$LOGS/openssl-configure.log" 2>&1 \
     || { tail -20 "$LOGS/openssl-configure.log"; die "OpenSSL Configure 失败"; }
-  make -j"$JOBS" > "$LOGS/openssl-make.log" 2>&1 \
+  make -j"$JOBS" AR="${AR:-ar}" RANLIB="${RANLIB:-ranlib}" \
+      > "$LOGS/openssl-make.log" 2>&1 \
     || { tail -20 "$LOGS/openssl-make.log"; die "OpenSSL make 失败"; }
   # OPENSSLDIR 指向系统目录，不能往那里装配置和证书；只装 --prefix 下的东西
-  make install_sw >> "$LOGS/openssl-make.log" 2>&1
+  make install_sw AR="${AR:-ar}" RANLIB="${RANLIB:-ranlib}" \
+      >> "$LOGS/openssl-make.log" 2>&1
 
   stamp_write openssl "$SIG"
   ok "OpenSSL $OPENSSL_VERSION -> $D"

@@ -228,4 +228,11 @@ if link_is_static; then
   [ -z "$_bad_needed" ] ||
     die "静态链接未完成，仍有外部依赖:"$'\n'"$_bad_needed"
 fi
+
+if lto_on php; then
+  # 链接完成后 LTO 中间段应全部被消费；残留说明链接没有走 LTO。
+  if readelf -S "$TREE/bin/php" 2>/dev/null | grep -c '\.gnu\.lto' >/dev/null; then
+    die "bin/php 仍残留 .gnu.lto 段，LTO 没有完成链接合并"
+  fi
+fi
 ok "PHP $PHP_VERSION 本体完成"

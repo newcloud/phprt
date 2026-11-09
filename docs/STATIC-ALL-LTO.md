@@ -150,7 +150,7 @@ readelf -S deps/<名字>/lib/*.a | grep -q '\.gnu\.lto'
 
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
-| v0 | `openssl zlib curl sqlite oniguruma` | 本次实现 |
+| v0 | `openssl zlib curl sqlite oniguruma` | 已实现（2026-11-09） |
 | v1 | 补 `libxml2`、`libzip`、`libsodium` 的静态库和 LTO，默认集完整 | 待做 |
 | v2 | 其余 autotools 依赖 | 待做 |
 | v3 | CMake 类依赖（aom/avif/jpeg/libzip/tidy/webp 等） | 待做 |
@@ -195,7 +195,7 @@ phprt verify
 | 链接方式 | `.phprt-state/link` 为 `static` |
 | LTO | `.phprt-state/lto` 为 `1` |
 | `BUILD-INFO` | `lto_php=1`、`lto_deps=1` |
-| 依赖日志 | 出现 `-flto=auto` |
+| 依赖日志 | 出现 `-flto=auto`；libtool 静默时以 `.a` 的段为准 |
 | 依赖 `.a` | 存在 `.gnu.lto` 段 |
 | `ldd bin/php` | 只有 glibc 和动态加载器 |
 | `readelf -S bin/php` | 没有 `.gnu.lto` 残留 |

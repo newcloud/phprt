@@ -340,6 +340,37 @@ link_mode() {
 
 link_is_static() { [ "$(link_mode)" = static ]; }
 
+# ---------------------------------------------------------------------------
+# LTO 方式：1 = PHP 和依赖都开 LTO；0 = 普通构建。
+# 记录在 $TREE/.phprt-state/lto；PHPRT_LTO 是本次运行的覆盖值。
+# ---------------------------------------------------------------------------
+lto_mode_file_of() {  # $1=tree
+  printf '%s/.phprt-state/lto\n' "$1"
+}
+
+lto_mode_get() {  # $1=tree，可省略用 $TREE
+  local t="${1:-${TREE:-}}" f
+  [ -n "$t" ] || return 1
+  f="$(lto_mode_file_of "$t")"
+  [ -f "$f" ] && cat "$f"
+}
+
+lto_mode_set() {  # $1=1/0 $2=tree（可省略用 $TREE）
+  local m="$1" t="${2:-${TREE:-}}" f
+  [ -n "$t" ] || return 1
+  f="$(lto_mode_file_of "$t")"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$m" > "$f"
+}
+
+# 本次覆盖 -> 树上记录 -> 0
+lto_mode() {
+  local m="${PHPRT_LTO:-}"
+  [ -n "$m" ] && { printf '%s\n' "$m"; return 0; }
+  m="$(lto_mode_get "${TREE:-}" 2>/dev/null || true)"
+  printf '%s\n' "${m:-0}"
+}
+
 mode_file_of() {  # $1=tree $2=扩展名
   printf '%s/.phprt-state/mode/%s\n' "$1" "$2"
 }
@@ -983,11 +1014,30 @@ LTO_CFLAGS="${LTO_CFLAGS:--flto=auto}"
 LTO_LDFLAGS="${LTO_LDFLAGS:--flto=auto}"
 
 lto_on() {
-  local var="LTO_$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+  local name var override
+  name="$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+  # 单模块覆盖 > 全局开关 > bundle.conf 的 LTO_<模块>。
+  # --static-all-lto 用全局 PHPRT_LTO=1，同时打开 PHP 和依赖。
+  override="PHPRT_LTO_$name"
+  if [ -n "${!override:-}" ]; then
+    [ "${!override}" = 1 ]
+    return
+  fi
+  if [ -n "${PHPRT_LTO:-}" ]; then
+    [ "$PHPRT_LTO" = 1 ]
+    return
+  fi
+  var="LTO_$name"
   [ "${!var:-0}" = 1 ]
 }
 
-lto_state() { lto_on "$1" && printf 1 || printf 0; }
+lto_state() { if lto_on "$1"; then printf 1; else printf 0; fi; }
+
+# 依赖 LTO 的公共参数。recipe 用它们保留自己的 -O2/-O3 基线后再追加 LTO。
+dep_lto_cflags()  { if lto_on deps; then printf '%s\n' "$LTO_CFLAGS";  fi; }
+dep_lto_ldflags() { if lto_on deps; then printf '%s\n' "$LTO_LDFLAGS"; fi; }
+dep_ar()          { if lto_on deps; then printf gcc-ar; else printf ar; fi; }
+dep_ranlib()      { if lto_on deps; then printf gcc-ranlib; else printf ranlib; fi; }
 
 # 精确版安装（install 8.5.11，pin 是 8.5.12）不复制 bundle：读完仓库 bundle 后，
 # 只把 PHP 自身的下载信息换成目标版本，其它 pin 原样保留。
@@ -1249,6 +1299,11 @@ dep_sig() {
     # 版本进签名：同版本目录残留（降级后再升级、手工塞目录）不能算已完成。
     # 消费者是否重编仍由 recipe_id 的 SONAME 列表决定，同 ABI 补丁不牵连。
     printf 'version=%s\n' "$(ext_version "$n")"
+    # 只有 dep 需要 LTO；tool（perlshim/autoconf）不参与 PHP 链接。
+    if [ "$(recipe_kind_of "$(module_sh "$n")")" = dep ] && lto_on deps; then
+      printf 'lto=1\n'
+      printf 'lto_flags=%s|%s\n' "$LTO_CFLAGS" "$LTO_LDFLAGS"
+    fi
     recipe_switch_state "$n"
     # 条件依赖是否参与构建已经体现在 module_needs 的解析结果里。
     # 安装目录名（含版本）也要进签名：autotools 的 .la 里记的是绝对路径，
@@ -1275,6 +1330,22 @@ ensure_dep() {
   # 否则会出现「外层要重编、内层跳过」，随后把旧产物记成新签名。
   FORCE=1 bash "$(module_sh "$n")" build
   artifact_ok "$n" || die "依赖 $n 构建后没有产物"
+  if lto_on deps && [ "$(recipe_kind_of "$(module_sh "$n")")" = dep ]; then
+    local _a _d _seen=0
+    _d="$(dep_dir_of "$n")"
+    for _a in "$_d"/lib/*.a "$_d"/lib64/*.a; do
+      [ -f "$_a" ] || continue
+      _seen=1
+      readelf -S "$_a" 2>/dev/null | grep -c '\.gnu\.lto' >/dev/null ||
+        die "依赖 $n 的静态库没有 LTO 段（recipe 未接 LTO）: $_a"
+    done
+    # PHP 静态链接需要的依赖必须有 .a；这里提前报，避免到 PHP 链接阶段才发现
+    case " ${PHPRT_PHP_DEPS:-} " in
+      *" $n "*)
+        [ "$_seen" = 1 ] ||
+          die "依赖 $n 没有静态库（--static-all 需要 .a，见 docs/STATIC-ALL.md）" ;;
+    esac
+  fi
   state_set "deps/$n" "$sig"
 }
 
