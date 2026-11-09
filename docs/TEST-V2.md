@@ -40,7 +40,9 @@
 扩展状态不落盘：没有 `project.conf`，也没有每版本的清单文件。需要时按
 `myphp` 相同的环境（`PHPRC` / `PHP_INI_SCAN_DIR` / `extension_dir`）跑
 `php -m`，再按 recipe 的 `modules` 匹配出已启用的扩展。用户手改 `php.ini`
-或删 `.so` 都会反映出来；不同版本各读各的，互不覆盖。
+或删 `.so` 都会反映出来；不同版本各读各的，互不覆盖。`phprt show` 在这个
+结果上分组显示：静态链接（`php -n -m` 仍列出，说明编进 `bin/php`）、
+共享模块（`.so`）、未启用。
 
 不再生成的东西：`bin/`（runner 副本）、`bundles/`（recipe 副本）、`config`
 （仓库绝对路径）、`vendor/`（Perl shim 副本）、`tools/`、`logs/`、
@@ -384,7 +386,7 @@ $ scripts/recipe-check.sh --deep
 | 产物 | `lib/php/extensions/` 不存在（没有任何 `.so`） |
 | 模块 | `zlib`、`sqlite3`、`pdo_sqlite`、`Phar` 等都在 `php -m` 里 |
 | phar gzip | `Phar::canCompress(Phar::GZ) === true` |
-| `phprt show` | `curl(static) … zlib(static)`，无 `?` |
+| `phprt show` | `扩展: 已启用 11（静态链接 11，共享模块 0）`，无 `状态未知` |
 | `phprt verify` | 7 项全绿，wheel 完整性通过 |
 | 追装 shared | `add ext gmp --shared` 建出扩展目录，`gmp_add()` 可用 |
 

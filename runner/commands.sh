@@ -499,14 +499,62 @@ cmd_show() {
   bundle="$(bundle_for "$(series_of "$ver")")" || true
   if [ -n "$bundle" ]; then
     export BUNDLE="$bundle"
-    local exts e m
+    # 扩展状态按 php -m 推导（用户手改 ini / 删 .so 后仍然准确）。
+    # 静态链接 = 在 php -n -m 里仍然出现（-n 不读 php.ini/conf.d）；
+    # 共享模块 = lib/php/extensions 下有 .so，且只有带配置时才会加载。
+    local exts e names enabled=" " static_list="" shared_list="" unknown_list="" off_list=""
+    local n_static=0 n_shared=0 n_unknown=0 n_off=0 builtin_mods extdir ld
+    local mm is_static has_so
     exts="$(tree_exts "$ver")"
-    printf '    已启用:'
-    for e in $exts; do
-      m="$(ext_current_mode "$tree" "$e" 2>/dev/null || true)"
-      printf ' %s(%s)' "$e" "${m:-?}"
+    for e in $exts; do enabled+="$e "; done
+    extdir="$(ext_dir_of "$tree" 2>/dev/null || true)"
+    ld="$tree/lib:$(ls -d "$tree"/deps/*/lib 2>/dev/null | tr '\n' ':')"
+    builtin_mods="$(LD_LIBRARY_PATH="$ld" "$tree/bin/php" -n -m 2>/dev/null |
+      tr '[:upper:]' '[:lower:]')"
+    names="$(all_ext_names)"
+    for e in $names; do
+      case "$enabled" in
+        *" $e "*) ;;
+        *) off_list+="$e "; n_off=$((n_off + 1)); continue ;;
+      esac
+      is_static=0
+      for mm in $(ext_modules "$e"); do
+        if printf '%s\n' "$builtin_mods" | grep -cix "$mm" >/dev/null; then
+          is_static=1
+          break
+        fi
+      done
+      has_so=0
+      if [ -n "$extdir" ]; then
+        [ -f "$extdir/$e.so" ] && has_so=1
+        if [ "$has_so" = 0 ]; then
+          for mm in $(ext_modules "$e"); do
+            [ -f "$extdir/$mm.so" ] && { has_so=1; break; }
+          done
+        fi
+      fi
+      if [ "$is_static" = 1 ]; then
+        static_list+="$e "; n_static=$((n_static + 1))
+      elif [ "$has_so" = 1 ]; then
+        shared_list+="$e "; n_shared=$((n_shared + 1))
+      else
+        unknown_list+="$e "; n_unknown=$((n_unknown + 1))
+      fi
     done
-    printf '\n'
+    printf '    扩展: 已启用 %s（静态链接 %s，共享模块 %s），未启用 %s\n' \
+      "$((n_static + n_shared + n_unknown))" "$n_static" "$n_shared" "$n_off"
+    if [ "$n_static" = 0 ]; then
+      printf '      静态链接: 无\n'
+    else
+      printf '      静态链接: %s\n' "${static_list% }"
+    fi
+    if [ "$n_shared" = 0 ]; then
+      printf '      共享模块: 无\n'
+    else
+      printf '      共享模块: %s\n' "${shared_list% }"
+    fi
+    [ "$n_unknown" = 0 ] || printf '      状态未知: %s\n' "${unknown_list% }"
+    [ "$n_off" = 0 ] || printf '      未启用: %s\n' "${off_list% }"
   fi
   ( cd "$PHPRT_PROJECT" && ./myphp -v | head -1 | sed 's/^/    /' )
 }
@@ -736,7 +784,7 @@ cmd_add() {
   ld="$tree/lib:$(ls -d "$tree"/deps/*/lib 2>/dev/null | tr '\n' ':')"
   for m in $(ext_modules "$name"); do
     if { [ -n "$extdir" ] && [ -f "$extdir/$m.so" ]; } ||
-       LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -qix "$m"; then
+       LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -cix "$m" >/dev/null; then
       present=1
     fi
   done
@@ -831,7 +879,7 @@ cmd_verify() {
   for ini in "$tree"/etc/conf.d/*.ini; do
     [ -f "$ini" ] || continue
     for m in $(sed -n 's/^[[:space:]]*extension[[:space:]]*=[[:space:]]*"\?\([^"/]*\)\.so"\?.*/\1/p' "$ini"); do
-      printf '%s\n' "$loaded" | grep -qx "$m" ||
+      printf '%s\n' "$loaded" | grep -cix "$m" >/dev/null ||
         bad_ini+="$ini: $m 没有加载"$'\n'
     done
   done

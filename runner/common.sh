@@ -430,7 +430,10 @@ ext_current_mode() {
   fi
   ld="$tree/lib:$(ls -d "$tree"/deps/*/lib 2>/dev/null | tr '\n' ':')"
   for m in $(ext_modules "$name"); do
-    if LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -qix "$m"; then
+    # -n：不读 php.ini 和 conf.d。此时还能列出模块，说明它编进了 bin/php，
+    # 而不是通过 extension= 或 .so 动态加载。
+    # 不用 grep -q：pipefail 下 php 会因 SIGPIPE 退出，导致误判为未加载。
+    if LD_LIBRARY_PATH="$ld" "$tree/bin/php" -n -m 2>/dev/null | grep -cix "$m" >/dev/null; then
       printf 'static\n'; return 0
     fi
   done
@@ -783,7 +786,7 @@ tree_exts() {
   [ -n "$loaded" ] || return 0
   for e in $(all_ext_names); do
     for m in $(ext_modules "$e"); do
-      if printf '%s\n' "$loaded" | grep -qx "$m"; then
+      if printf '%s\n' "$loaded" | grep -cix "$m" >/dev/null; then
         out="$out${out:+ }$e"
         break
       fi
@@ -907,7 +910,7 @@ enable_ext() {
   for m in $mods; do
     if [ -n "$extdir" ] && [ -f "$extdir/$m.so" ]; then
       any_shared=1
-    elif LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -qix "$m"; then
+    elif LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -cix "$m" >/dev/null; then
       any_static=1
     else
       die "$m 没有编译；用 phprt install $ver --recompile --ext $name"
