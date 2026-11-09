@@ -560,6 +560,36 @@ php -n -d memory_limit=256M "$SRC/ext/hash/bench.php"
 - `ext/hash/bench.php` 里 xxh128 +4.2%、crc32 -4.1%，其它哈希基本不变；
   总计 -0.1%，没有一致趋势。
 
+### json_encode 数据形态复核
+
+v1 文档里 `json_encode` 的 -11.30% 只适用于“1000 条同构记录”的简单形态；
+复杂负载只有 -1.6%~-3.5%。这次用 v2sa（非 LTO）和 v2salto（LTO）复核
+不同 JSON 形态，`taskset -c 2`、`-n`、A/B 交替 11 轮取中位数：
+
+| 形态 | JSON 大小 | 非 LTO | LTO | 变化 |
+| --- | ---: | ---: | ---: | ---: |
+| `nested_deep`：1000 条，深层嵌套 | 92 KB | 57.58 ms | 50.93 ms | **-11.55%** |
+| `nested`：1000 条，两层嵌套 | 153 KB | 218.84 ms | 200.80 ms | **-8.24%** |
+| `records_nested`：1000 条，带 tags/meta | 166 KB | 222.44 ms | 210.64 ms | -5.30% |
+| `long_escape`：约 1 MB 转义字符串 | 980 KB | 185.81 ms | 177.51 ms | -4.47% |
+| `records_scalar`：1000 条，6 个标量字段 | 99 KB | 167.90 ms | 161.45 ms | -3.84% |
+| `records_wide`：1000 条，12 个标量字段 | 220 KB | 82.16 ms | 79.25 ms | -3.54% |
+| `records_many_small`：5000 条，3 个字段 | 207 KB | 192.76 ms | 186.49 ms | -3.25% |
+| `objects_scalar`：1000 个 stdClass | 99 KB | 204.06 ms | 199.88 ms | -2.05% |
+| `array_list`：1000 条纯 list | 55 KB | 197.27 ms | 195.39 ms | -0.95% |
+| `long_unicode`：约 3.4 MB Unicode | 3440 KB | 168.35 ms | 168.89 ms | +0.32% |
+
+结论：
+
+- **约 10% 的收益可以复现**，但集中在“记录小、嵌套深、追加次数多”的形态：
+  `nested_deep` -11.55%，`nested` -8.24%。
+- 普通标量记录约 3%–5%，`stdClass` 和纯 list 约 1%–2%，大 Unicode 字符串没有收益。
+- 之前自定义测试的 JSON encode -3.89% 不是矛盾：那个负载是 2000 条带
+  `tags`/`meta` 的记录，接近这里的 `records_nested`（-5.30%），不是
+  `nested_deep`。
+- 所以 v1 的 -11.3% 和这次结果一致：LTO 优化的是 JSON 编码里的
+  `smart_str` 追加路径，数据形态越接近“大量小值连续追加”，收益越明显。
+
 ### libxml2：XML 解析与 XPath
 
 `libxml2` recipe 现在默认 `--enable-static`，因此 `--static-all` 和
