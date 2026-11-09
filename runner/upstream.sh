@@ -138,8 +138,26 @@ version_cmp() {  # a b -> -1 / 0 / 1
   fi
 }
 
+# 预发布版本：PECL 会给出 3.2.17RC1（state 仍标 stable），
+# libjpeg-turbo 用 3.1.90 表示 3.2.0 的 beta。两种都算预发布。
+version_is_prerelease() {
+  local v="$1" last
+  case "$v" in
+    *[Aa][Ll][Pp][Hh][Aa]*|*[Bb][Ee][Tt][Aa]*|*[Rr][Cc][0-9]*|*[Dd][Ee][Vv]*) return 0 ;;
+  esac
+  last="${v##*.}"
+  [ "$last" -ge 90 ] 2>/dev/null
+}
+
+version_stable_filter() {
+  local v
+  while IFS= read -r v; do
+    version_is_prerelease "$v" || printf '%s\n' "$v"
+  done
+}
+
 version_max() {
-  grep -E '^[0-9]+(\.[0-9]+)*$' | sort -V | tail -1
+  version_stable_filter | grep -E '^[0-9]+(\.[0-9]+)*$' | sort -V | tail -1
 }
 
 # 安全更新：major.minor 不变，patch 变大。
@@ -161,6 +179,7 @@ version_safe_max() {  # <当前版本>，候选从 stdin 读
   local cur="$1" v best=""
   while IFS= read -r v; do
     [ -n "$v" ] || continue
+    version_is_prerelease "$v" && continue
     version_is_safe_update "$cur" "$v" || continue
     if [ -z "$best" ] || [ "$(version_cmp "$v" "$best")" = 1 ]; then
       best="$v"
@@ -193,6 +212,7 @@ upstream_versions_pecl() {
            if (match($0, /<v>[^<]+<\/v>/))
              print substr($0, RSTART+3, RLENGTH-7)
          }' |
+    grep -viE '[0-9](alpha|beta|rc|dev|pre)[0-9._-]*$' |
     upstream_norm_version | sort -u
 }
 

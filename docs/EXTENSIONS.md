@@ -71,54 +71,55 @@ tools `autoconf perlshim`。
 
 ### 4.1 依赖与工具（17）
 
-> 2026-11-09：17 个 recipe 已按 contract=v2 写完并通过 `--deep`；17 个库在 v2ext 全部
-> 构建成功，SONAME 均有 ABI 号。状态仍是 `🚧`：升级轮（基线 → 目标）未做。
+> 2026-11-09：17 个库全部构建成功，SONAME 均有 ABI 号；有安全更新的
+> `libpng` / `aom` / `jpeg` 已完成“基线 → 目标”升级轮（在 v2up 副本里做，
+> 基线树保留）。其余模块当前即最新。
 
 | 名称 | 类型 | 依赖 | 版本变量 | 基线 | 目标 | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| re2c | tool | — | `RE2C_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| aom | dep | — | `AOM_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| avif | dep | aom | `AVIF_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| bzip2 | dep | — | `BZIP2_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| freetype | dep | zlib, libpng | `FREETYPE_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| icu | dep | — | `ICU_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| jpeg | dep | — | `JPEG_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| libffi | dep | — | `LIBFFI_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| libpng | dep | zlib | `LIBPNG_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| libsodium | dep | — | `LIBSODIUM_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| libxml2 | dep | zlib | `LIBXML2_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| libxslt | dep | libxml2 | `LIBXSLT_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| libyaml | dep | — | `LIBYAML_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| oniguruma | dep | — | `ONIGURUMA_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| openldap | dep | — | `OPENLDAP_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| sqlite | dep | — | `SQLITE_VERSION` | 待定 | 待定 | 待定 | ⬜ |
-| webp | dep | — | `WEBP_VERSION` | 待定 | 待定 | 待定 | ⬜ |
+| re2c | tool | — | `RE2C_VERSION` | 4.6 | 4.6 | 无（当前即最新） | ✅ |
+| aom | dep | — | `AOM_VERSION` | 3.12.1 | 3.12.1 | 无（当前即最新） | ✅ |
+| avif | dep | aom | `AVIF_VERSION` | 1.3.0 | 1.3.0 | 无（当前即最新） | ✅ |
+| bzip2 | dep | — | `BZIP2_VERSION` | 1.0.8 | 1.0.8 | 无（当前即最新） | ✅ |
+| freetype | dep | zlib, libpng | `FREETYPE_VERSION` | 2.13.3 | 2.13.3 | 无（当前即最新） | ✅ |
+| icu | dep | — | `ICU_VERSION` | 79.1 | 79.1 | 无（当前即最新） | ✅ |
+| jpeg | dep | — | `JPEG_VERSION` | 3.1.4.1 | 3.1.4.1 | 无（当前即最新） | ✅ |
+| libffi | dep | — | `LIBFFI_VERSION` | 3.4.8 | 3.4.8 | 无（当前即最新） | ✅ |
+| libpng | dep | zlib | `LIBPNG_VERSION` | 1.6.59 | 1.6.59 | 无（当前即最新） | ✅ |
+| libsodium | dep | — | `LIBSODIUM_VERSION` | 1.0.22 | 1.0.22 | 无（当前即最新） | ✅ |
+| libxml2 | dep | zlib | `LIBXML2_VERSION` | 2.15.4 | 2.15.4 | 无（当前即最新） | ✅ |
+| libxslt | dep | libxml2 | `LIBXSLT_VERSION` | 1.1.45 | 1.1.45 | 无（当前即最新） | ✅ |
+| libyaml | dep | — | `LIBYAML_VERSION` | 0.2.5 | 0.2.5 | 无（当前即最新） | ✅ |
+| oniguruma | dep | — | `ONIGURUMA_VERSION` | 6.9.10 | 6.9.10 | 无（当前即最新） | ✅ |
+| openldap | dep | — | `OPENLDAP_VERSION` | 2.6.16 | 2.6.16 | 无（当前即最新） | ✅ |
+| sqlite | dep | — | `SQLITE_VERSION` | 3.54.1 | 3.54.1 | 无（当前即最新） | ✅ |
+| webp | dep | — | `WEBP_VERSION` | 1.6.0 | 1.6.0 | 无（当前即最新） | ✅ |
 
 ### 4.2 PECL 扩展（7）
 
-> 2026-11-09：7 个 PECL 全部写完，全部用 `phprt add ext` 增量构建并做了功能调用。
+> 2026-11-09：7 个 PECL 全部用 `phprt add ext` 增量构建并做了功能调用。
 > `apcu` / `igbinary` 先按自包含写法验证（82 / 88 行），归一化后只差 18 行，
 > 据此加了 `runner/recipe-ext.sh`；两者改成助手版后降到 22 / 31 行并重新构建通过。
-> 状态仍是 `🚧`：升级轮（基线 → 目标）未做。
+> `igbinary` 的 3.2.17RC1 被预发布过滤挡掉，当前 3.2.16 就是最新稳定版。
 
 | 名称 | 依赖 | 版本变量 | ini | 基线 | 目标 | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| apcu | — | `APCU_VERSION` | `25-apcu.ini` | 5.1.28 | 待定 | 待定 | ⬜ |
-| igbinary | — | `IGBINARY_VERSION` | `20-igbinary.ini`（待确认） | 3.2.16 | 待定 | 待定 | ⬜ |
-| msgpack | — | `MSGPACK_VERSION` | `21-msgpack.ini`（待确认） | 3.0.1 | 待定 | 待定 | ⬜ |
-| protobuf | — | `PROTOBUF_VERSION` | `23-protobuf.ini` | 5.36.2 | 待定 | 待定 | ⬜ |
-| redis | — | `REDIS_VERSION` | `20-redis.ini` | 6.3.0 | 待定 | 待定 | ⬜ |
-| xdebug | zlib | `XDEBUG_VERSION` | `30-xdebug.ini` | 3.5.3 | 待定 | 待定 | ⬜ |
-| yaml | libyaml | `YAML_EXT_VERSION` | `26-yaml.ini` | 2.3.0 | 待定 | 待定 | ⬜ |
+| apcu | — | `APCU_VERSION` | `25-apcu.ini` | 5.1.28 | 5.1.28 | 无（当前即最新） | ✅ |
+| igbinary | — | `IGBINARY_VERSION` | `20-igbinary.ini`（待确认） | 3.2.16 | 3.2.16 | 无（3.2.17RC1 已过滤） | ✅ |
+| msgpack | — | `MSGPACK_VERSION` | `21-msgpack.ini`（待确认） | 3.0.1 | 3.0.1 | 无（当前即最新） | ✅ |
+| protobuf | — | `PROTOBUF_VERSION` | `23-protobuf.ini` | 5.36.2 | 5.36.2 | 无（当前即最新） | ✅ |
+| redis | — | `REDIS_VERSION` | `20-redis.ini` | 6.3.0 | 6.3.0 | 无（当前即最新） | ✅ |
+| xdebug | zlib | `XDEBUG_VERSION` | `30-xdebug.ini` | 3.5.3 | 3.5.3 | 无（当前即最新） | ✅ |
+| yaml | libyaml | `YAML_EXT_VERSION` | `26-yaml.ini` | 2.3.0 | 2.3.0 | 无（当前即最新） | ✅ |
 
 > igbinary / msgpack 在 v1 里写 ini 的位置需要迁移时核对（v1 审计表没有列出），
 > 以 v1 recipe 的实际文件名为准，并同步更新本表。
 
 ### 4.3 builtin（14）
 
-> 2026-11-09：14 个 recipe 已写完，一次性重编 PHP 后全部编译成功，功能调用 14 项
-> 全部通过（`intl` 因首次 `--ext` 列表漏写，补编一次后通过）。搬移测试也通过。
-> 状态仍是 `🚧`：升级轮未做。
+> 2026-11-09：14 个 recipe 全部编译成功，功能调用 14 项全部通过
+> （`intl` 因首次 `--ext` 列表漏写，补编一次后通过），搬移测试通过。
+> builtin 的版本跟 PHP 走，升级增量按“关闭 → 开启”验证。
 
 | 名称 | 依赖 | modules | ini | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- |
@@ -243,7 +244,9 @@ tools `autoconf perlshim`。
 
 | 日期 | 模块 | 分类 | 现象 | 处理 | 状态 | 影响框架 |
 | --- | --- | --- | --- | --- | --- | --- |
-| — | — | — | （开工后填写） | — | — | — |
+| 2026-11-09 | libxml2 / sqlite | 框架 | 同名 builtin/dep，`ext_modules` 取到 dep，报“没有编译” | 加 `ext_recipe_sh`（builtin → ext） | 已修复 | 是 |
+| 2026-11-09 | igbinary | 框架 | PECL 的 `3.2.17RC1` 被标成 stable，归一化后变成 `3.2.17`，下载 404 | PECL 解析丢弃 RC/alpha/beta；3.2.16 即最新 | 已修复 | 是 |
+| 2026-11-09 | jpeg | 框架 | `3.1.90` 是 3.2.0 的预发布编号，被当成补丁更新 | `version_is_prerelease`：最后一段 ≥ 90 视为预发布 | 已修复 | 是 |
 
 分类：`框架` / `扩展内部` / `依赖内部` / `文档`。
 
@@ -257,6 +260,7 @@ tools `autoconf perlshim`。
 | 2026-11-09 | `php_sig` 只算选中的 builtin | 原来 `cat` 整个 `builtin/*.sh`，未选中的改动也会触发 PHP 重编 | 加 recipe 不再影响其它项目 | 选中集合由 `SELECTED_EXTS` 决定 | 已实施 |
 | 2026-11-09 | `upstream_norm_version` 截断数字结尾包名 | `bzip2-1.0.8` 被解析成 `2` | 修好可少写特例 | 需改公共函数；本轮在 recipe 里剥前缀 | 不采纳（保持现状） |
 | 2026-11-09 | 同名 builtin / dep 解析 | `module_sh` deps 优先，`ext_modules libxml2` 取到 dep | 启用 builtin 不再误判 | 新增 `ext_recipe_sh`，只改扩展名解析 | 已实施 |
+| 2026-11-09 | 预发布版本识别 | PECL 的 `RC1` 被 `<s>stable</s>` 放行，libjpeg-turbo 用 `.90` 表示 beta | 避免推荐不存在的包或测试版 | `version_is_prerelease` + PECL 版本串过滤 | 已实施 |
 
 状态：`待定` / `已批准` / `已实施` / `不采纳`。
 
@@ -352,6 +356,33 @@ tools `autoconf perlshim`。
 修复（方案 A）：新增 `ext_recipe_sh`（builtin → ext），`ext_modules` 和
 `enable_ext` 改用它；`module_sh` 保持 deps 优先，供 `needs`/`tools` 使用。
 PHP 不用重编，重跑 `install` 只补 ini。
+
+### 2026-11-09 Phase 1.5：升级轮（基线 → 目标）
+
+在 `v2up`（`v2ext` 的整目录副本）里执行，基线树 `v2ext` 保留旧版本可回退。
+
+| 模块 | 基线 | 目标 | 结果 |
+| --- | --- | --- | --- |
+| libpng | 1.6.51 | 1.6.59 | 重编 1 次；gd 的 PNG/AVIF 仍可用 |
+| aom | 3.12.0 | 3.12.1 | 重编 1 次；libavif / gd AVIF 正常 |
+| jpeg | 3.1.2 | 3.1.4.1 | 只重编 jpeg，`跳过 php`（SONAME 不变） |
+| swoole | 6.2.4 | 6.2.5 | 只重编 swoole，`php -m` 6.2.5 |
+| igbinary | 3.2.16 | — | 3.2.17RC1 被过滤，保持 3.2.16 |
+
+- 三个新版本都补了真实 `*_SHA256`（libpng `d80dd2a3…`、aom `9e977518…`、
+  jpeg `ecae8008…`、swoole `edafabbf…`）。
+- `v2up` 第一次构建时因为复制到新路径、`--prefix` 变化重编了一次 PHP（4 分钟）；
+  jpeg 升级在同一路径下完成，PHP 跳过（1 分 25 秒），验证了“同 ABI 补丁不牵连消费者”。
+- 升级后 gd（PNG/JPEG/WebP/AVIF/FreeType 全 yes）、swoole、igbinary 功能调用和
+  `phprt verify` 都通过。
+
+### 2026-11-09 预发布过滤
+
+- PECL：`igbinary` 的 `3.2.17RC1` 在 PECL 里被标成 stable，且下载地址 404。
+  现在 `upstream_versions_pecl` 在归一化前丢弃带 `alpha/beta/rc/dev/pre` 的版本串。
+- 通用规则：`version_is_prerelease` 把“最后一段 ≥ 90”的版本视为预发布，
+  `version_max` / `version_safe_max` 都经过它；libjpeg-turbo 的 `3.1.90`
+  不会再出现在安全更新里。`3.1.4.1` 是真实补丁，正常参与比较。
 
 ### 2026-11-09 签名稳定性
 

@@ -274,6 +274,23 @@ $ scripts/recipe-check.sh --deep
 - 把 `SWOOLE_VERSION` 改成 `9.9.9`：`--deep` 报 `pin 9.9.9 不在上游版本列表`。
 - 删除临时文件 / 恢复 pin 后重新通过。
 
+## 扩展迁移与升级轮（2026-11-09）
+
+详细进度、约束和问题台账见 `docs/EXTENSIONS.md`。这里只记结论：
+
+- 38 个 recipe（16 dep + re2c + 14 builtin + 7 PECL）迁到 contract=v2，
+  全部构建通过；`scripts/recipe-check.sh --deep` 全绿。
+- 7 个 PECL 全部用 `phprt add ext` 增量安装并做功能调用；通用流程
+  `runner/recipe-ext.sh` 让每个 recipe 从约 90 行降到 22–31 行。
+- 14 个 builtin 一次性重编 PHP，功能调用 14/14 通过；`DEFAULT_EXTS` 改为
+  v1 的 10 个，空项目默认安装 6 分 51 秒，`verify` 全绿。
+- 同名 builtin/dep（libxml2/sqlite/zlib/curl/openssl）现在分两套解析：
+  扩展名用 `ext_recipe_sh`（builtin → ext），依赖用 `module_sh`（deps 优先）。
+- 预发布过滤：PECL 的 `RC1` 和 libjpeg-turbo 的 `.90` 不再出现在安全更新里。
+- 升级轮（v2up 副本）：libpng 1.6.51→1.6.59、aom 3.12.0→3.12.1、
+  jpeg 3.1.2→3.1.4.1、swoole 6.2.4→6.2.5；jpeg 升级只重编自己，
+  PHP 跳过（同 ABI），基线树 v2ext 保留旧版本。
+
 ## 过程中修掉的问题
 
 1. PHP configure 默认会开 `sqlite3`/`pdo_sqlite`/`libxml2` 系扩展。phprtv2
