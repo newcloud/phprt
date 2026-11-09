@@ -158,6 +158,9 @@ tools `autoconf perlshim`。
   - `type=shared` 的扩展自动排除；
   - glibc 仍动态，产物可单独复制运行；
   - 详见 [STATIC-ALL.md](STATIC-ALL.md)。
+- `install --static-all-lto` 在 `--static-all` 基础上给 PHP 本体和依赖都开
+  `-flto=auto`；状态记录在 `.phprt-state/lto`，详见
+  [STATIC-ALL-LTO.md](STATIC-ALL-LTO.md)。
 - `add ext` 忽略 `default`，必须显式带 `--shared` 或 `--static`；
   不带参数时打印 `type` / `default` 后退出。
 - 编译方式记录在 `$TREE/.phprt-state/mode/<名字>`，切换方式会重编 PHP：
@@ -191,6 +194,7 @@ tools `autoconf perlshim`。
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
 | v0 | `openssl zlib curl sqlite mbstring` | 已实现（2026-11-09） |
+| LTO v0 | `--static-all-lto`：PHP + `openssl zlib curl sqlite oniguruma` | 见 [STATIC-ALL-LTO.md](STATIC-ALL-LTO.md) |
 | v1 | 补 `libxml2`、`libzip`、`libsodium`，默认集完整 | 待做 |
 | v2 | PECL：redis、yaml、ssh2、apcu、msgpack、igbinary、protobuf、amqp、memcached、mongodb、rdkafka | 待做 |
 | v3 | intl/ICU、gd 图片链、xsl、ldap、pgsql、gmp、ffi、tidy | 待做 |
@@ -212,6 +216,9 @@ tools `autoconf perlshim`。
   同时必须删掉依赖目录的绝对 rpath。
 - 依赖只有 `.so` 时 `--static-all` 会在链接阶段失败；补齐 `.a` 属于 v1 之后的
   增量工作，不在 v0 范围。
+- 依赖开 LTO 时不能统一覆盖 `CFLAGS`，否则会丢掉 recipe 原有的 `-O2`/`-O3`；
+  做法是保留基线再追加 `-flto=auto`，并用 `gcc-ar`/`gcc-ranlib` 生成 `.a`。
+  构建后检查 `.a` 里的 `.gnu.lto` 段，避免 recipe 漏接 LTO。
 
 ## 5. 新增清单（9 项，v1 计划表剩余）
 

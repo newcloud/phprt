@@ -114,6 +114,7 @@ phprt install 8.5 --clean-src
 | `phprt install ... --build "a=static,b=shared"` | 逐项指定编译方式 |
 | `phprt install ... --static` / `--shared` | 全局指定；不支持的类型自动保持原方式并提示 |
 | `phprt install ... --static-all` | 扩展和依赖都静态链接，生成单个 `bin/php`；`type=shared` 自动排除 |
+| `phprt install ... --static-all-lto` | 在 `--static-all` 基础上给 PHP 和依赖都开 LTO |
 | `phprt add ext <名字> --shared\|--static` | 加一个扩展；必须显式选方式，static 会重编 PHP |
 | `phprt remove ext <名字>` | 停用 shared 扩展（删 conf.d ini）；static 需重编 |
 | `phprt use <系列\|版本>` | 切换 current；系列取已装最高版 |
@@ -124,9 +125,11 @@ phprt install 8.5 --clean-src
 | `phprt verify` | 自检 PHP、扩展、库、RPATH、配置、CA、wheel |
 
 `install` 选项：`--ext "a b"`、`--build "a=static,b=shared"`、`--static`、`--shared`、
-`--static-all`、`--plan`、`--recompile`、`--clean-src`、`--yes`。
+`--static-all`、`--static-all-lto`、`--plan`、`--recompile`、`--clean-src`、`--yes`。
 `--static-all` 把扩展和第三方依赖都链接进 `bin/php`，glibc 仍动态；当前先支持
 `openssl zlib curl sqlite mbstring`，见 [docs/STATIC-ALL.md](docs/STATIC-ALL.md)。
+`--static-all-lto` 在此基础上给 PHP 本体和依赖都加 `-flto=auto`，见
+[docs/STATIC-ALL-LTO.md](docs/STATIC-ALL-LTO.md)。
 `add ext` 必须带 `--shared` 或 `--static`；不带参数会打印契约支持的 `type` 和 `default`。
 完整说明用 `phprt --help`。
 
@@ -192,6 +195,7 @@ recipe 文件（头部一行 `# phprt:` 声明字段，`build()`/`flags()`/`need
 ## 文档
 
 - [单个 PHP 可执行文件（--static-all）](docs/STATIC-ALL.md)
+- [全静态 + LTO（--static-all-lto）](docs/STATIC-ALL-LTO.md)
 - [recipe 规范与审计](docs/RECIPE.md)
 - [v2 开发任务](docs/ROADMAP-V2.md)
 - [运行时库的 wheel 化](docs/WHEEL-LIBS.md)

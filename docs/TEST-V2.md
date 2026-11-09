@@ -459,3 +459,38 @@ phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring libxml2"
   `libssl.a` 时的倒序问题。
 - configure 自动加的依赖 rpath 必须删掉；`-static-libgcc`/`-static-libstdc++`
   让产物不依赖项目外的 GCC 运行库。
+
+## `--static-all-lto` 验收（v0，待实测）
+
+目标：PHP 本体和依赖都开 LTO，仍然生成单个 `bin/php`。
+完整说明见 [STATIC-ALL-LTO.md](STATIC-ALL-LTO.md)。
+
+```bash
+phprt install 8.5 --static-all-lto \
+  --ext "openssl zlib curl sqlite mbstring"
+```
+
+| 检查 | 预期 | 结果 |
+| --- | --- | --- |
+| 构建 | `BUILD-STATUS=ok` | 待测 |
+| 链接方式 | `.phprt-state/link` 为 `static` | 待测 |
+| LTO | `.phprt-state/lto` 为 `1` | 待测 |
+| `BUILD-INFO` | `lto_php=1`、`lto_deps=1` | 待测 |
+| 依赖日志 | 出现 `-flto=auto` | 待测 |
+| 依赖 `.a` | 存在 `.gnu.lto` 段 | 待测 |
+| `ldd bin/php` | 只有 glibc 和动态加载器 | 待测 |
+| `readelf -S bin/php` | 没有 `.gnu.lto` 残留 | 待测 |
+| 单文件复制 | `php -v`、`php -m` 正常 | 待测 |
+| 功能 | sqlite、mbstring、openssl、curl 正常 | 待测 |
+| `phprt verify` | 全绿 | 待测 |
+
+切换检查：
+
+```bash
+phprt install 8.5 --static-all --ext "..."     # LTO 关闭，依赖重编
+phprt install 8.5 --ext "..."                  # 沿用 LTO 记录，不重编
+phprt install 8.5 --shared --ext "..."         # 回到普通安装，LTO 关闭
+```
+
+性能对比使用 `v2sa`（static 非 LTO）：体积、启动、`Zend/bench.php`、
+JSON、mbstring、PCRE（`pcre.jit=0`）、zlib、OpenSSL、SQLite。

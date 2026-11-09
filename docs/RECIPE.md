@@ -211,6 +211,24 @@ static_ldflags() {
 v0 的支持范围是 `openssl zlib curl sqlite mbstring`；完整计划见
 [STATIC-ALL.md](STATIC-ALL.md)。
 
+### 依赖 LTO（`--static-all-lto`）
+
+`--static-all-lto` 会同时给 PHP 和依赖加 `-flto=auto`。dep recipe 的义务：
+
+1. 保留原有优化级别，不要把 `CFLAGS` 整体替换成 `-flto=auto`；
+   在基线后面追加 LTO，例如 `-O3 -flto=auto`。
+2. 静态库必须用 `gcc-ar` / `gcc-ranlib` 生成；Makefile 写死 `ar` 时显式传
+   `make AR=gcc-ar RANLIB=gcc-ranlib`。
+3. 直接调用编译器的 recipe 用 `$CC` / `$AR`，不要写死 `gcc` / `ar`。
+4. 如果构建系统不支持 `gcc-ar`，可加 `-ffat-lto-objects`，让普通 `ar`
+   也能生成可链接归档。
+5. 构建后 driver 会检查 `.a` 是否有 `.gnu.lto` 段；没有就失败，避免把非 LTO
+   产物记成 LTO 树。
+
+`LTO_CFLAGS` / `LTO_LDFLAGS` 默认是 `-flto=auto`，可以被同名环境变量覆盖；
+`PHPRT_LTO=1` 对 PHP 和依赖同时生效。完整说明见
+[STATIC-ALL-LTO.md](STATIC-ALL-LTO.md)。
+
 ### 版本查询（可选，供 `phprt outdated` / `phprt update` 用）
 
 两种写法，按来源复杂度选：
