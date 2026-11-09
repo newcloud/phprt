@@ -51,8 +51,10 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
   phprt use <系列|版本>
       切换 current 软链。系列写法切到该系列已装的最高版本。
 
-  phprt show
+  phprt show [--tree [扩展]]
       显示当前 PHP 版本、安装路径、php.ini、已启用扩展（含 static/shared）。
+      --tree        额外打印 PHP 本体和每个扩展的运行时库依赖树
+      --tree <名>   只看一个扩展的依赖树
 
   phprt current
       只打印当前版本号。
@@ -96,7 +98,7 @@ contract（recipe 头部）:
   phprt add ext redis --shared
   phprt outdated --all --json
   phprt use 8.5
-  phprt show
+  phprt show --tree curl
 EOF
 }
 
@@ -481,7 +483,265 @@ cmd_use() {
   ok "切换到 PHP $concrete"
 }
 
+# ---- show --tree：扩展 / PHP 本体的运行时库依赖树 --------------------------
+
+declare -A PHPRT_ELF_NEEDED_CACHE=()
+declare -A PHPRT_DEP_RT_CACHE=()
+
+elf_needed() {  # $1=ELF -> 每行一个 NEEDED（带缓存）
+  local f="$1" out
+  if [ -n "${PHPRT_ELF_NEEDED_CACHE[$f]+x}" ]; then
+    out="${PHPRT_ELF_NEEDED_CACHE[$f]}"
+  else
+    out="$(readelf -d "$f" 2>/dev/null |
+      sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p')"
+    PHPRT_ELF_NEEDED_CACHE[$f]="$out"
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+}
+
+ext_so_file() {  # $1=tree $2=扩展名 -> 共享扩展的 .so
+  local tree="$1" e="$2" extdir m
+  extdir="$(ext_dir_of "$tree" 2>/dev/null || true)"
+  [ -n "$extdir" ] || return 1
+  for m in $(ext_modules "$e"); do
+    [ -f "$extdir/$m.so" ] && { printf '%s\n' "$extdir/$m.so"; return 0; }
+  done
+  return 1
+}
+
+# 扩展 recipe 的 needs（不能走 module_sh：curl/zlib 等会先命中同名 dep）
+ext_needs() {
+  local sh out
+  sh="$(ext_recipe_sh "$1")" || return 0
+  if recipe_has_func "$sh" needs; then
+    out="$(bash "$sh" --needs 2>/dev/null || true)"
+  else
+    out="$(recipe_field "$sh" needs | tr ',' ' ')"
+  fi
+  printf '%s\n' $out | awk 'NF && !seen[$0]++'
+}
+
+# dep 安装目录里的入口 .so -> 树内 lib/phprt 下的 rt 文件名
+dep_runtime_libs() {
+  local tree="$1" dep="$2" wheelmap d so soname rt key out
+  key="$tree|$dep"
+  if [ -n "${PHPRT_DEP_RT_CACHE[$key]+x}" ]; then
+    out="${PHPRT_DEP_RT_CACHE[$key]}"
+    [ -n "$out" ] && printf '%s\n' "$out"
+    return 0
+  fi
+  wheelmap="$tree/lib/phprt/wheel.map"
+  out="$(
+    for d in "$tree"/deps/"$dep"-*/lib "$tree"/deps/"$dep"-*/lib64; do
+      [ -d "$d" ] || continue
+      for so in "$d"/*.so*; do
+        [ -f "$so" ] && [ ! -L "$so" ] || continue
+        soname="$(readelf -d "$so" 2>/dev/null |
+          sed -n 's/.*(SONAME).*\[\(.*\)\]$/\1/p' | head -1)"
+        [ -n "$soname" ] || continue
+        rt=""
+        [ -f "$wheelmap" ] &&
+          rt="$(awk -F'|' -v s="$soname" '$1 == s { print $2; exit }' "$wheelmap")"
+        [ -n "$rt" ] || rt="$soname"
+        [ -f "$tree/lib/phprt/$rt" ] && printf '%s\n' "$rt"
+      done
+    done | awk 'NF && !seen[$0]++'
+  )"
+  PHPRT_DEP_RT_CACHE[$key]="$out"
+  [ -n "$out" ] && printf '%s\n' "$out"
+}
+
+# bin/php 能到达的树内运行时库（不含外部/系统库）
+php_runtime_closure() {
+  local tree="$1" cur x out=" " queue=()
+  while IFS= read -r cur; do
+    [ -n "$cur" ] && queue+=("$cur")
+  done < <(elf_needed "$tree/bin/php")
+  while [ ${#queue[@]} -gt 0 ]; do
+    cur="${queue[0]}"
+    queue=("${queue[@]:1}")
+    case " $out " in *" $cur "*) continue ;; esac
+    [ -f "$tree/lib/phprt/$cur" ] || continue
+    out+="$cur "
+    while IFS= read -r x; do
+      [ -n "$x" ] && queue+=("$x")
+    done < <(elf_needed "$tree/lib/phprt/$cur")
+  done
+  printf '%s\n' "$out"
+}
+
+# 递归打印一个库：$4=1 表示它是同级最后一个
+show_lib_branch() {
+  local tree="$1" lib="$2" prefix="$3" last="$4" seen="$5"
+  local branch child_prefix
+  if [ "$last" = 1 ]; then branch="└── "; else branch="├── "; fi
+  if [ ! -f "$tree/lib/phprt/$lib" ]; then
+    printf '%s%s%s（外部）\n' "$prefix" "$branch" "$lib"
+    return 0
+  fi
+  case "$seen" in
+    *"|$lib|"*) printf '%s%s%s（循环）\n' "$prefix" "$branch" "$lib"; return 0 ;;
+  esac
+  printf '%s%s%s\n' "$prefix" "$branch" "$lib"
+  if [ "$last" = 1 ]; then child_prefix="$prefix    "; else child_prefix="$prefix│   "; fi
+
+  local -a internal=() external=()
+  local x
+  while IFS= read -r x; do
+    [ -n "$x" ] || continue
+    if [ -f "$tree/lib/phprt/$x" ]; then
+      internal+=("$x")
+    else
+      external+=("$x")
+    fi
+  done < <(elf_needed "$tree/lib/phprt/$lib")
+
+  local total=${#internal[@]} i=0 child_last=0
+  [ ${#external[@]} -gt 0 ] && total=$((total + 1))
+  for x in "${internal[@]}"; do
+    i=$((i + 1))
+    child_last=0
+    [ "$i" -eq "$total" ] && child_last=1
+    show_lib_branch "$tree" "$x" "$child_prefix" "$child_last" "$seen|$lib|"
+  done
+  if [ ${#external[@]} -gt 0 ]; then
+    printf '%s└── 外部: %s\n' "$child_prefix" \
+      "$(printf '%s\n' "${external[@]}" | paste -sd' ' -)"
+  fi
+}
+
+show_ext_link_tree() {  # $1=tree $2=扩展名 $3=static|shared|unknown $4=php 闭包
+  local tree="$1" e="$2" mode="$3"
+  local so dep rt x closed="${4:-}" roots=() internal=() external=()
+  case "$mode" in
+    shared)
+      if so="$(ext_so_file "$tree" "$e")"; then
+        printf '      %s（共享模块）: %s\n' "$e" "$(basename "$so")"
+        while IFS= read -r x; do
+          [ -n "$x" ] && roots+=("$x")
+        done < <(elf_needed "$so")
+      else
+        printf '      %s（共享模块，找不到 .so）\n' "$e"
+        return 0
+      fi
+      ;;
+    static)
+      printf '      %s（静态链接，编入 bin/php）\n' "$e"
+      [ -n "$closed" ] || closed="$(php_runtime_closure "$tree")"
+      # 全静态树（--static-all）没有树内动态库，不必再跑 recipe 的 needs
+      if [ -z "${closed// /}" ]; then
+        printf '        └── 无树内动态库依赖\n'
+        return 0
+      fi
+      while IFS= read -r dep; do
+        [ -n "$dep" ] || continue
+        while IFS= read -r rt; do
+          [ -n "$rt" ] || continue
+          case " $closed " in *" $rt "*) roots+=("$rt") ;; esac
+        done < <(dep_runtime_libs "$tree" "$dep")
+      done < <(ext_needs "$e")
+      ;;
+    *)
+      printf '      %s（状态未知）\n' "$e"
+      return 0
+      ;;
+  esac
+
+  # 去重，保持顺序
+  local seen=" " r
+  local -a uniq=()
+  for r in "${roots[@]}"; do
+    case "$seen" in *" $r "*) continue ;; esac
+    seen+="$r "
+    uniq+=("$r")
+  done
+  roots=("${uniq[@]}")
+
+  for r in "${roots[@]}"; do
+    if [ -f "$tree/lib/phprt/$r" ]; then
+      internal+=("$r")
+    else
+      external+=("$r")
+    fi
+  done
+
+  if [ ${#internal[@]} -eq 0 ] && [ ${#external[@]} -eq 0 ]; then
+    printf '        └── 无树内动态库依赖\n'
+    return 0
+  fi
+
+  local total=${#internal[@]} i=0 child_last=0
+  [ ${#external[@]} -gt 0 ] && total=$((total + 1))
+  for r in "${internal[@]}"; do
+    i=$((i + 1))
+    child_last=0
+    [ "$i" -eq "$total" ] && child_last=1
+    show_lib_branch "$tree" "$r" "        " "$child_last" "|"
+  done
+  if [ ${#external[@]} -gt 0 ]; then
+    printf '        └── 外部: %s\n' "$(printf '%s\n' "${external[@]}" | paste -sd' ' -)"
+  fi
+}
+
+show_php_link_tree() {  # $1=tree
+  local tree="$1" lib internal=() external=()
+  while IFS= read -r lib; do
+    [ -n "$lib" ] || continue
+    if [ -f "$tree/lib/phprt/$lib" ]; then
+      internal+=("$lib")
+    else
+      external+=("$lib")
+    fi
+  done < <(elf_needed "$tree/bin/php")
+
+  printf '    PHP 本体（bin/php）:\n'
+  local total=${#internal[@]} i=0 last=0
+  [ ${#external[@]} -gt 0 ] && total=$((total + 1))
+  for lib in "${internal[@]}"; do
+    i=$((i + 1))
+    last=0
+    [ "$i" -eq "$total" ] && last=1
+    if [ "$last" = 1 ]; then
+      printf '      └── %s\n' "$lib"
+    else
+      printf '      ├── %s\n' "$lib"
+    fi
+  done
+  if [ ${#external[@]} -gt 0 ]; then
+    printf '      └── 外部: %s\n' "$(printf '%s\n' "${external[@]}" | paste -sd' ' -)"
+  fi
+  [ ${#internal[@]} -gt 0 ] || [ ${#external[@]} -gt 0 ] ||
+    printf '      └── 无动态库\n'
+}
+
 cmd_show() {
+  local tree_all=0 tree_one=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --tree)
+        tree_all=1
+        shift
+        if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+          tree_one="$1"
+          shift
+        fi
+        ;;
+      --tree=*)
+        tree_all=1
+        tree_one="${1#--tree=}"
+        shift
+        ;;
+      -h|--help)
+        printf '用法: phprt show [--tree [扩展]]\n'
+        return 0
+        ;;
+      *)
+        die "未知参数: $1（show 只接受 --tree [扩展]）"
+        ;;
+    esac
+  done
+
   local ver tree bundle
   ver="$(current_version)" || die "还没有安装 PHP（先跑 phprt install <系列>）"
   tree="$(tree_of "$ver")"
@@ -505,6 +765,7 @@ cmd_show() {
     local exts e names enabled=" " static_list="" shared_list="" unknown_list="" off_list=""
     local n_static=0 n_shared=0 n_unknown=0 n_off=0 builtin_mods extdir ld
     local mm is_static has_so
+    local -A ext_mode_map=()
     exts="$(tree_exts "$ver")"
     for e in $exts; do enabled+="$e "; done
     extdir="$(ext_dir_of "$tree" 2>/dev/null || true)"
@@ -535,10 +796,13 @@ cmd_show() {
       fi
       if [ "$is_static" = 1 ]; then
         static_list+="$e "; n_static=$((n_static + 1))
+        ext_mode_map[$e]=static
       elif [ "$has_so" = 1 ]; then
         shared_list+="$e "; n_shared=$((n_shared + 1))
+        ext_mode_map[$e]=shared
       else
         unknown_list+="$e "; n_unknown=$((n_unknown + 1))
+        ext_mode_map[$e]=unknown
       fi
     done
     printf '    扩展: 已启用 %s（静态链接 %s，共享模块 %s），未启用 %s\n' \
@@ -555,6 +819,31 @@ cmd_show() {
     fi
     [ "$n_unknown" = 0 ] || printf '      状态未知: %s\n' "${unknown_list% }"
     [ "$n_off" = 0 ] || printf '      未启用: %s\n' "${off_list% }"
+
+    if [ "$tree_all" = 1 ]; then
+      command -v readelf >/dev/null 2>&1 ||
+        die "缺少 readelf（binutils），无法打印链接树"
+      if [ -n "$tree_one" ]; then
+        ext_recipe_sh "$tree_one" >/dev/null 2>&1 ||
+          die "未知扩展: $tree_one"
+        case "$enabled" in
+          *" $tree_one "*) ;;
+          *) die "扩展未启用: $tree_one" ;;
+        esac
+      fi
+      # builtin 的 needs() 依赖 ENABLE_* 开关
+      export SELECTED_EXTS="$exts"
+      builtin_apply_switches
+      printf '    链接树:\n'
+      show_php_link_tree "$tree"
+      local php_closed
+      php_closed="$(php_runtime_closure "$tree")"
+      for e in ${tree_one:-$exts}; do
+        show_ext_link_tree "$tree" "$e" "${ext_mode_map[$e]:-unknown}" "$php_closed"
+      done
+    else
+      printf '      链接树: phprt show --tree [扩展]\n'
+    fi
   fi
   ( cd "$PHPRT_PROJECT" && ./myphp -v | head -1 | sed 's/^/    /' )
 }
@@ -1041,7 +1330,7 @@ main() {
     install)  cmd_install "$@" ;;
     outdated) cmd_outdated "$@" ;;
     use)      cmd_use "$@" ;;
-    show)     cmd_show ;;
+    show)     cmd_show "$@" ;;
     current)  cmd_current ;;
     list|ls)  cmd_list ;;
     add)      cmd_add "$@" ;;

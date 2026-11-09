@@ -44,6 +44,33 @@
 结果上分组显示：静态链接（`php -n -m` 仍列出，说明编进 `bin/php`）、
 共享模块（`.so`）、未启用。
 
+`phprt show --tree [扩展]` 会额外打印运行时库的依赖树：根是 `bin/php`
+的直接 `NEEDED`，每个扩展下面是它的 `.so`（shared）或第三方依赖入口库
+（static）的递归 `NEEDED`。树内库显示成 `libcurl-rt4.so.4` 这样的 rt
+SONAME，其余统一归到“外部”。
+
+```text
+$ phprt show --tree curl
+    链接树:
+    PHP 本体（bin/php）:
+      ├── libtidy-rt58.so.58
+      ├── libssl-rt3.so.3
+      ...
+      └── 外部: libm.so.6 libgcc_s.so.1 libc.so.6
+      curl（静态链接，编入 bin/php）
+        └── libcurl-rt4.so.4
+            ├── libssl-rt3.so.3
+            │   ├── libcrypto-rt3.so.3
+            │   │   └── 外部: libc.so.6
+            │   └── 外部: libc.so.6
+            ├── libz-rt1.so.1
+            │   └── 外部: libc.so.6
+            └── 外部: libc.so.6
+```
+
+全静态树（`--static-all`）里第三方库已经编进 `bin/php`，扩展下面只有
+`无树内动态库依赖`，`PHP 本体` 只剩 glibc 等外部库。
+
 不再生成的东西：`bin/`（runner 副本）、`bundles/`（recipe 副本）、`config`
 （仓库绝对路径）、`vendor/`（Perl shim 副本）、`tools/`、`logs/`、
 根级 `.phprt.lock`、共享的 `build/` 和 `project.conf`。`phprt` 始终从仓库

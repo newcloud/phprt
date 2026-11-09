@@ -118,7 +118,7 @@ phprt install 8.5 --clean-src
 | `phprt add ext <名字> --shared\|--static` | 加一个扩展；必须显式选方式，static 会重编 PHP |
 | `phprt remove ext <名字>` | 停用 shared 扩展（删 conf.d ini）；static 需重编 |
 | `phprt use <系列\|版本>` | 切换 current；系列取已装最高版 |
-| `phprt show` | 当前版本、路径、php.ini、已启用扩展 |
+| `phprt show [--tree [扩展]]` | 当前版本、路径、php.ini、扩展状态；`--tree` 打印 PHP 和扩展的运行时库依赖树 |
 | `phprt current` | 只打印当前版本号 |
 | `phprt list` | 列出已安装版本，当前标 `*` |
 | `phprt outdated [--all] [--json]` | 检查上游版本；默认只看已启用的扩展及依赖 |
