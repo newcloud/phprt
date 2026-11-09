@@ -166,9 +166,12 @@ version_is_safe <当前> <候选>         # 只接受 major.minor 相同、patch
   | perlshim | 5.42.0 | 5.42.3 | 5.44.0 |
   | curl | 8.22.0 | -（8.22→8.23 跨小版本） | 8.23.0 |
 
-- 还缺：各 pin 的 `*_SHA256` 仍为空；`install` 还没接入这套检查（M2）。
+- 还缺：`install` 还没接入这套检查（M2）；`phprt update` 已先实现依赖更新。
 
 ## 5. M2：update 与安装时的更新检查
+
+当前状态：`phprt update <依赖> [版本]` 已实现（依赖同系列安全更新、`--dry-run`、
+失败回滚）。下面的批量更新、`UPDATE-HISTORY`、install / add 在线检查仍是设计。
 
 ### 5.1 更新记录：`php-<版本>/UPDATE-HISTORY`
 
@@ -263,16 +266,23 @@ version_is_safe <当前> <候选>         # 只接受 major.minor 相同、patch
 
 ### 5.3 `phprt update`
 
+当前已实现依赖库的同系列安全更新：
+
 ```text
-phprt update                 # 处理所有安全更新（逐个确认，默认 Y）
-phprt update swoole          # 只更新指定扩展
-phprt update libzip 1.12.3   # 指定版本（不要求是安全更新，需二次确认）
-phprt update --minor         # 允许跨小版本，先打印 ABI 风险
-phprt update --dry-run       # 只打印计划
+phprt update openssl          # 查同系列最新安全版本
+phprt update openssl 3.5.10   # 指定版本
+phprt update openssl --dry-run
 ```
 
-- 显式版本和 `--minor` 会写入 `UPDATE-HISTORY`，带「手动指定」标记。
-- 回滚：`phprt update --rollback <模块>` 追加一条反向记录（保留完整历史，不删行）。
+- 只处理 `deps/` 里的依赖，不处理 PHP 本体和扩展。
+- 省略版本时用 `outdated` 同一套上游查询，取 `major.minor` 不变的最高补丁版。
+- 改仓库 `bundle.conf` 的版本、URL、SHA256，下载并校验新源码包。
+- 按当前扩展选择重跑 `build.sh`；受影响的 PHP/扩展按签名重建。
+- 失败时回滚 `bundle.conf`、旧依赖目录、`lib/phprt`、`.phprt-state` 和
+  `BUILD-STATUS`。
+
+以下设计仍未实现：无参数批量更新、更新扩展、`--minor`、`--rollback`、
+`UPDATE-HISTORY`。
 
 ### 5.4 验收
 
@@ -427,7 +437,7 @@ v1 的 standalone `phprt buildroot` 已移植到 v2，并补上自动 `--chroot`
 - rootfs 在项目内时，chroot 内会通过项目 bind 再看到一次；构建只使用精确路径，不做递归扫描。
 - `install` / `add ext` 支持 `--chroot` / `--host`；`--plan` 不进 chroot。
 - 构建用户默认用 `chroot --userspec=<宿主uid:gid>`，产物属主不变。
-- 详见 [CHROOT-BUILD.md](CHROOT-BUILD.md)。
+- 详见 [DEVELOPMENT.md](DEVELOPMENT.md) 第 8 节。
 
 验收：
 
@@ -479,7 +489,7 @@ v1 的 standalone `phprt buildroot` 已移植到 v2，并补上自动 `--chroot`
 
 已定：chroot + dnf rootfs，rootfs 在项目 `.phprt/buildroots/`；
 默认绑定项目 + phprt 仓库，自动构建额外绑定 `BUILD_ROOT`。实现见第 8 节和
-[CHROOT-BUILD.md](CHROOT-BUILD.md)。
+[DEVELOPMENT.md](DEVELOPMENT.md) 第 8 节。
 
 ## 11. 非目标
 

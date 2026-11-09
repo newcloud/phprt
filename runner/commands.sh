@@ -38,6 +38,14 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
       --host               切回宿主构建（并记为默认）
       --plan               只打印构建计划，不进入 chroot
 
+  phprt update <依赖> [版本]
+      依赖库的同系列安全更新（如 openssl 3.5.9 -> 3.5.10）。
+      省略版本时查询上游最新安全版本；--dry-run 只打印计划。
+      只更新一个依赖；受影响的 PHP/扩展按签名重建。
+
+      构建环境:
+      --chroot / --host    指定构建环境（并记为默认）
+
   phprt add ext <名字> --shared|--static [--chroot|--host]
       在当前版本树里加一个扩展。必须先读契约再显式选方式：
 
@@ -105,6 +113,8 @@ contract（recipe 头部）:
   phprt add ext tidy --shared
   phprt add ext gmp --static
   phprt add ext redis --shared
+  phprt update openssl
+  phprt update openssl 3.5.10 --dry-run
   phprt outdated --all --json
   phprt use 8.5
   phprt show --tree curl
@@ -444,6 +454,214 @@ cmd_install() {
   activate_tree "$concrete" "$exts"
   printf 'ok\n' > "$tree/BUILD-STATUS"
   ok "PHP $concrete 就绪 -> $tree"
+}
+
+# ---- phprt update：依赖库的同系列安全更新 --------------------------------
+
+# 当前树里某个依赖的实际安装版本（deps/<名>-<版本>）
+installed_dep_version() {
+  local tree="$1" dep="$2" d v found=""
+  for d in "$tree/deps/$dep"-*; do
+    [ -d "$d" ] || continue
+    v="${d##*/}"
+    v="${v#"$dep"-}"
+    [ -n "$v" ] || continue
+    if [ -n "$found" ]; then
+      printf '错误: %s 有多个版本目录（%s / %s），先清理 %s/deps/\n' \
+        "$dep" "$found" "$v" "$tree" >&2
+      return 1
+    fi
+    found="$v"
+  done
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+# 下载新版本源码包（此时 bundle.conf 里的 SHA 还是旧的，不能走 ensure_source）
+download_update_source() {
+  local url="$1" dest="$2" tmp
+  mkdir -p "$DOWNLOADS"
+  if [ -s "$dest" ]; then
+    ok "源码已缓存: $(basename "$dest")"
+    return 0
+  fi
+  command -v curl >/dev/null 2>&1 || die "缺少 curl，无法下载 $url"
+  tmp="$DOWNLOADS/.$(basename "$dest").part.$$"
+  rm -f "$tmp"
+  log "下载 $(basename "$dest")"
+  if ! curl -fsSL --connect-timeout 15 --max-time 1800 -o "$tmp" "$url"; then
+    if [ -n "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${HTTP_PROXY:-}" ]; then
+      rm -f "$tmp"
+      die "下载失败: $url"
+    fi
+    log "直连失败，走代理 ${PHPRT_PROXY:-http://127.0.0.1:10808}"
+    curl -fsSL --connect-timeout 15 --max-time 1800 \
+      -x "${PHPRT_PROXY:-http://127.0.0.1:10808}" -o "$tmp" "$url" ||
+      { rm -f "$tmp"; die "下载失败: $url"; }
+  fi
+  mv -f "$tmp" "$dest"
+}
+
+cmd_update() {
+  local dep="" want="" dry=0 chroot_mode="" env_set=0 a
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --chroot)  chroot_mode=chroot; env_set=1; shift ;;
+      --host)    chroot_mode=host; env_set=1; shift ;;
+      -h|--help)
+        printf '用法: phprt update <依赖> [版本] [--dry-run] [--chroot|--host]\n'
+        return 0
+        ;;
+      -*) die "未知参数: $1" ;;
+      *)
+        if [ -z "$dep" ]; then
+          dep="$1"
+        elif [ -z "$want" ]; then
+          want="$1"
+        else
+          die "多余参数: $1"
+        fi
+        shift
+        ;;
+    esac
+  done
+  [ -n "$dep" ] || die "用法: phprt update <依赖> [版本] [--dry-run]"
+  [ "$env_set" = 1 ] && buildroot_set_env "$chroot_mode"
+
+  local ver tree bundle sh vvar uvar svar cur vers
+  ver="$(current_version)" || die "还没有安装 PHP（先跑 phprt install <系列>）"
+  tree="$(tree_of "$ver")"
+  [ -x "$tree/bin/php" ] || die "树不存在或未构建: $tree"
+  [ "$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)" = ok ] ||
+    die "上次构建未完成，先跑 phprt install $ver 修好树"
+
+  bundle="$(bundle_for "$(series_of "$ver")")" ||
+    die "找不到 bundle: php$(series_of "$ver")"
+  export BUNDLE="$bundle"
+  # shellcheck disable=SC1090
+  . "$bundle/bundle.conf"
+  export PHPRT_PHP_VERSION="$ver"
+  phprt_set_build_root "$ver"
+
+  sh="$bundle/deps/$dep.sh"
+  [ -f "$sh" ] || die "未知依赖: $dep（$bundle/deps/ 里没有）"
+  [ "$(recipe_kind_of "$sh")" = dep ] || die "$dep 不是依赖库"
+  vvar="$(recipe_field "$sh" version)"
+  [ -n "$vvar" ] || die "$dep 的 recipe 没有 version="
+  uvar="${vvar%_VERSION}_URL"
+  svar="${vvar%_VERSION}_SHA256"
+  cur="$(installed_dep_version "$tree" "$dep")" ||
+    die "当前树里没有依赖 $dep（$tree/deps/）"
+
+  if [ -z "$want" ]; then
+    [ "${OFFLINE:-0}" = 1 ] &&
+      die "离线模式不能查询上游；请指定版本: phprt update $dep <版本>"
+    vers="$(module_versions "$sh" 2>/dev/null || true)"
+    [ -n "$vers" ] ||
+      die "查不到 $dep 的上游版本（网络或来源问题）；可指定版本: phprt update $dep <版本>"
+    want="$(printf '%s\n' "$vers" | version_safe_max "$cur")"
+    if [ -z "$want" ]; then
+      ok "$dep $cur 已是最新安全版本"
+      return 0
+    fi
+  fi
+
+  if [ "$want" = "$cur" ]; then
+    ok "$dep $cur 已是最新"
+    return 0
+  fi
+  version_is_safe_update "$cur" "$want" ||
+    die "只允许同系列安全更新：$cur -> $want（跨系列请用 phprt install）"
+
+  local conf oldurl newurl archive dest sha bak olddir status
+  conf="$bundle/bundle.conf"
+  oldurl="$(sed -n "s/^$uvar=\"\\([^\"]*\\)\".*$/\\1/p" "$conf" | head -1)"
+  [ -n "$oldurl" ] || die "bundle.conf 里没有 $uvar"
+  case "$oldurl" in
+    *"$cur"*) newurl="${oldurl//$cur/$want}" ;;
+    *) die "URL 里找不到版本 $cur，不能自动改: $oldurl" ;;
+  esac
+  archive="$(basename "$newurl")"
+  dest="$DOWNLOADS/$archive"
+
+  printf '依赖: %s\n' "$dep"
+  printf '  当前: %s\n' "$cur"
+  printf '  目标: %s（同系列安全更新）\n' "$want"
+  printf '  源码: %s\n' "$newurl"
+  if [ "$dry" = 1 ]; then
+    if [ -s "$dest" ]; then
+      printf '  缓存: 已存在\n'
+    else
+      printf '  缓存: 需要下载\n'
+    fi
+    printf '  构建: 按当前扩展选择重建受影响的 PHP/扩展\n'
+    return 0
+  fi
+
+  download_update_source "$newurl" "$dest"
+  sha="$(sha256sum "$dest" | cut -d' ' -f1)"
+
+  bak="$(mktemp -d "$BUILD_ROOT/update-backup.XXXXXX")"
+  cp -f "$conf" "$bak/bundle.conf"
+  olddir="$tree/deps/$dep-$cur"
+  [ -d "$olddir" ] && mv "$olddir" "$bak/deps-old"
+  cp -a "$tree/lib/phprt" "$bak/flat"
+  [ -d "$tree/.phprt-state" ] && cp -a "$tree/.phprt-state" "$bak/state"
+  status="$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)"
+
+  rollback_update() {
+    local reason="$1"
+    cp -f "$bak/bundle.conf" "$conf"
+    rm -rf "$tree/deps/$dep-$want"
+    [ -d "$bak/deps-old" ] && mv "$bak/deps-old" "$olddir"
+    rm -rf "$tree/lib/phprt"
+    [ -d "$bak/flat" ] && mv "$bak/flat" "$tree/lib/phprt"
+    rm -rf "$tree/.phprt-state"
+    [ -d "$bak/state" ] && mv "$bak/state" "$tree/.phprt-state"
+    if [ -n "$status" ]; then
+      printf '%s\n' "$status" > "$tree/BUILD-STATUS"
+    else
+      rm -f "$tree/BUILD-STATUS"
+    fi
+    rm -rf "$bak"
+    die "$reason；已回滚到 $dep $cur"
+  }
+
+  sed -i "s|^$vvar=.*|$vvar=$want|" "$conf" || rollback_update "改 $vvar 失败"
+  sed -i "s|^\\($uvar=\"\\)[^\"]*\"|\\1$newurl\"|" "$conf" ||
+    rollback_update "改 $uvar 失败"
+  if grep -q "^$svar=" "$conf"; then
+    sed -i "s|^$svar=.*|$svar=$sha|" "$conf" || rollback_update "改 $svar 失败"
+  fi
+  # shellcheck disable=SC1090
+  . "$conf"
+
+  local exts="" e em mode_env=""
+  exts="$(tree_exts "$ver")"
+  for e in $exts; do
+    em="$(mode_of "$e" 2>/dev/null || true)"
+    [ -n "$em" ] || em="$(recipe_default_mode "$(ext_recipe_sh "$e")")"
+    mode_env="$mode_env${mode_env:+ }$e=$em"
+  done
+  export PHPRT_EXT_MODES="$mode_env" SELECTED_EXTS="$exts"
+  export PHPRT_SEED="${PHPRT_SEED:-}"
+  export PHPRT_FORCE_PHP=0 PHPRT_CLEAN_SRC=0
+
+  need_cmds flock
+  exec 9>"$BUILD_ROOT/.lock"
+  flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
+
+  log "更新依赖 $dep: $cur -> $want"
+  if ! run_build_env bash "$PHPRT_RUNNER/build.sh" \
+         --bundle "$bundle" --tree "$tree" --exts "$exts"; then
+    rollback_update "构建失败"
+  fi
+
+  [ -x "$tree/bin/php" ] || rollback_update "构建结束但找不到 bin/php"
+  rm -rf "$bak"
+  ok "依赖 $dep 已更新: $cur -> $want"
+  printf '    树: %s\n' "$tree"
 }
 
 # 把 current 切到 concrete 并同步入口（install 与 use 共用）。
@@ -1347,6 +1565,7 @@ main() {
   case "$cmd" in
     install)  cmd_install "$@" ;;
     outdated) cmd_outdated "$@" ;;
+    update)   cmd_update "$@" ;;
     use)      cmd_use "$@" ;;
     show)     cmd_show "$@" ;;
     current)  cmd_current ;;

@@ -39,9 +39,9 @@ tools `autoconf perlshim`。
 | 9 | **ini 必须显式**：builtin 静态写 `ini=-`，共享模块写 `20-<名>.ini`；ext 必须实现 `enable()` | `RECIPE.md` 3.1 |
 | 10 | **wheel 化不手写 ELF**：库放 `lib/` 或 `lib64/` 根目录，真实文件是 `.so.N` 且 SONAME 带 ABI 号；例外只用 `wheel=none/exclude/alias/singleton` | `RECIPE.md` 6 |
 | 11 | **不写系统目录、不引入第二份 CA**；CA 固定在 `etc/ssl/cert.pem` | `AGENTS.md` 9/10 |
-| 12 | **重编代价**：改 builtin 会改 PHP 签名 → PHP 全量重编；dep / ext 只重编自己 | `build.sh` |
+| 12 | **重编代价**：改 builtin 会改 PHP 签名；改 dep 的 recipe 或版本会让依赖它的 PHP 和扩展重编；只改 ext 通常只重编该 ext | `build.sh` |
 | 13 | **下载/离线**：源码包优先仓库 `downloads/`（当前软链到 v1 的），缺的进 `build-php-<版本>/downloads/`；`OFFLINE=1` 是全局离线开关 | `common.sh:find_source` |
-| 14 | **尚未实现**：`phprt update`、install / add 的在线检查（M2）、`--no-update-check`、`--offline` 参数 | 代码现状 |
+| 14 | **已实现**：`phprt update <依赖> [版本]`（同系列安全更新、`--dry-run`、失败回滚）；**未实现**：install / add 的在线检查（M2）、`--no-update-check`、`--offline` 参数、批量/扩展更新 | 代码现状 |
 | 15 | **所有 pin 都填了真实 `*_SHA256`**（PHP 与全部依赖/扩展），下载即校验 | 2026-11-09 回填 |
 | 16 | **v1 / v2 不能共用一个 `.phprt`**，会互相覆盖。测试项目分开：`v2demo` 最小集、`v2ext` 扩展开发集 | 实测 |
 | 17 | **暂缓/不做**：imap、grpc、mcrypt、odbc、snmp、pspell、dba、solr、oauth、readline、sqlsrv、oci8 | v1 文档 |
@@ -281,8 +281,8 @@ tools `autoconf perlshim`。
 
 1. 复制项目：`cp -a v2ext v2ext-upgrade`，基线树保持可回退。
 2. 把 pin 从基线改到目标版本。
-3. 重装：M2 之前用 `install --recompile` / `add ext` 覆盖；M2 之后改用 `phprt update`
-   并验证 `UPDATE-HISTORY`。
+3. 重装：依赖用 `phprt update <依赖>`（同系列安全版本）；扩展仍用
+   `install --recompile` / `add ext` 覆盖。`UPDATE-HISTORY` 尚未实现。
 4. 验收：
    - `php -m` 与基线一致；
    - 功能调用通过；

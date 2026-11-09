@@ -691,3 +691,27 @@ rootfs 可见性和清理逻辑：
 | `run_build_env` | 在 chroot 内执行命令，`HOME`、`BUILD_ROOT`、项目路径正确 |
 | `remove`（真实 rootfs） | 先卸载再删除，默认路径重置，无残留挂载 |
 | `create` 用户条目 | rootfs 的 `/etc/passwd` / `/etc/group` 加入宿主用户，`id` 正常 |
+| 中断清理 | 挂载后发 `SIGTERM`：终止 chroot 进程树，挂载数回到 0 |
+| 失败清理 | curl 下载失败导致构建退出：挂载数同样回到 0 |
+
+## `phprt update`（2026-11-09）
+
+依赖库的同系列安全更新：
+
+| 检查 | 结果 |
+| --- | --- |
+| `phprt update openssl` | 查到最新安全版本等于当前 3.5.9，提示“已是最新安全版本” |
+| `phprt update openssl 3.5.10 --dry-run` | 打印当前、目标、URL、缓存状态，不下载不构建 |
+| `phprt update openssl 3.5.8` | 拒绝降级 |
+| `phprt update openssl 4.1.0` | 拒绝跨系列 |
+| `phprt update nope` | 报未知依赖 |
+| `OFFLINE=1 phprt update openssl` | 明确提示不能查上游，要求指定版本 |
+| `OFFLINE=1 ... 3.5.10 --dry-run` | 正常打印计划 |
+
+测试时上游没有比 3.5.9 更高的 3.5.x，所以先用 dry-run 和错误路径验证参数
+处理；再在副本仓库里把 OpenSSL 降到 3.5.8，实际跑 `phprt update openssl`：
+
+- 自动选中 3.5.9，复用已缓存源码，重编 OpenSSL；
+- PHP 签名不变时跳过 PHP，wheel 重新整理后 `verify` 全绿；
+- 用损坏的 3.5.10 源码包触发构建失败，确认回滚恢复 `bundle.conf`、旧依赖
+  目录和 `lib/phprt`，`myphp` 仍能启动。
