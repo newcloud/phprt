@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=gd switch=ENABLE_GD modules=gd ini=-
+# phprt: contract=v2 kind=builtin name=gd switch=ENABLE_GD modules=gd ini=- type=static,shared default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

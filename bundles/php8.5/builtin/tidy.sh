@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=tidy switch=ENABLE_TIDY modules=tidy ini=-
+# phprt: contract=v2 kind=builtin name=tidy switch=ENABLE_TIDY modules=tidy ini=- type=static,shared default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

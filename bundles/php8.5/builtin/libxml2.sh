@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=libxml2 switch=ENABLE_LIBXML2 modules=dom,xml,simplexml,xmlreader,xmlwriter,soap ini=-
+# phprt: contract=v2 kind=builtin name=libxml2 switch=ENABLE_LIBXML2 modules=dom,xml,simplexml,xmlreader,xmlwriter,soap ini=- type=static default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

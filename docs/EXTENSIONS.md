@@ -135,12 +135,56 @@ tools `autoconf perlshim`。
 | mbstring | oniguruma | mbstring | - | 无（builtin） | ✅ |
 | mysqli | —（mysqlnd） | mysqli,pdo_mysql | - | 无（builtin） | ✅ |
 | sodium | libsodium | sodium | - | 无（builtin） | ✅ |
-| sqlite | sqlite | sqlite3,pdo_sqlite | `20-sqlite.ini` | 无（builtin） | ✅ |
+| sqlite | sqlite | sqlite3,pdo_sqlite | - | 无（builtin） | ✅ |
 | xsl | libxslt | xsl | - | 无（builtin） | ✅ |
-| zlib | zlib | zlib | `20-zlib.ini` | 无（builtin） | ✅ |
+| zlib | zlib | zlib | - | 无（builtin） | ✅ |
 
 > builtin 的版本跟 PHP 走，没有独立的“降级/升级”。等价验证是：关闭时 `php -m` 里没有，
 > 开启并重编后有；PHP 自身升级单独做一轮（8.5.11 → 8.5.12）。
+
+## 4.4 编译方式（static / shared）
+
+2026-11-09 定稿：
+
+- `builtin/` / `ext/` 只表示源码来源，不再决定编译方式。
+- 每个 builtin/ext recipe 头部必须写：
+  - `type=static|shared|static,shared`
+  - `default=static|shared`（必须出现在 `type` 里）
+- `install` 不带参数时用 `default`；`--build "a=static,b=shared"` 逐项覆盖
+  （也支持重复 `--build a=static --build b=shared`）；
+  `--static` / `--shared` 全局指定，类型不支持的保持原方式并提示。
+- `add ext` 忽略 `default`，必须显式带 `--shared` 或 `--static`；
+  不带参数时打印 `type` / `default` 后退出。
+- 编译方式记录在 `$TREE/.phprt-state/mode/<名字>`，切换方式会重编 PHP：
+  - 未安装 + shared：只编 `.so`，PHP 不动。
+  - 未安装 + static：重编 PHP。
+  - static ↔ shared：必须重编 PHP。
+
+判定（2026-11-09）：
+
+| 类别 | recipe | type | default |
+| --- | --- | --- | --- |
+| builtin 单模块 | curl ffi ftp gd gettext gmp intl ldap mbstring sodium tidy xsl zip | `static,shared` | `static` |
+| builtin 核心耦合 | bz2 openssl zlib | `static` | `static` |
+| builtin 多模块 | libxml2 mysqli pgsql sqlite | `static` | `static` |
+| PECL 普通 | amqp apcu igbinary imagick memcached mongodb msgpack protobuf rdkafka redis ssh2 yaml | `static,shared` | `shared` |
+| PECL 只 shared | swoole xdebug | `shared` | `shared` |
+
+- bz2 / openssl / zlib 只 static：phar 的 bz2、OpenSSL 签名、gzip 依赖编译期开关，
+  改成 shared 会静默丢失这些能力。
+- libxml2 / mysqli / pgsql / sqlite 暂只 static：一个 recipe 对应多个 `.so`，
+  当前构建器只产一个模块。
+- zlib / sqlite 原先默认 shared，现在默认 static；默认安装的产物从 `.so`
+  改成编入 PHP（空项目安装验收完成后在此确认）。
+
+已知构建细节：
+
+- static PECL 把源码放进 `php-src/ext/<名字>` 后必须 `buildconf --force`
+  重新生成 configure；否则 PHP 报 `unrecognized options: --enable-redis`。
+- static 集合变化后必须 `make distclean`；否则旧的 `main/internal_functions_cli.dep`
+  还引用着已删除的 `ext/<名字>/...h`，make 报“没有规则可制作目标”。
+- shared builtin 的 phpize 构建要带上树内依赖的 `CPPFLAGS` / `LDFLAGS` /
+  `PKG_CONFIG_PATH`；否则 intl 会链接系统 ICU。
 
 ## 5. 新增清单（9 项，v1 计划表剩余）
 
@@ -189,8 +233,8 @@ tools `autoconf perlshim`。
 
 ### 阶段 2：扩展 recipe
 
-- builtin：`flags()` / `needs()`，`modules` 写全，`ini` 显式。
-- ext：`build()` + `enable()`。
+- builtin：`flags()` / `needs()`，`modules` 写全，`ini` 显式，`type` / `default` 必填。
+- ext：`build()` + `enable()`；要支持 static 时加 `stage_static()` 和 `static_ldflags()`。
 - 静态检查通过后才能开编。
 
 ### 阶段 3：基线安装（开发轮）

@@ -65,6 +65,26 @@ for e in $EXTS; do
   fi
 done
 
+# 每个扩展到编译方式：static（编入 PHP）/ shared（独立 .so）。
+# builtin/ext 只是源码来源，不再决定方式。
+STATIC_BUILTINS=""
+SHARED_BUILTINS=""
+STATIC_PECL=""
+SHARED_PECL=""
+for e in $BUILTINS; do
+  m="$(mode_of "$e")" || die "无法确定 $e 的编译方式"
+  sh="$(ext_recipe_sh "$e")"
+  mode_supported "$sh" "$m" || die "$e 不支持 $m（type=$(recipe_types "$sh")）"
+  if [ "$m" = static ]; then STATIC_BUILTINS+=" $e"; else SHARED_BUILTINS+=" $e"; fi
+done
+for e in $PECL; do
+  m="$(mode_of "$e")" || die "无法确定 $e 的编译方式"
+  sh="$(ext_recipe_sh "$e")"
+  mode_supported "$sh" "$m" || die "$e 不支持 $m（type=$(recipe_types "$sh")）"
+  if [ "$m" = static ]; then STATIC_PECL+=" $e"; else SHARED_PECL+=" $e"; fi
+done
+export PHPRT_SHARED_BUILTINS="$SHARED_BUILTINS"
+
 ALL_DEPS=""
 PHP_DEPS=""
 append_dep() {
@@ -83,12 +103,22 @@ add_php_dep() {
   ALL_DEPS="$(append_dep "$ALL_DEPS" "$n")"
 }
 
-for e in $BUILTINS; do
+# static builtin：依赖进 PHP 的 include/link 和签名
+for e in $STATIC_BUILTINS; do
   # builtin 的依赖必须问 builtin recipe 自己（curl 同时也是 deps/curl 的名字，
   # 不能走 module_sh 的 deps 优先解析）
   for n in $(bash "$BUNDLE/builtin/$e.sh" --needs); do add_php_dep "$n"; done
 done
-for e in $PECL; do
+# shared builtin：只为独立 .so 建依赖，不进 PHP 签名
+for e in $SHARED_BUILTINS; do
+  for n in $(needs_with_switch "$e"); do add_dep "$n"; done
+done
+# static PECL：依赖要链进 PHP
+for e in $STATIC_PECL; do
+  for n in $(module_needs "$e"); do add_php_dep "$n"; done
+done
+# shared PECL：只为 .so 建依赖
+for e in $SHARED_PECL; do
   for n in $(module_needs "$e"); do add_dep "$n"; done
 done
 
@@ -96,12 +126,18 @@ if [ "$PLAN" = 1 ]; then
   printf 'PHP %s\n' "$PHP_VERSION"
   printf '  deps: %s\n' "${ALL_DEPS:-（无）}"
   printf '  php\n'
-  printf '  ext:  %s\n' "${PECL:-（无）}"
+  printf '  static: %s\n' "$(printf '%s\n' $STATIC_BUILTINS $STATIC_PECL | sed '/^$/d' | tr '\n' ' ')"
+  printf '  shared: %s\n' "$(printf '%s\n' $SHARED_BUILTINS $SHARED_PECL | sed '/^$/d' | tr '\n' ' ')"
   exit 0
 fi
 
 # 只有真正构建才建目录：--plan 不该在项目里留下空版本树
 mkdir -p "$TREE" "$DEPS" "$SRCDIR" "$LOGS"
+
+# static 扩展构建需要的文件（php.sh 读 flags/ldflags，recipe 读 staged 列表）
+export PHPRT_PHP_SRC="$SRCDIR/$PHP_SRC_DIR"
+export STATIC_EXT_FLAGS="$BUILD_ROOT/static-ext-flags"
+export STATIC_EXT_LDFLAGS="$BUILD_ROOT/static-ext-ldflags"
 
 : > "$LOGS/build.log"
 printf 'building\n' > "$TREE/BUILD-STATUS"
@@ -110,23 +146,30 @@ printf '%s\n' "$SELECTED_EXTS" > "$TREE/.build-exts"
 # 先把配置迁/建到树内的标准位置（ext recipe 的 stamp 检查会看这里）
 ensure_tree_config "$TREE"
 
+MODES=""
+for e in $BUILTINS $PECL; do
+  MODES="$MODES${MODES:+ }$e=$(mode_of "$e")"
+done
 cat > "$TREE/BUILD-PLAN" <<EOF
 PHP_VERSION=$PHP_VERSION
 PHP_URL="$PHP_URL"
 PHP_SHA256="$PHP_SHA256"
 EXTENSIONS="$SELECTED_EXTS"
+MODES="$MODES"
 EOF
 
 {
   for d in $ALL_DEPS; do printf 'deps/%s\n' "$d"; done
   printf 'php\n'
-  for e in $PECL; do printf 'ext/%s\n' "$e"; done
+  for e in $STATIC_BUILTINS $STATIC_PECL; do printf 'static/%s\n' "$e"; done
+  for e in $SHARED_BUILTINS $SHARED_PECL; do printf 'shared/%s\n' "$e"; done
 } > "$TREE/BUILD-ORDER"
 
 log "PHP $PHP_VERSION"
 log "deps:  ${ALL_DEPS:-（无）}"
 log "php"
-log "ext:   ${PECL:-（无）}"
+log "static: ${STATIC_BUILTINS}${STATIC_PECL:-（无）}"
+log "shared: ${SHARED_BUILTINS}${SHARED_PECL:-（无）}"
 
 # ---------------------------------------------------------------- deps ----
 for d in $ALL_DEPS; do
@@ -135,6 +178,60 @@ done
 
 # 旧版本目录会和当前版本产生同名 SONAME；在 PHP/ext 开始前清掉
 prune_stale_deps $ALL_DEPS
+
+# static PECL 需要源码在 php-src/ext/<名字>；shared builtin 需要 php-src/ext
+# 的原目录。两边都要先确保 PHP 源码已解压。
+prepare_php_src() {
+  _cur_static=""
+  _prev_static=""
+  [ -n "$STATIC_PECL" ] || [ -n "$SHARED_BUILTINS" ] ||
+    [ -f "$BUILD_ROOT/static-ext-staged" ] || return 0
+
+  ensure_source "$PHP_ARCHIVE" "$PHP_URL" "$PHP_SHA256"
+  SRC="$SRCDIR/$PHP_SRC_DIR"
+  _fresh_src=0
+  if [ ! -d "$SRC" ]; then
+    rm -rf "$SRC"
+    log "解压 $PHP_ARCHIVE（扩展需要 PHP 源码）"
+    extract "$DOWNLOADS/$PHP_ARCHIVE" "$SRCDIR"
+    _fresh_src=1
+  fi
+  [ -d "$SRC" ] || die "解压后找不到 $SRC"
+  export PHPRT_PHP_SRC="$SRC"
+
+  # 上一轮成功编译进 PHP 的 static 集合（名字:版本；PHP 成功后才更新）。
+  # 和本轮不同就说明 configure 必须重新生成，旧目标文件也要清掉。
+  _prev_static="$(cat "$BUILD_ROOT/static-ext-staged" 2>/dev/null || true)"
+  _cur_static="$(for _e in $STATIC_PECL; do
+    printf '%s:%s\n' "$_e" "$(ext_version "$_e")"
+  done)"
+  if [ "$_fresh_src" = 1 ] || [ "$_prev_static" != "$_cur_static" ]; then
+    export PHPRT_BUILDCONF=1
+  fi
+
+  # 清掉上一轮 staged、这一轮不再是 static 的目录
+  for _line in $_prev_static; do
+    _e="${_line%%:*}"
+    [ -n "$_e" ] || continue
+    case " $STATIC_PECL " in
+      *" $_e "*) ;;
+      *) rm -rf "$SRC/ext/$_e" ;;
+    esac
+  done
+
+  if [ -n "$STATIC_PECL" ]; then
+    : > "$STATIC_EXT_FLAGS"
+    : > "$STATIC_EXT_LDFLAGS"
+    : > "$BUILD_ROOT/static-ext-staged.new"
+    for _e in $STATIC_PECL; do
+      bash "$BUNDLE/ext/$_e.sh" stage-static 2>&1 | tee -a "$LOGS/build.log" ||
+        die "static 源码准备失败: $_e"
+    done
+  else
+    rm -f "$STATIC_EXT_FLAGS" "$STATIC_EXT_LDFLAGS"
+  fi
+}
+prepare_php_src
 
 # ----------------------------------------------------------------- php ----
 PHP_SIG="$(
@@ -154,11 +251,20 @@ PHP_SIG="$(
     # builtin 只算本次选中的：bundle 里新增/修改未选中的 recipe 不触发重编。
     grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' \
       "$BUNDLE/php.sh" 2>/dev/null || true
-    # 顺序必须与 --ext 的书写顺序无关，否则同一组扩展会有不同签名
-    for _e in $(printf '%s\n' $SELECTED_EXTS | sort -u); do
+    # 顺序必须与 --ext 的书写顺序无关，否则同一组扩展会有不同签名。
+    # 只算 static 的 builtin：shared builtin 不进 PHP configure。
+    for _e in $(printf '%s\n' $STATIC_BUILTINS | sort -u); do
       _f="$BUNDLE/builtin/$_e.sh"
       [ -f "$_f" ] || continue
       grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$_f" 2>/dev/null || true
+    done
+    # 只有 static builtin 影响 PHP 签名；shared builtin 新增/删除都不该重编 PHP。
+    for _e in $(printf '%s\n' $STATIC_BUILTINS | sort -u); do
+      printf 'builtin_mode=%s:static\n' "$_e"
+    done
+    # static PECL 的版本和 recipe 也要进 PHP 签名
+    for _e in $(printf '%s\n' $STATIC_PECL | sort -u); do
+      printf 'static_ext=%s:%s:%s\n' "$_e" "$(ext_version "$_e")" "$(recipe_hash "$_e")"
     done
     # 依赖顺序同样不能跟着 --ext 的书写顺序走
     for d in $(printf '%s\n' $PHP_DEPS | sort -u); do
@@ -182,8 +288,73 @@ else
   state_set php "$PHP_SIG"
 fi
 
+# 只有 PHP 成功构建后才记下 static 集合；失败时保留旧值，重试仍会
+# 触发 distclean/buildconf。
+printf '%s\n' "$_cur_static" | sed '/^$/d' > "$BUILD_ROOT/static-ext-staged"
+
+# 切到 static 的扩展：旧的 .so 和 extension= 行必须清掉，否则会
+# 出现 “Module already loaded”。
+cleanup_static_exts() {
+  local e m extdir ini
+  extdir="$(ext_dir_of "$TREE" 2>/dev/null || true)"
+  for e in $STATIC_BUILTINS $STATIC_PECL; do
+    if [ -n "$extdir" ]; then
+      for m in $(ext_modules "$e"); do rm -f "$extdir/$m.so"; done
+    fi
+    for ini in "$TREE"/etc/conf.d/*-"$e".ini; do
+      [ -f "$ini" ] || continue
+      sed -i -E '/^[[:space:]]*(zend_)?extension[[:space:]]*=/d' "$ini"
+      if ! grep -qvE '^[[:space:]]*(;|#|$)' "$ini"; then rm -f "$ini"; fi
+    done
+  done
+  # static PECL 的设置项（如 apcu）保留：先让 recipe 写 ini，再去掉 extension 行
+  for e in $STATIC_PECL; do
+    local sh ini
+    sh="$(ext_recipe_sh "$e")"
+    ini="$(recipe_field "$sh" ini)"
+    [ "$ini" != - ] || continue
+    if recipe_has_func "$sh" enable; then
+      bash "$sh" enable >/dev/null 2>&1 || true
+      sed -i -E '/^[[:space:]]*(zend_)?extension[[:space:]]*=/d' \
+        "$TREE/etc/conf.d/$ini" 2>/dev/null || true
+      if [ -f "$TREE/etc/conf.d/$ini" ] &&
+         ! grep -qvE '^[[:space:]]*(;|#|$)' "$TREE/etc/conf.d/$ini"; then
+        rm -f "$TREE/etc/conf.d/$ini"
+      fi
+    fi
+  done
+}
+cleanup_static_exts
+
 # ----------------------------------------------------------------- ext ----
-for e in $PECL; do
+# shared builtin：从 php-src/ext/<名字> 拷出来单独 phpize
+for e in $SHARED_BUILTINS; do
+  sig="$(ext_sig "$e")"
+  mod="$(ext_modules "$e" | awk '{print $1}')"
+  extdir="$(ext_dir_of "$TREE" 2>/dev/null || true)"
+  if state_ok "ext/$e" "$sig" && [ -n "$extdir" ] && [ -f "$extdir/$mod.so" ]; then
+    log "跳过 builtin/$e（shared，签名未变）"
+    continue
+  fi
+  log "执行 builtin/$e（shared）"
+  SRC="$SRCDIR/shared-$e-$PHP_VERSION"
+  if [ "$REBUILD" = 1 ] && [ -d "$SRC" ]; then
+    log "复用源码 $SRC"
+    ( cd "$SRC" && make clean >/dev/null 2>&1 || true )
+  else
+    rm -rf "$SRC"
+    cp -a "$PHPRT_PHP_SRC/ext/$e" "$SRC" || die "找不到 PHP 源码 ext/$e"
+  fi
+  declare -a sargs=()
+  while IFS= read -r a; do
+    [ -n "$a" ] && sargs+=("$a")
+  done < <(flags_with_switch "$e")
+  FORCE=1 ext_build_ready "$e" "$SRC" "$sig" "$e（shared builtin）" "${sargs[@]}"
+  state_set "ext/$e" "$sig"
+done
+
+# shared PECL
+for e in $SHARED_PECL; do
   sig="$(ext_sig "$e")"
   mod="$(ext_modules "$e" | awk '{print $1}')"
   extdir="$(ext_dir_of "$TREE" 2>/dev/null || true)"

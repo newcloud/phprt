@@ -72,7 +72,9 @@ recipe_main "$@"
 | `switch` | 必填 | 必填 | 禁止 | 禁止 | 选择开关变量名 |
 | `version` | 禁止 | 必填 | 必填 | 必填 | 版本变量名，不写具体版本 |
 | `modules` | 必填 | 可选 | 禁止 | 禁止 | 产出的 PHP 模块，逗号分隔；ext 默认 name |
-| `ini` | 必填 | 必填 | 禁止 | 禁止 | `-` 或 `20-<name>.ini`；表达静态/共享 |
+| `type` | 必填 | 必填 | 禁止 | 禁止 | 支持 `static`、`shared`、`static,shared` |
+| `default` | 必填 | 必填 | 禁止 | 禁止 | `install` 的默认方式，必须是 `type` 的子集 |
+| `ini` | 必填 | 必填 | 禁止 | 禁止 | `-` 或 `20-<name>.ini`；`-` 表示不需要 ini |
 | `tools` | 禁止 | 必填 | 必填 | 必填 | 构建工具，可以为空 |
 | `needs` | 禁止 | 必填 | 必填 | 禁止 | 硬依赖，可以为空 |
 | `optional` | 禁止 | 可选 | 必填 | 禁止 | 条件依赖，可以为空 |
@@ -86,7 +88,15 @@ recipe_main "$@"
   问题，而不是忘写。
 - **`ini` 不使用默认值。** 审计发现 6 个 ext 里有 5 个的 ini 不是 `20-<name>.ini`
   （`23-protobuf`、`25-apcu`、`26-yaml`、`27-swoole`、`30-xdebug`），默认值会写错文件。
-- **`link` 不再单独写。** `ini=-` 表示静态编入；`ini=<文件>` 表示共享模块需要 ini。
+- **`ini` 不再表达编译方式。** 编译方式由 `type` / `default` 决定；`ini=-` 只表示
+  static 不需要 ini，shared 由 driver 生成 `20-<name>.ini` 或调用 recipe 的 `enable()`。
+- **`type` / `default` 是必填的。** 例：`tidy type=static,shared default=static`；
+  `xdebug type=shared default=shared`。`default` 不在 `type` 里会直接报错。
+- **static PECL 的构建。** recipe 需要实现 `stage_static()`，调用
+  `ext_stage_static <名字> <版本> <URL> <SHA256> [configure 参数...]` 把源码放进
+  PHP 源码树的 `ext/<名字>`；外部库用 `static_ldflags()` 补进 PHP 链接行。
+- **shared builtin 的构建。** driver 从 PHP 源码树复制 `ext/<名字>` 后单独 `phpize`，
+  configure 参数复用 `flags()`（driver 会临时把 `ENABLE_*` 置 1）。
 - **`switch` 不要求等于 `ENABLE_<NAME>`。** 例如 `mbstring` → `ENABLE_ONIGURUMA`，
   `zip` → `ENABLE_LIBZIP`。校验只要求变量名大写且确实在脚本里使用。
 - **`version` 必须显式写变量名。** 不能按 name 猜：`curl` → `LIBCURL_VERSION`，

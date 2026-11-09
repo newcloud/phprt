@@ -111,8 +111,10 @@ phprt install 8.5 --clean-src
 | 命令 | 作用 |
 | --- | --- |
 | `phprt install <系列\|版本>` | 安装 PHP 和扩展。`8.5` 用 pin，`8.5.12` 装指定版本 |
-| `phprt add ext <名字>` | 在当前版本树加一个扩展；builtin 会重编 PHP |
-| `phprt remove ext <名字>` | 停用扩展（删 conf.d ini）；静态 builtin 需重编 |
+| `phprt install ... --build "a=static,b=shared"` | 逐项指定编译方式 |
+| `phprt install ... --static` / `--shared` | 全局指定；不支持的类型自动保持原方式并提示 |
+| `phprt add ext <名字> --shared\|--static` | 加一个扩展；必须显式选方式，static 会重编 PHP |
+| `phprt remove ext <名字>` | 停用 shared 扩展（删 conf.d ini）；static 需重编 |
 | `phprt use <系列\|版本>` | 切换 current；系列取已装最高版 |
 | `phprt show` | 当前版本、路径、php.ini、已启用扩展 |
 | `phprt current` | 只打印当前版本号 |
@@ -120,7 +122,9 @@ phprt install 8.5 --clean-src
 | `phprt outdated [--all] [--json]` | 检查上游版本；默认只看已启用的扩展及依赖 |
 | `phprt verify` | 自检 PHP、扩展、库、RPATH、配置、CA、wheel |
 
-`install` 选项：`--ext "a b"`、`--plan`、`--recompile`、`--clean-src`、`--yes`。
+`install` 选项：`--ext "a b"`、`--build "a=static,b=shared"`、`--static`、`--shared`、
+`--plan`、`--recompile`、`--clean-src`、`--yes`。
+`add ext` 必须带 `--shared` 或 `--static`；不带参数会打印契约支持的 `type` 和 `default`。
 完整说明用 `phprt --help`。
 
 ## 目录结构

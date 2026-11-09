@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=ldap switch=ENABLE_LDAP modules=ldap ini=-
+# phprt: contract=v2 kind=builtin name=ldap switch=ENABLE_LDAP modules=ldap ini=- type=static,shared default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

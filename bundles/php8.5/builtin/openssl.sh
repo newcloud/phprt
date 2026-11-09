@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=openssl switch=ENABLE_OPENSSL modules=openssl ini=-
+# phprt: contract=v2 kind=builtin name=openssl switch=ENABLE_OPENSSL modules=openssl ini=- type=static default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

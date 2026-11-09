@@ -35,6 +35,14 @@ build_args() {
   for e in $(builtin_names); do
     while IFS= read -r a; do ARGS+=("$a"); done < <(bash "$BUNDLE/builtin/$e.sh" --flags)
   done
+
+  # static 方式的 PECL 扩展：源码已经放进 ext/<名字>，参数由 recipe 的
+  # stage_static() 写进这个文件。
+  if [ -n "${STATIC_EXT_FLAGS:-}" ] && [ -s "$STATIC_EXT_FLAGS" ]; then
+    while IFS= read -r a; do
+      [ -n "$a" ] && ARGS+=("$a")
+    done < "$STATIC_EXT_FLAGS"
+  fi
 }
 
 build_args
@@ -56,7 +64,15 @@ fi
 [ -d "$SRC" ] || die "解压后找不到 $SRC"
 cd "$SRC"
 
-if [ "${NEEDS_BUILDCONF:-0}" = 1 ] && [ ! -x "$SRC/configure" ]; then
+# static 扩展增删后，旧的 Makefile / 生成头还引用着 ext/<名字>。
+# 先 distclean，再 buildconf + configure，避免 “没有规则可制作目标 ext/redis/php_redis.h”。
+if [ "${PHPRT_BUILDCONF:-0}" = 1 ] && [ -f Makefile ]; then
+  log "清理 PHP 目标文件（static 扩展集合变化）"
+  make distclean >/dev/null 2>&1 || true
+fi
+
+if [ "${PHPRT_BUILDCONF:-0}" = 1 ] ||
+   { [ "${NEEDS_BUILDCONF:-0}" = 1 ] && [ ! -x "$SRC/configure" ]; }; then
   AC_DIR="$(dep_dir_of autoconf)"
   PERL_DIR="$(dep_dir_of perlshim)"
   [ -x "$AC_DIR/bin/autoconf" ] || ensure_dep autoconf
@@ -82,6 +98,9 @@ fi
 names="$(enabled_dep_names)"
 export CPPFLAGS="$(dep_include_flags $names)${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="$(dep_build_flags $names)${LTO_LDFLAGS_EXTRA:+ $LTO_LDFLAGS_EXTRA}${LDFLAGS:+ $LDFLAGS}"
+if [ -n "${STATIC_EXT_LDFLAGS:-}" ] && [ -s "$STATIC_EXT_LDFLAGS" ]; then
+  LDFLAGS="$LDFLAGS $(tr '\n' ' ' < "$STATIC_EXT_LDFLAGS")"
+fi
 export PKG_CONFIG_PATH="$(dep_pc_path $names)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 # 复用源码树时 make 只看时间戳：CFLAGS 变了必须清掉旧 .o，

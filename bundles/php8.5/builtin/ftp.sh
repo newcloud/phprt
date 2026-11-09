@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=ftp switch=ENABLE_FTP modules=ftp ini=-
+# phprt: contract=v2 kind=builtin name=ftp switch=ENABLE_FTP modules=ftp ini=- type=static,shared default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

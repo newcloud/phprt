@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=pgsql switch=ENABLE_PGSQL modules=pgsql,pdo_pgsql ini=-
+# phprt: contract=v2 kind=builtin name=pgsql switch=ENABLE_PGSQL modules=pgsql,pdo_pgsql ini=- type=static default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

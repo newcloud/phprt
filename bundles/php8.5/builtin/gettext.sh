@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=gettext switch=ENABLE_GETTEXT modules=gettext ini=-
+# phprt: contract=v2 kind=builtin name=gettext switch=ENABLE_GETTEXT modules=gettext ini=- type=static,shared default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

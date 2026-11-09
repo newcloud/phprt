@@ -347,3 +347,29 @@ $ scripts/recipe-check.sh --deep
 14. `dep_sig` 原来不含版本号，版本变化只能靠“新版本目录不存在”兜底；旧目录残留时
     会误判为已完成。现在签名里加了 `version=`。实测 `ZLIB_VERSION` 从 1.3.2 改到
     1.3.3，`dep_sig` 从 `b66e32b6…` 变成 `c155d468…`；消费者是否重编仍由 SONAME 决定。
+
+## 编译方式（static / shared）验收（2026-11-09）
+
+已在 `v2default` 验证：
+
+| 场景 | 命令 | 结果 |
+| --- | --- | --- |
+| shared builtin（未安装） | `add ext tidy --shared` | 编 `tidy.so`；首次因老树 zlib/sqlite 迁移顺带重编 PHP |
+| shared builtin（后续） | `add ext intl --shared`、`add ext ffi --shared` | `跳过 php`，只编 `.so` |
+| PECL 默认 shared | `add ext redis --shared` | 编 `redis.so`，`Redis` 可用 |
+| PECL static | `add ext redis --static` | 重编 PHP，`php -m` 有 redis |
+| PECL static（外部库） | `add ext yaml --static`、`add ext ssh2 --static` | 链接树内 libyaml / libssh2，功能调用通过 |
+| static → shared | `add ext redis --shared`、`add ext ssh2 --shared` | 重编 PHP 去掉静态版，再编 `.so` |
+| shared → static | `add ext ssh2 --static` | 重编 PHP 编入，删 `.so`/ini |
+| 不支持 static | `add ext xdebug --static` | 报错：`type=shared` |
+| 契约提示 | `add ext tidy` | 打印 `type` / `default` 和两个参数后退出 |
+| install 参数（计划） | `install --build "tidy=static,curl=shared" --plan`、`install --static --plan` | 分组正确；`type=shared` 自动保持 shared 并提示 |
+
+关键约束：
+
+- static PECL 进 PHP 源码树后必须 `buildconf --force`；static 集合变化必须
+  `make distclean`，否则旧 `.dep` 会引用已删除的 `ext/<名字>`。
+- shared builtin 的 phpize 构建必须带树内 `CPPFLAGS` / `LDFLAGS` / `PKG_CONFIG_PATH`；
+  否则 intl 会链接系统 ICU。
+- 默认安装把 zlib / sqlite 从 shared 改成 static；空项目默认安装的最终结果
+  在验收完成后补记。

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=igbinary switch=ENABLE_IGBINARY version=IGBINARY_VERSION modules=igbinary ini=20-igbinary.ini tools=autoconf,perlshim needs= optional= upstream=pecl:igbinary
+# phprt: contract=v2 kind=ext name=igbinary switch=ENABLE_IGBINARY version=IGBINARY_VERSION modules=igbinary ini=20-igbinary.ini tools=autoconf,perlshim needs= optional= upstream=pecl:igbinary type=static,shared default=shared
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 
@@ -15,9 +15,20 @@ ext_prepare() {
     >> "$hdr"
 }
 
+configure_args() {
+  printf '%s\n' --enable-igbinary
+}
+
 build() {
-  ext_pecl_build igbinary "$IGBINARY_VERSION" "$IGBINARY_URL" "$IGBINARY_SHA256" \
-    --enable-igbinary
+  local -a _args=()
+  while IFS= read -r a; do [ -n "$a" ] && _args+=("$a"); done < <(configure_args)
+  ext_pecl_build igbinary "$IGBINARY_VERSION" "$IGBINARY_URL" "$IGBINARY_SHA256" "${_args[@]}"
+}
+
+stage_static() {
+  local -a _args=()
+  while IFS= read -r a; do [ -n "$a" ] && _args+=("$a"); done < <(configure_args)
+  ext_stage_static igbinary "$IGBINARY_VERSION" "$IGBINARY_URL" "$IGBINARY_SHA256" "${_args[@]}"
 }
 
 enable() {

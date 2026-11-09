@@ -276,9 +276,140 @@ builtin_apply_switches() {
       *" $e "*) v=1 ;;
       *)        v=0 ;;
     esac
+    # shared 的 builtin 不在 PHP configure 里编，开关置 0 让 flags() 输出
+    # 负向参数（--without-X）；独立 .so 走后面的 phpize 阶段。
+    if [ "$v" = 1 ] && [ "$(recipe_kind_of "$f")" = builtin ] &&
+       [ "$(mode_of "$e" 2>/dev/null || true)" = shared ]; then
+      v=0
+    fi
     printf -v "$sw" '%s' "$v"
     export "${sw?}"
   done
+}
+
+# ---------------------------------------------------------------------------
+# 编译方式：static（编入 PHP）/ shared（独立 .so）
+# 契约字段：type=static|shared|static,shared，default=static|shared
+# ---------------------------------------------------------------------------
+recipe_types() {  # $1=recipe 文件 -> 空格分隔的模式列表
+  recipe_field "$1" type | tr ',' ' '
+}
+
+recipe_default_mode() {  # $1=recipe 文件
+  recipe_field "$1" default
+}
+
+mode_supported() {  # $1=recipe 文件 $2=mode
+  case " $(recipe_types "$1") " in
+    *" $2 "*) return 0 ;;
+  esac
+  return 1
+}
+
+mode_file_of() {  # $1=tree $2=扩展名
+  printf '%s/.phprt-state/mode/%s\n' "$1" "$2"
+}
+
+mode_get() {  # $1=扩展名；用当前 $TREE
+  local f
+  [ -n "${TREE:-}" ] || return 1
+  f="$(mode_file_of "$TREE" "$1")"
+  [ -f "$f" ] && cat "$f"
+}
+
+mode_set() {  # $1=扩展名 $2=mode；写当前 $TREE
+  local f
+  [ -n "${TREE:-}" ] || return 1
+  f="$(mode_file_of "$TREE" "$1")"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$2" > "$f"
+}
+
+# 本次运行的覆盖值（来自 --build / --static / --shared），格式 "a=shared b=static"
+mode_override() {
+  printf '%s\n' "${PHPRT_EXT_MODES:-}" | tr ' ' '\n' |
+    sed -n "s/^$1=//p" | head -1
+}
+
+# 解析顺序：本次覆盖 -> 树上已记录 -> 树上实际状态 -> 契约 default。
+# 实际状态要排在 default 前面：老树没有 mode 记录时，不能因为契约 default
+# 变了就把已装扩展悄悄切模式（会多一次 PHP 重编）。
+mode_of() {
+  local n="$1" m sh
+  m="$(mode_override "$n")"
+  [ -n "$m" ] && { printf '%s\n' "$m"; return 0; }
+  m="$(mode_get "$n" 2>/dev/null || true)"
+  [ -n "$m" ] && { printf '%s\n' "$m"; return 0; }
+  m="$(ext_current_mode "$TREE" "$n" 2>/dev/null || true)"
+  if [ -n "$m" ]; then
+    sh="$(ext_recipe_sh "$n")" || return 1
+    # 老树可能还是契约不允许的方式（zlib/sqlite 以前默认 shared）；
+    # 这种情况按契约 default 迁移，不能把不支持的方式带进 build.sh。
+    mode_supported "$sh" "$m" && { printf '%s\n' "$m"; return 0; }
+  fi
+  sh="$(ext_recipe_sh "$n")" || return 1
+  recipe_default_mode "$sh"
+}
+
+# 已安装树里的实际模式：优先看记录，其次看 .so / php -m。
+# 找不到该扩展时返回非 0。
+ext_current_mode() {
+  local tree="$1" name="$2" f m extdir ld
+  f="$(mode_file_of "$tree" "$name")"
+  if [ -f "$f" ]; then cat "$f"; return 0; fi
+  extdir="$(ext_dir_of "$tree" 2>/dev/null || true)"
+  if [ -n "$extdir" ]; then
+    for m in $(ext_modules "$name"); do
+      [ -f "$extdir/$m.so" ] && { printf 'shared\n'; return 0; }
+    done
+  fi
+  ld="$tree/lib:$(ls -d "$tree"/deps/*/lib 2>/dev/null | tr '\n' ':')"
+  for m in $(ext_modules "$name"); do
+    if LD_LIBRARY_PATH="$ld" "$tree/bin/php" -m 2>/dev/null | grep -qix "$m"; then
+      printf 'static\n'; return 0
+    fi
+  done
+  return 1
+}
+
+# 临时把 switch 置 1 取 flags：shared builtin 的 phpize 参数和 PHP
+# configure 参数是同一套，但 PHP 侧开关已经被置 0。
+flags_with_switch() {
+  local n="$1" sh sw old out
+  sh="$(ext_recipe_sh "$n")" || return 1
+  sw="$(recipe_field "$sh" switch)"
+  old=""
+  if [ -n "$sw" ]; then
+    old="${!sw:-0}"
+    printf -v "$sw" '%s' 1
+    export "${sw?}"
+  fi
+  out="$(bash "$sh" --flags)"
+  if [ -n "$sw" ]; then
+    printf -v "$sw" '%s' "$old"
+    export "${sw?}"
+  fi
+  printf '%s\n' "$out"
+}
+
+# 临时把 switch 置 1 取 needs：shared builtin 在 PHP 里是关的，
+# 但独立编 .so 仍然需要它的依赖。
+needs_with_switch() {
+  local n="$1" sh sw old out
+  sh="$(ext_recipe_sh "$n")" || return 1
+  sw="$(recipe_field "$sh" switch)"
+  old=""
+  if [ -n "$sw" ]; then
+    old="${!sw:-0}"
+    printf -v "$sw" '%s' 1
+    export "${sw?}"
+  fi
+  out="$(bash "$sh" --needs)"
+  if [ -n "$sw" ]; then
+    printf -v "$sw" '%s' "$old"
+    export "${sw?}"
+  fi
+  printf '%s\n' "$out"
 }
 
 ext_modules() {  # $1=扩展名 -> 产出的 PHP 模块名（空格分隔）
@@ -403,6 +534,25 @@ recipe_validate() {
     fi
   fi
 
+  # 编译方式：builtin/ext 必须声明支持范围与默认方式
+  if [ "$kind" = builtin ] || [ "$kind" = ext ]; then
+    local types dflt
+    types="$(recipe_field "$sh" type)"
+    [ -n "$types" ] || die "recipe 缺少 type: $sh
+规范: docs/RECIPE.md#31-字段矩阵（type=static|shared|static,shared）"
+    case "$types" in
+      static|shared|static,shared|shared,static) ;;
+      *) die "recipe 的 type 不合法: $types（应为 static、shared 或 static,shared）
+文件: $sh" ;;
+    esac
+    dflt="$(recipe_field "$sh" default)"
+    [ -n "$dflt" ] || die "recipe 缺少 default: $sh（static 或 shared）"
+    case " $(printf '%s' "$types" | tr ',' ' ') " in
+      *" $dflt "*) ;;
+      *) die "recipe 的 default=$dflt 不在 type=$types 里: $sh" ;;
+    esac
+  fi
+
   # wheel 例外只对 dep 开放（见 docs/RECIPE.md 第 6 节）
   local wl item names
   wl="$(recipe_field "$sh" wheel)"
@@ -496,10 +646,13 @@ recipe_main() {
     build)
       recipe_has_func "$sh" build || die "$kind/$name 没有 build()"
       build ;;
+    stage-static)
+      recipe_has_func "$sh" stage_static || die "$kind/$name 没有 stage_static()"
+      stage_static ;;
     enable)    recipe_has_func "$sh" enable && enable || true ;;
     verify)    recipe_has_func "$sh" verify && verify || true ;;
     ""|-h|--help)
-      printf '用法: %s {--meta|--version|--flags|--needs|--check|build|enable|verify}\n' "$name" ;;
+      printf '用法: %s {--meta|--version|--flags|--needs|--check|build|stage-static|enable|verify}\n' "$name" ;;
     *) die "未知动词: $verb（$kind/$name）" ;;
   esac
 }
@@ -1111,6 +1264,7 @@ ext_sig() {
     printf 'recipe=%s\n' "$(recipe_hash "$n")"
     recipe_switch_state "$n"
     printf 'version=%s\n' "$(ext_version "$n")"
+    printf 'mode=%s\n' "$(mode_of "$n" 2>/dev/null || true)"
     printf 'php_version=%s\n' "${PHP_VERSION:-}"
     printf 'php_abi=%s\n' "$(php_abi_sig)"
     for x in $(module_needs "$n"); do

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=mysqli switch=ENABLE_MYSQLI modules=mysqli,pdo_mysql ini=-
+# phprt: contract=v2 kind=builtin name=mysqli switch=ENABLE_MYSQLI modules=mysqli,pdo_mysql ini=- type=static default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

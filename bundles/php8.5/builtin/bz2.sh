@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=bz2 switch=ENABLE_BZ2 modules=bz2 ini=-
+# phprt: contract=v2 kind=builtin name=bz2 switch=ENABLE_BZ2 modules=bz2 ini=- type=static default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

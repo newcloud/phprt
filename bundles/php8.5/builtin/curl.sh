@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=curl switch=ENABLE_LIBCURL modules=curl ini=-
+# phprt: contract=v2 kind=builtin name=curl switch=ENABLE_LIBCURL modules=curl ini=- type=static,shared default=static
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 
