@@ -1,0 +1,16 @@
+# 仓库里只有代码；编译产物和源码包都不进 git
+*.log
+
+# 源码包目录：本地缓存，可能是指向别处的软链，不进 git
+/downloads
+downloads/**
+
+# 在仓库根直接跑 phprt 时可能生成的项目目录
+/.phprt/
+
+# chroot 构建环境（phprt buildroot 生成的标记文件，不进 git）
+/buildroots/
+/*buildroot*/
+/.buildroot.conf
+/.buildroot.lock
+/.buildroot.lock

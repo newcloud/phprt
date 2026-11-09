@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# phprt 入口：从 phprt 仓库运行；项目里只保留 PHP 版本树、current 软链和可删的构建区。
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+RUNNER="$HERE/runner"
+[ -d "$RUNNER" ] || RUNNER="$HERE"
+
+# 仓库根带 bundles/；项目里不再保存 runner 副本
+if [ -d "$HERE/bundles" ] && [ -z "${PHPRT_REPO:-}" ]; then
+  PHPRT_REPO="$HERE"
+fi
+export PHPRT_REPO="${PHPRT_REPO:-}"
+
+# buildroot 子命令：交给独立脚本，不加载 runner（./phprt buildroot ...）
+if [ "${1:-}" = "buildroot" ]; then
+  shift
+  BR="$HERE/scripts/buildroot.sh"
+  [ -x "$BR" ] || BR="${PHPRT_REPO:-}/scripts/buildroot.sh"
+  [ -x "$BR" ] || { echo "错误: 找不到 scripts/buildroot.sh（该命令只能在 phprt 仓库里用）" >&2; exit 1; }
+  exec "$BR" "$@"
+fi
+
+# shellcheck disable=SC1091
+. "$RUNNER/common.sh"
+# shellcheck disable=SC1091
+. "$RUNNER/commands.sh"
+
+main "$@"
