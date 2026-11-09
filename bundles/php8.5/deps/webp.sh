@@ -26,6 +26,9 @@ build() {
     extract "$DOWNLOADS/$TAR" "$SRCDIR"
   fi
 
+  # CMakeCache 会记住依赖的绝对路径；依赖升级换目录后必须重新生成
+  rm -rf "$SRC/build"
+
   log "cmake + make -j$JOBS（只编库，不编 cwebp/dwebp 这些工具）"
   cmake -S "$SRC" -B "$SRC/build" \
     -DCMAKE_INSTALL_PREFIX="$D" \

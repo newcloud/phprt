@@ -145,9 +145,9 @@ tools `autoconf perlshim`。
 
 | 扩展 | 类型 | 新依赖 | PHP 8.5 支持 | configure 参数 | 基线 | 目标 | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| gmp | builtin | gmp | 待查 | 待查 | — | — | 无（builtin） | ⬜ |
-| tidy | builtin | tidy-html5 | 待查 | 待查 | — | — | 无（builtin） | ⬜ |
-| ssh2 | ext | libssh2 | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
+| gmp | builtin | gmp 6.3.0 | 8.5 编译通过 | `--with-gmp=<deps/gmp>` | — | — | 无（builtin） | ✅ |
+| tidy | builtin | tidy-html5 5.8.0 | 8.5 编译通过 | `--with-tidy=<deps/tidy>` | — | — | 无（builtin） | ✅ |
+| ssh2 | ext | libssh2 1.11.1 | 8.5 编译通过 | `--with-ssh2=<deps/libssh2>` | 1.5.0 | 1.5.0 | 无（首个 8.5 版本） | ✅ |
 | pgsql + pdo_pgsql | builtin | libpq | 待查 | 待查 | — | — | 无（builtin） | ⬜ |
 | memcached | ext | libmemcached-awesome | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
 | mongodb | ext | mongo-c-driver（libbson + libmongoc） | 待查 | 待查 | 待定 | 待定 | 待定 | ⬜ |
@@ -246,6 +246,11 @@ tools `autoconf perlshim`。
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-11-09 | libxml2 / sqlite | 框架 | 同名 builtin/dep，`ext_modules` 取到 dep，报“没有编译” | 加 `ext_recipe_sh`（builtin → ext） | 已修复 | 是 |
 | 2026-11-09 | igbinary | 框架 | PECL 的 `3.2.17RC1` 被标成 stable，归一化后变成 `3.2.17`，下载 404 | PECL 解析丢弃 RC/alpha/beta；3.2.16 即最新 | 已修复 | 是 |
+| 2026-11-09 | gmp | 扩展内部 | GMP 6.3.0 的编译器探测程序依赖隐式函数声明，GCC 15 默认 gnu23 报“could not find a working compiler” | recipe 里 `CC=gcc -std=gnu17` | 已修复 | 否 |
+| 2026-11-09 | tidy | 依赖内部 | tidy-html5 5.8.0 的 `cmake_minimum_required(<3.5)` 被 CMake 4 拒绝 | 加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` | 已修复 | 否 |
+| 2026-11-09 | aom | 依赖内部 | libaom 源码自带 `build/`（上游 cmake 模块），构建目录不能用 `$SRC/build`，清缓存时会把上游模块删掉 | 构建目录改为 `$SRCDIR/aom-build-<版本>` | 已修复 | 否 |
+| 2026-11-09 | avif | 依赖内部 | aom 升级换目录后，`$SRC/build/CMakeCache.txt` 还指着 `aom-3.12.0` | cmake 类依赖每次重新配置前 `rm -rf "$SRC/build"`（avif/aom/webp/jpeg/tidy） | 已修复 | 否 |
+| 2026-11-09 | 依赖升级 | 框架 | libpng 升级后旧目录被 prune，freetype 的 `.la` 仍记着旧绝对路径，PHP 链接失败 | 依赖安装目录名（含版本）进入 `dep_sig` / `ext_sig` / `php_sig` | 已修复 | 是 |
 | 2026-11-09 | jpeg | 框架 | `3.1.90` 是 3.2.0 的预发布编号，被当成补丁更新 | `version_is_prerelease`：最后一段 ≥ 90 视为预发布 | 已修复 | 是 |
 
 分类：`框架` / `扩展内部` / `依赖内部` / `文档`。
@@ -260,6 +265,7 @@ tools `autoconf perlshim`。
 | 2026-11-09 | `php_sig` 只算选中的 builtin | 原来 `cat` 整个 `builtin/*.sh`，未选中的改动也会触发 PHP 重编 | 加 recipe 不再影响其它项目 | 选中集合由 `SELECTED_EXTS` 决定 | 已实施 |
 | 2026-11-09 | `upstream_norm_version` 截断数字结尾包名 | `bzip2-1.0.8` 被解析成 `2` | 修好可少写特例 | 需改公共函数；本轮在 recipe 里剥前缀 | 不采纳（保持现状） |
 | 2026-11-09 | 同名 builtin / dep 解析 | `module_sh` deps 优先，`ext_modules libxml2` 取到 dep | 启用 builtin 不再误判 | 新增 `ext_recipe_sh`，只改扩展名解析 | 已实施 |
+| 2026-11-09 | 依赖目录进签名 | 消费者只看 SONAME，`.la` 记录绝对路径，prune 后失效 | 依赖升级后消费者会重编，链接不再失败 | 每次 patch 升级多编直接消费者 | 已实施 |
 | 2026-11-09 | 预发布版本识别 | PECL 的 `RC1` 被 `<s>stable</s>` 放行，libjpeg-turbo 用 `.90` 表示 beta | 避免推荐不存在的包或测试版 | `version_is_prerelease` + PECL 版本串过滤 | 已实施 |
 
 状态：`待定` / `已批准` / `已实施` / `不采纳`。
@@ -356,6 +362,19 @@ tools `autoconf perlshim`。
 修复（方案 A）：新增 `ext_recipe_sh`（builtin → ext），`ext_modules` 和
 `enable_ext` 改用它；`module_sh` 保持 deps 优先，供 `needs`/`tools` 使用。
 PHP 不用重编，重跑 `install` 只补 ini。
+
+### 2026-11-09 Phase 2a：gmp / tidy / ssh2
+
+| 扩展 | 类型 | 依赖 | 验证 |
+| --- | --- | --- | --- |
+| gmp 6.3.0 | builtin | gmp 6.3.0 | `gmp_add("12345678901234567890","1")` |
+| tidy 5.8.0 | builtin | tidy-html5 5.8.0 | `tidy_parse_string` + `tidy_clean_repair` |
+| ssh2 1.5.0 | ext | libssh2 1.11.1 | `ssh2_connect` / `ssh2_auth_password` 存在 |
+
+- 三个新依赖的 SHA256 都是真值。
+- 构建过程中修掉三个构建问题（GMP 的 GCC 15、tidy 的 CMake 4、aom 的 `build/` 冲突），
+  见问题台账。
+- `phprt verify` 全绿；11 个 PECL 在依赖目录变化后按新签名自动重编。
 
 ### 2026-11-09 Phase 1.5：升级轮（基线 → 目标）
 

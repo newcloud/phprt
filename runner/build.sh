@@ -162,7 +162,8 @@ PHP_SIG="$(
     done
     # 依赖顺序同样不能跟着 --ext 的书写顺序走
     for d in $(printf '%s\n' $PHP_DEPS | sort -u); do
-      printf 'dep=%s:%s\n' "$d" "$(recipe_id "$d")"
+      printf 'dep=%s:%s:%s\n' "$d" "$(recipe_id "$d")" \
+        "$(basename "$(recipe_dir_of "$d")")"
     done
     printf 'env=%s\n' "${CFLAGS:-} ${CPPFLAGS:-} ${LDFLAGS:-}"
   } | hash_sig

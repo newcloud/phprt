@@ -1040,9 +1040,12 @@ dep_sig() {
     # 消费者是否重编仍由 recipe_id 的 SONAME 列表决定，同 ABI 补丁不牵连。
     printf 'version=%s\n' "$(ext_version "$n")"
     recipe_switch_state "$n"
-    # 条件依赖是否参与构建已经体现在 module_needs 的解析结果里
+    # 条件依赖是否参与构建已经体现在 module_needs 的解析结果里。
+    # 安装目录名（含版本）也要进签名：autotools 的 .la 里记的是绝对路径，
+    # 依赖目录被 prune 后旧 .la 失效，消费者必须重编。
     for x in $(module_needs "$n"); do
-      printf 'need=%s:%s:%s\n' "$x" "$(recipe_id "$x")" "$(recipe_hash "$x")"
+      printf 'need=%s:%s:%s:%s\n' "$x" "$(recipe_id "$x")" "$(recipe_hash "$x")" \
+        "$(basename "$(recipe_dir_of "$x")")"
     done
   } | hash_sig
 }
@@ -1102,7 +1105,8 @@ ext_sig() {
     printf 'php_version=%s\n' "${PHP_VERSION:-}"
     printf 'php_abi=%s\n' "$(php_abi_sig)"
     for x in $(module_needs "$n"); do
-      printf 'dep=%s:%s\n' "$x" "$(recipe_id "$x")"
+      printf 'dep=%s:%s:%s\n' "$x" "$(recipe_id "$x")" \
+        "$(basename "$(recipe_dir_of "$x")")"
     done
   } | hash_sig
 }

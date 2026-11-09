@@ -14,7 +14,7 @@ versions() {
 build() {
   need_cmds gcc g++ make cmake tar
 
-  local D SIG TAR SRC
+  local D SIG TAR SRC BDIR
   local -a ASM_ARGS=()
   D="$(dep_dir_of aom)"
   SIG="aom=$AOM_VERSION"
@@ -41,8 +41,13 @@ build() {
     ASM_ARGS+=(-DAOM_TARGET_CPU=generic)
   }
 
+  # libaom 源码里自带 build/（上游的 cmake 模块），构建目录必须放在源码外；
+  # 同时避免 CMakeCache 记住已被 prune 的旧依赖路径。
+  BDIR="$SRCDIR/aom-build-$AOM_VERSION"
+  rm -rf "$BDIR"
+
   log "cmake + make -j$JOBS（AV1，编码器开着，比较慢）"
-  cmake -S "$SRC" -B "$SRC/build" \
+  cmake -S "$SRC" -B "$BDIR" \
     -DCMAKE_INSTALL_PREFIX="$D" \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_BUILD_TYPE=Release \
@@ -53,9 +58,9 @@ build() {
     ${ASM_ARGS[@]+"${ASM_ARGS[@]}"} \
     > "$LOGS/aom-cmake.log" 2>&1 \
     || { tail -30 "$LOGS/aom-cmake.log"; die "libaom cmake 失败"; }
-  cmake --build "$SRC/build" --parallel "$JOBS" > "$LOGS/aom-make.log" 2>&1 \
+  cmake --build "$BDIR" --parallel "$JOBS" > "$LOGS/aom-make.log" 2>&1 \
     || { tail -40 "$LOGS/aom-make.log"; die "libaom make 失败"; }
-  cmake --install "$SRC/build" >> "$LOGS/aom-make.log" 2>&1
+  cmake --install "$BDIR" >> "$LOGS/aom-make.log" 2>&1
 
   stamp_write aom "$SIG"
   ok "libaom $AOM_VERSION -> $D"
