@@ -71,6 +71,9 @@ tools `autoconf perlshim`。
 
 ### 4.1 依赖与工具（17）
 
+> 2026-11-09：17 个 recipe 已按 contract=v2 写完并通过 `--deep`；17 个库在 v2ext 全部
+> 构建成功，SONAME 均有 ABI 号。状态仍是 `🚧`：升级轮（基线 → 目标）未做。
+
 | 名称 | 类型 | 依赖 | 版本变量 | 基线 | 目标 | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | re2c | tool | — | `RE2C_VERSION` | 待定 | 待定 | 待定 | ⬜ |
@@ -93,6 +96,10 @@ tools `autoconf perlshim`。
 
 ### 4.2 PECL 扩展（7）
 
+> 2026-11-09：`apcu`（82 行）/ `igbinary`（88 行）已写完并构建通过，
+> 功能调用（apcu 存取、igbinary 序列化往返）和 `verify` 都通过。
+> 其余 5 个等“是否加通用助手”的评估结果。
+
 | 名称 | 依赖 | 版本变量 | ini | 基线 | 目标 | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | apcu | — | `APCU_VERSION` | `25-apcu.ini` | 5.1.28 | 待定 | 待定 | ⬜ |
@@ -107,6 +114,8 @@ tools `autoconf perlshim`。
 > 以 v1 recipe 的实际文件名为准，并同步更新本表。
 
 ### 4.3 builtin（14）
+
+> 2026-11-09：14 个 recipe 已写完并通过静态检查；等依赖构建完后一次性重编 PHP。
 
 | 名称 | 依赖 | modules | ini | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- |
@@ -241,7 +250,9 @@ tools `autoconf perlshim`。
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-09 | `php_sig` 只算有效参数 | `php_sig` 把 `php.sh` 和 `builtin/*.sh` 原文都算进签名 | 改注释不再触发 PHP 重编 | `common.sh` 构建逻辑变化仍靠 `--recompile` | 已实施 |
 | 2026-11-09 | `dep_sig` 纳入版本号 | 版本变化靠“新目录不存在”兜底，旧目录残留会误判 | 语义正确，降级/重装不再漏建 | 消费者仍按 SONAME 决定是否重编 | 已实施 |
-| 2026-11-09 | 通用 PECL 构建助手 | 每个 ext 复制约 90 行 phpize 流程 | 15 个扩展省约 1300 行重复 | 等重复实际出现再评估 | 待触发 |
+| 2026-11-09 | 通用 PECL 构建助手 | 7 个 PECL 共 776 行，其中约 500 行是同一段 phpize 流程 | 15 个扩展省约 1300 行重复 | 先迁移 apcu / igbinary 看真实代码再评估 | 待定 |
+| 2026-11-09 | `php_sig` 只算选中的 builtin | 原来 `cat` 整个 `builtin/*.sh`，未选中的改动也会触发 PHP 重编 | 加 recipe 不再影响其它项目 | 选中集合由 `SELECTED_EXTS` 决定 | 已实施 |
+| 2026-11-09 | `upstream_norm_version` 截断数字结尾包名 | `bzip2-1.0.8` 被解析成 `2` | 修好可少写特例 | 需改公共函数；本轮在 recipe 里剥前缀 | 不采纳（保持现状） |
 
 状态：`待定` / `已批准` / `已实施` / `不采纳`。
 
@@ -261,6 +272,32 @@ tools `autoconf perlshim`。
     改成 `1.3.3` 后是 `c155d468884e974ad69a`。
 - 签名格式变化后做了一次全量重建（v2demo，2 分 26 秒）；紧接着再跑一次 3.5 秒完成，
   依赖 / PHP / swoole 全部跳过。`phprt verify` 全绿。
+- 优化 3（`php_sig` 只算选中的 builtin）：`SELECTED_EXTS` 里属于 builtin 的文件才进签名。
+
+### 2026-11-09 Phase 1a/1b/1c recipe 落地
+
+- 17 个 deps/tools 写成 contract=v2；`scripts/recipe-check.sh --deep` 全绿，
+  包括 aom（GCS JSON 列表）、icu（GitHub releases）、sqlite（下载页 7 位编号）。
+- `bzip2` / `libxml2` 的 `versions()` 自己剥前缀：`upstream_norm_version` 会把
+  `bzip2-1.0.8` 解析成 `2`，公共函数本轮按决定不改。
+- 14 个 builtin 写成 v2；`sqlite` / `zlib` 用共享模块 + `20-<名>.ini`。
+- `apcu` / `igbinary` 两个 PECL 写成 v2；其余 5 个等“是否加通用助手”的决定。
+- 依赖构建（v2ext，17 个库）全部成功：
+
+  | 库 | SONAME | 库 | SONAME |
+  | --- | --- | --- | --- |
+  | aom 3.12.0 | `libaom.so.3` | libyaml 0.2.5 | `libyaml-0.so.2` |
+  | avif 1.3.0 | `libavif.so.16` | oniguruma 6.9.10 | `libonig.so.5` |
+  | bzip2 1.0.8 | `libbz2.so.1.0` | openldap 2.6.16 | `liblber.so.2` |
+  | freetype 2.13.3 | `libfreetype.so.6` | sqlite 3.54.1 | `libsqlite3.so.0` |
+  | icu 79.1 | `libicuuc.so.79` | webp 1.6.0 | `libsharpyuv.so.0` |
+  | jpeg 3.1.2 | `libjpeg.so.62` | libffi 3.4.8 | `libffi.so.8` |
+  | libpng 1.6.51 | `libpng16.so.16` | libsodium 1.0.22 | `libsodium.so.26` |
+  | libxml2 2.15.4 | `libxml2.so.16` | libxslt 1.1.45 | `libxslt.so.1` |
+  | re2c 4.6 | 可执行文件（无 .so） | | |
+
+- `apcu` 1 分 28 秒、`igbinary` 26 秒，都是增量构建，没有重编 PHP；
+  `php -m` 出现两个模块，功能调用通过，`phprt verify` 全绿。
 
 ## 12. 明确不做
 

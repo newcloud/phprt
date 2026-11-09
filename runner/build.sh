@@ -151,9 +151,17 @@ PHP_SIG="$(
     fi
     # 只算有效内容：注释和空行不进签名，改说明文字不再触发 PHP 重编。
     # 行首 # 才是注释；参数值和字符串里的 # 保留。
+    # builtin 只算本次选中的：bundle 里新增/修改未选中的 recipe 不触发重编。
     grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' \
-      "$BUNDLE/php.sh" "$BUNDLE"/builtin/*.sh 2>/dev/null || true
-    for d in $PHP_DEPS; do
+      "$BUNDLE/php.sh" 2>/dev/null || true
+    # 顺序必须与 --ext 的书写顺序无关，否则同一组扩展会有不同签名
+    for _e in $(printf '%s\n' $SELECTED_EXTS | sort -u); do
+      _f="$BUNDLE/builtin/$_e.sh"
+      [ -f "$_f" ] || continue
+      grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$_f" 2>/dev/null || true
+    done
+    # 依赖顺序同样不能跟着 --ext 的书写顺序走
+    for d in $(printf '%s\n' $PHP_DEPS | sort -u); do
       printf 'dep=%s:%s\n' "$d" "$(recipe_id "$d")"
     done
     printf 'env=%s\n' "${CFLAGS:-} ${CPPFLAGS:-} ${LDFLAGS:-}"

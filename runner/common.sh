@@ -767,6 +767,10 @@ export VENDOR
 # shellcheck disable=SC1091
 . "$PHPRT_RUNNER/upstream.sh"
 
+# PECL 扩展的通用构建流程（ext_pecl_build），recipe 只写差异部分。
+# shellcheck disable=SC1091
+. "$PHPRT_RUNNER/recipe-ext.sh"
+
 need_cmds() {
   local c
   for c in "$@"; do command -v "$c" >/dev/null 2>&1 || die "缺少命令: $c"; done
