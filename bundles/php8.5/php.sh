@@ -96,10 +96,50 @@ if lto_on php; then
 fi
 
 names="$(enabled_dep_names)"
+
+# 静态链接：建一个只含 .a 软链的搜索目录，并放在所有 deps 的 -L 前面。
+# GNU ld 在第一个有同名库的目录里选定 libfoo.a，于是 -lfoo 不会退化成 .so。
+# 不用 -Wl,-Bstatic：libtool 会把它和 --start-group 重排到对象文件之前，
+# 实际链接时这些库仍然是动态的。
+STATIC_LIB_DIR=""
+if link_is_static; then
+  STATIC_LIB_DIR="$BUILD_ROOT/static-libs"
+  rm -rf "$STATIC_LIB_DIR"; mkdir -p "$STATIC_LIB_DIR"
+  for _d in $names; do
+    _ddir="$(dep_dir_of "$_d")"
+    _found=0
+    for _f in "$_ddir"/lib/*.a "$_ddir"/lib64/*.a; do
+      [ -f "$_f" ] || continue
+      _found=1
+      ln -sfn "$_f" "$STATIC_LIB_DIR/$(basename "$_f")"
+    done
+    if [ "$_found" != 1 ]; then
+      case " ${PHPRT_PHP_DEPS:-} " in
+        *" $_d "*) die "依赖 $_d 没有静态库（--static-all 需要 .a，见 docs/STATIC-ALL.md）" ;;
+      esac
+    fi
+  done
+fi
+
 export CPPFLAGS="$(dep_include_flags $names)${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="$(dep_build_flags $names)${LTO_LDFLAGS_EXTRA:+ $LTO_LDFLAGS_EXTRA}${LDFLAGS:+ $LDFLAGS}"
+[ -n "$STATIC_LIB_DIR" ] && LDFLAGS="-L$STATIC_LIB_DIR $LDFLAGS"
+
+# 静态链接：static_ldflags() 不能放在 LDFLAGS（对象文件之前），要等
+# configure 生成 Makefile 后放进 EXTRA_LIBS 的链接组末尾。
+STATIC_EXT_LIBS=""
 if [ -n "${STATIC_EXT_LDFLAGS:-}" ] && [ -s "$STATIC_EXT_LDFLAGS" ]; then
-  LDFLAGS="$LDFLAGS $(tr '\n' ' ' < "$STATIC_EXT_LDFLAGS")"
+  if link_is_static; then
+    STATIC_EXT_LIBS="$(tr '\n' ' ' < "$STATIC_EXT_LDFLAGS")"
+  else
+    LDFLAGS="$LDFLAGS $(tr '\n' ' ' < "$STATIC_EXT_LDFLAGS")"
+  fi
+fi
+
+if link_is_static; then
+  # 这两个库如果动态链接，会出现在产物 NEEDED 里，单文件复制到别的机器
+  # 可能缺 libgcc_s.so / libstdc++.so。没有 C++ 代码时静态档案不会被拉进来。
+  LDFLAGS="$LDFLAGS -static-libgcc -static-libstdc++"
 fi
 export PKG_CONFIG_PATH="$(dep_pc_path $names)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
@@ -119,6 +159,28 @@ printf '%s\n' "$FLAGS_SIG" > "$FLAGS_STAMP"
 log "PHP configure"
 ./configure "${ARGS[@]}" > "$LOGS/php-configure.log" 2>&1 ||
   { tail -60 "$LOGS/php-configure.log"; die "PHP configure 失败"; }
+
+if link_is_static; then
+  log "静态链接 PHP（依赖使用 .a）"
+  # configure 会把每个 --with-* 的库目录写进 EXTRA_LDFLAGS(_PROGRAM)，并加
+  # 绝对 rpath。静态链接必须让只含 .a 的静态目录排在它们前面，同时删掉 rpath。
+  for _v in EXTRA_LDFLAGS EXTRA_LDFLAGS_PROGRAM; do
+    sed -i -E "s#^($_v = )#\1-L$STATIC_LIB_DIR #" Makefile
+  done
+  grep -q -- "-L$STATIC_LIB_DIR" Makefile ||
+    die "把静态库目录加进 Makefile 失败"
+  sed -i -E '/^(EXTRA_LDFLAGS|EXTRA_LDFLAGS_PROGRAM|NATIVE_RPATHS|PHP_RPATHS|LDFLAGS) =/{
+    s|-Wl,-rpath,[^ ]+||g
+    s|-R [^ ]+||g
+  }' Makefile
+  # 静态库是单向扫描：libcurl.a 在 libssl.a 之前就拉不出后面的符号。
+  # 把同一组库再放一遍（libtool --preserve-dup-deps 会保留重复项），
+  # 解决依赖倒序；static_ldflags 的输出放在每一遍末尾。
+  _extra_libs="$(sed -n 's/^EXTRA_LIBS = //p' Makefile | head -1)"
+  [ -n "$_extra_libs" ] || die "Makefile 里找不到 EXTRA_LIBS"
+  _libs="$_extra_libs${STATIC_EXT_LIBS:+ $STATIC_EXT_LIBS}"
+  sed -i "s|^EXTRA_LIBS = .*|EXTRA_LIBS = $_libs $_libs|" Makefile
+fi
 
 if lto_on php; then
   # 这两个文件使用 GCC 全局寄存器变量（%r14/%r15）；LTO 合并翻译单元后
@@ -153,4 +215,17 @@ make install > "$LOGS/php-install.log" 2>&1 ||
 
 [ -x "$TREE/bin/php" ] || die "安装后没有 $TREE/bin/php"
 [ -f "$TREE/bin/phar.phar" ] || die "安装后没有 phar.phar（phar 命令不可用）"
+
+if link_is_static; then
+  _bad_needed=""
+  for _b in "$TREE"/bin/*; do
+    [ -f "$_b" ] && [ ! -L "$_b" ] || continue
+    readelf -h "$_b" >/dev/null 2>&1 || continue
+    _one="$(readelf -d "$_b" 2>/dev/null | awk -F'[][]' '/\(NEEDED\)/{print $2}' |
+      grep -Ev '^(libc|libm|libpthread|libdl|librt|libresolv|libcrypt|libutil|libnsl|libanl|libmvec|ld-linux)\.so' || true)"
+    [ -n "$_one" ] && _bad_needed+="$_b: $_one"$'\n'
+  done
+  [ -z "$_bad_needed" ] ||
+    die "静态链接未完成，仍有外部依赖:"$'\n'"$_bad_needed"
+fi
 ok "PHP $PHP_VERSION 本体完成"

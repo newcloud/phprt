@@ -396,7 +396,7 @@ $ scripts/recipe-check.sh --deep
   下次 `install` 会直接跳过。现在启用前先写 `activating`，成功后才写 `ok`；
   `add ext` 同样处理。
 
-## `--static-all` 验收（v0，2026-11-09 定义）
+## `--static-all` 验收（v0，2026-11-09）
 
 目标：扩展和依赖全部链接进 `bin/php`，单独复制可运行；glibc 保持动态。
 完整说明见 [STATIC-ALL.md](STATIC-ALL.md)。
@@ -407,16 +407,20 @@ $ scripts/recipe-check.sh --deep
 phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
 ```
 
-| 检查 | 预期 |
+实际结果（`v2sa`）：
+
+| 检查 | 结果 |
 | --- | --- |
 | 构建 | `BUILD-STATUS=ok`；5 个扩展都在 `php -m` |
-| 链接方式 | `.phprt-state/link` 为 `static`；`phprt show` 显示静态链接 |
-| 共享扩展 | `lib/php/extensions/` 不存在或为空 |
-| `ldd bin/php` | 只有 glibc 基础库和动态加载器，没有 `deps/` |
-| `readelf -d bin/php` | 没有 `deps/` 的 RPATH/RUNPATH |
-| 单文件 | 把 `bin/php` 单独复制到空目录，`php -v` / `php -m` 正常 |
-| 功能 | `Phar::canCompress(Phar::GZ)` 为 true；sqlite、mbstring、curl 可调用 |
-| `phprt verify` | 全绿 |
+| 链接方式 | `.phprt-state/link` 为 `static`；`phprt show` 显示 `链接方式: static` |
+| 共享扩展 | 清理后 `lib/php/extensions/` 不存在 |
+| `ldd bin/php` | 只有 `libm.so.6`、`libc.so.6` 和动态加载器 |
+| `readelf -d bin/php` | 没有 `deps/`；只有 `$ORIGIN/../lib/phprt` 的相对 RPATH |
+| 二进制大小 | 约 38 MB |
+| 单文件 | 复制到空目录后 `php -v`、`php -m` 正常 |
+| 功能 | `Phar::canCompress(Phar::GZ)` 为 true；PDO sqlite、mbstring、OpenSSL 加密可用 |
+| curl | 单文件加系统 CA 后请求 `https://example.com` 返回 200 |
+| `phprt verify` | 7 项全绿，新增“静态链接”检查通过 |
 
 排除规则：
 
@@ -424,8 +428,8 @@ phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
 phprt install 8.5 --static-all --ext "tidy xdebug" --plan
 ```
 
-预期：`xdebug` 被排除并提示；`tidy` 进入 static 列表。实际构建结果在 v0
-实现后补记。
+结果：打印 `xdebug 只支持 shared，--static-all 下已排除（type=shared）`，
+static 列表只剩 `tidy`。
 
 切回普通安装：
 
@@ -433,4 +437,25 @@ phprt install 8.5 --static-all --ext "tidy xdebug" --plan
 phprt install 8.5 --shared --ext "openssl zlib curl sqlite mbstring"
 ```
 
-预期：`.phprt-state/link` 变回 `shared`，PHP 重新链接到依赖 `.so`。
+结果：`.phprt-state/link` 变回 `shared`，PHP 重新链接到依赖 `.so`，
+`phprt verify` 仍全绿；再执行一次 `--static-all` 可以切回单文件。
+
+依赖缺静态库时的报错：
+
+```bash
+phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring libxml2"
+```
+
+结果：构建在 PHP configure 前停止，报
+`依赖 libxml2 没有静态库（--static-all 需要 .a，见 docs/STATIC-ALL.md）`。
+这正是 v1 要补的依赖静态库。
+
+实现要点：
+
+- libtool 会把 `-Wl,-Bstatic` / `--start-group` 重排到对象文件之前，不能靠它们
+  静态链接。实际做法是建一个只含依赖 `.a` 软链的 `static-libs/` 目录，并放在
+  所有 `-L` 前面。
+- 静态库是单向扫描，所以 `EXTRA_LIBS` 重复两遍，解决 `libcurl.a` 引用
+  `libssl.a` 时的倒序问题。
+- configure 自动加的依赖 rpath 必须删掉；`-static-libgcc`/`-static-libstdc++`
+  让产物不依赖项目外的 GCC 运行库。

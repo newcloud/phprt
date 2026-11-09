@@ -189,9 +189,11 @@ dep/tool 不写 ini，不碰 PHP 配置。tool 可以依赖另一个 tool，用 
 静态模式下 driver 会：
 
 - 依赖构建参数里去掉绝对 rpath，只保留 `-L`；
-- 把 PHP 的 `EXTRA_LIBS` 包进 `-Wl,-Bstatic --start-group … --end-group -Wl,-Bdynamic`；
-- 把 `static_ldflags()` 的输出放到链接组末尾；
-- 加 `-static-libgcc`，有 C++ 依赖时加 `-static-libstdc++`。
+- 建一个只含依赖 `.a` 软链的 `static-libs/` 目录，并放在所有 `-L` 前面；
+- 删掉 configure 生成的 `-Wl,-rpath` 和 `-R`；
+- 把 `EXTRA_LIBS` 重复两遍，`static_ldflags()` 放在每遍末尾，
+  解决静态库的单向扫描顺序；
+- 加 `-static-libgcc` 和 `-static-libstdc++`。
 
 `static_ldflags()` 的契约（ext recipe 可选）：
 

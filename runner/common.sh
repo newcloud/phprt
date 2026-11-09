@@ -306,6 +306,40 @@ mode_supported() {  # $1=recipe 文件 $2=mode
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# 链接方式：shared（依赖 .so）/ static（依赖 .a，编入 PHP）
+# 记录在 $TREE/.phprt-state/link；PHPRT_LINK_MODE 是本次运行的覆盖值。
+# ---------------------------------------------------------------------------
+link_mode_file_of() {  # $1=tree
+  printf '%s/.phprt-state/link\n' "$1"
+}
+
+link_mode_get() {  # $1=tree，可省略用 $TREE
+  local t="${1:-${TREE:-}}" f
+  [ -n "$t" ] || return 1
+  f="$(link_mode_file_of "$t")"
+  [ -f "$f" ] && cat "$f"
+}
+
+link_mode_set() {  # $1=mode $2=tree（可省略用 $TREE）
+  local m="$1" t="${2:-${TREE:-}}" f
+  [ -n "$t" ] || return 1
+  f="$(link_mode_file_of "$t")"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$m" > "$f"
+}
+
+# 本次覆盖 -> 树上记录 -> shared
+link_mode() {
+  local m
+  m="${PHPRT_LINK_MODE:-}"
+  [ -n "$m" ] && { printf '%s\n' "$m"; return 0; }
+  m="$(link_mode_get "${TREE:-}" 2>/dev/null || true)"
+  printf '%s\n' "${m:-shared}"
+}
+
+link_is_static() { [ "$(link_mode)" = static ]; }
+
 mode_file_of() {  # $1=tree $2=扩展名
   printf '%s/.phprt-state/mode/%s\n' "$1" "$2"
 }
@@ -1051,11 +1085,24 @@ dep_include_flags() {
 }
 
 dep_build_flags() {
-  local n d out="-Wl,--disable-new-dtags "
+  local n d out="" rpath=1
+  # 静态链接时 PHP 只使用 .a，不能写依赖目录的绝对 rpath；
+  # 否则 verify 的 RPATH 检查和“可单独复制”都会失败。
+  if link_is_static; then
+    rpath=0
+  else
+    out="-Wl,--disable-new-dtags "
+  fi
   for n in "$@"; do
     d="$(dep_dir_of "$n")"
-    [ -d "$d/lib" ]   && out+="-L$d/lib -Wl,-rpath,$d/lib "
-    [ -d "$d/lib64" ] && out+="-L$d/lib64 -Wl,-rpath,$d/lib64 "
+    [ -d "$d/lib" ] && {
+      out+="-L$d/lib "
+      [ "$rpath" = 1 ] && out+="-Wl,-rpath,$d/lib "
+    }
+    [ -d "$d/lib64" ] && {
+      out+="-L$d/lib64 "
+      [ "$rpath" = 1 ] && out+="-Wl,-rpath,$d/lib64 "
+    }
   done
   printf '%s\n' "${out% }"
 }

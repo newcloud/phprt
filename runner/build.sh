@@ -39,6 +39,8 @@ export BUNDLE TREE
 export PREFIX="$TREE"
 export SELECTED_EXTS="$EXTS"
 export DEPS="$TREE/deps"
+# 链接方式：命令显式指定（PHPRT_LINK_MODE）优先，否则用树上记录。
+export PHPRT_LINK_MODE="$(link_mode)"
 export JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 export VENDOR="$PHPRT_RUNNER/vendor"
 [ -d "$VENDOR" ] || die "缺少 $VENDOR（runner/vendor）"
@@ -122,10 +124,14 @@ for e in $SHARED_PECL; do
   for n in $(module_needs "$e"); do add_dep "$n"; done
 done
 
+# 静态链接只需要给 PHP 用的依赖准备 .a；树里多出来的旧依赖不能让它失败。
+export PHPRT_PHP_DEPS="$PHP_DEPS"
+
 if [ "$PLAN" = 1 ]; then
   printf 'PHP %s\n' "$PHP_VERSION"
   printf '  deps: %s\n' "${ALL_DEPS:-（无）}"
   printf '  php\n'
+  printf '  link: %s\n' "$(link_mode)"
   printf '  static: %s\n' "$(printf '%s\n' $STATIC_BUILTINS $STATIC_PECL | sed '/^$/d' | tr '\n' ' ')"
   printf '  shared: %s\n' "$(printf '%s\n' $SHARED_BUILTINS $SHARED_PECL | sed '/^$/d' | tr '\n' ' ')"
   exit 0
@@ -156,6 +162,7 @@ PHP_URL="$PHP_URL"
 PHP_SHA256="$PHP_SHA256"
 EXTENSIONS="$SELECTED_EXTS"
 MODES="$MODES"
+LINK_MODE="$(link_mode)"
 EOF
 
 {
@@ -168,6 +175,7 @@ EOF
 log "PHP $PHP_VERSION"
 log "deps:  ${ALL_DEPS:-（无）}"
 log "php"
+log "link:   $(link_mode)"
 log "static: ${STATIC_BUILTINS}${STATIC_PECL:-（无）}"
 log "shared: ${SHARED_BUILTINS}${SHARED_PECL:-（无）}"
 
@@ -242,6 +250,7 @@ PHP_SIG="$(
     # 行尾（--with-openssl=…/deps/openssl-3.5.9，无尾斜杠）
     bash "$BUNDLE/php.sh" --flags | sed -E -e 's|(deps/[A-Za-z0-9_+]+)-[^/]+/|\1/|g' -e 's|(deps/[A-Za-z0-9_+]+)-[^/ ]+$|\1|g'
     printf 'php=%s\n' "$PHP_VERSION"
+    printf 'link_mode=%s\n' "$(link_mode)"
     printf 'php_cflags=%s|%s\n' "${PHP_CFLAGS:-}" "${PHP_CXXFLAGS:-}"
     if lto_on php; then
       printf 'lto=%s|%s\n' "$LTO_CFLAGS" "$LTO_LDFLAGS"

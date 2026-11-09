@@ -19,6 +19,10 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
                            type=shared 的（如 xdebug）保持 shared 并提示
       --shared             所有支持 shared 的扩展都编成 .so；
                            type=static 的（如 libxml2）保持 static 并提示
+      --static-all         扩展和第三方依赖都静态链接进 bin/php；
+                           type=shared 的扩展（如 xdebug）自动排除。
+                           glibc 仍动态，产物可单独复制运行。
+                           当前支持：openssl zlib curl sqlite mbstring
       不指定时按 recipe 的 default=（builtin 默认 static，PECL 默认 shared）。
 
       其他:
@@ -83,6 +87,7 @@ contract（recipe 头部）:
   phprt install 8.5 --ext "openssl curl zip swoole"
   phprt install 8.5 --ext "tidy curl" --build "tidy=static,curl=shared"
   phprt install 8.5 --ext "tidy redis xdebug" --static
+  phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
   phprt add ext tidy --shared
   phprt add ext gmp --static
   phprt add ext redis --shared
@@ -182,7 +187,7 @@ resolve_install_modes() {
 
 cmd_install() {
   local arg="" exts="" recompile=0 assume_yes=0 plan=0 clean_src=0
-  local build_spec="" global_mode=""
+  local build_spec="" global_mode="" static_all=0 saw_shared=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ext)       exts="${2:-}"; shift 2 ;;
@@ -190,7 +195,8 @@ cmd_install() {
       --build)     build_spec="${build_spec:+$build_spec,}${2:-}"; shift 2 ;;
       --build=*)   build_spec="${build_spec:+$build_spec,}${1#*=}"; shift ;;
       --static)    global_mode=static; shift ;;
-      --shared)    global_mode=shared; shift ;;
+      --static-all) static_all=1; global_mode=static; shift ;;
+      --shared)    global_mode=shared; saw_shared=1; shift ;;
       --recompile) recompile=1; shift ;;
       --plan)      plan=1; shift ;;
       --clean-src) clean_src=1; shift ;;
@@ -201,6 +207,13 @@ cmd_install() {
     esac
   done
   [ -n "$arg" ] || die "用法: phprt install <系列|版本>（如 install 8.5 / install 8.5.12）"
+
+  if [ "$static_all" = 1 ]; then
+    [ "$saw_shared" != 1 ] || die "--static-all 和 --shared 不能同时用"
+    case ",$build_spec," in
+      *,*=shared,*) die "--static-all 下不能有 --build 名字=shared" ;;
+    esac
+  fi
 
   local exact=0
   case "$arg" in
@@ -241,7 +254,7 @@ cmd_install() {
     if [ -n "$imax" ] &&
        [ "$(printf '%s\n%s\n' "$imax" "$concrete" | sort -V | tail -1)" = "$imax" ] &&
        [ "$recompile" != 1 ] && [ "$plan" != 1 ] && [ -z "$exts" ] &&
-       [ -z "$build_spec" ] && [ -z "$global_mode" ]; then
+       [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ]; then
       if [ "$imax" = "$concrete" ]; then
         ok "PHP $concrete 已安装，无需重复安装"
       else
@@ -270,7 +283,7 @@ cmd_install() {
   # 精确版已装齐：停止（系列版走到这里说明目标高于已装最高版，不会重入）
   if [ "$complete" = 1 ] && [ "$exact" = 1 ] &&
      [ "$recompile" != 1 ] && [ "$plan" != 1 ] && [ -z "$exts" ] &&
-     [ -z "$build_spec" ] && [ -z "$global_mode" ]; then
+     [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ]; then
     ok "PHP $concrete 已安装"
     [ "$concrete" = "$(current_version 2>/dev/null || true)" ] ||
       printf '    切换: phprt use %s\n' "$concrete"
@@ -306,6 +319,20 @@ cmd_install() {
   [ "$exts" = "none" ] && exts=""
   exts="$(normalize_exts "$exts")"
 
+  # --static-all 只编契约里支持 static 的扩展；shared-only 直接排除。
+  if [ "$static_all" = 1 ] && [ -n "$exts" ]; then
+    local kept="" _e _sh
+    for _e in $exts; do
+      _sh="$(ext_recipe_sh "$_e")" || die "未知扩展: $_e"
+      if mode_supported "$_sh" static; then
+        kept="$kept${kept:+ }$_e"
+      else
+        warn "$_e 只支持 shared，--static-all 下已排除（type=$(recipe_types "$_sh")）"
+      fi
+    done
+    exts="$kept"
+  fi
+
   # bundle 声明的最小必需扩展（REQUIRED_EXTS，可选）
   local req
   for req in ${REQUIRED_EXTS:-}; do
@@ -314,6 +341,15 @@ cmd_install() {
       *) die "PHP $concrete 必须包含扩展 $req（bundle.conf 的 REQUIRED_EXTS）" ;;
     esac
   done
+
+  # 链接方式只在显式指定时覆盖；不指定就沿用树上记录（新树默认 shared）
+  if [ "$static_all" = 1 ]; then
+    export PHPRT_LINK_MODE=static
+  elif [ "$global_mode" = shared ]; then
+    export PHPRT_LINK_MODE=shared
+  else
+    unset PHPRT_LINK_MODE
+  fi
 
   # 编译方式：--build > --static/--shared > 契约 default
   local mode_env=""
@@ -370,6 +406,11 @@ cmd_install() {
   for pair in $mode_env; do
     TREE="$tree" mode_set "${pair%%=*}" "${pair#*=}"
   done
+  if [ -n "${PHPRT_LINK_MODE:-}" ]; then
+    link_mode_set "$PHPRT_LINK_MODE" "$tree"
+  else
+    link_mode_set "$(link_mode_get "$tree" 2>/dev/null || printf shared)" "$tree"
+  fi
 
   activate_tree "$concrete" "$exts"
   printf 'ok\n' > "$tree/BUILD-STATUS"
@@ -435,6 +476,9 @@ cmd_show() {
   printf 'PHP %s\n' "$ver"
   printf '    路径: %s\n' "$tree"
   printf '    php.ini: %s\n' "$tree/etc/php.ini"
+  local lm
+  lm="$(link_mode_get "$tree" 2>/dev/null || true)"
+  printf '    链接方式: %s\n' "${lm:-shared}"
   bundle="$(bundle_for "$(series_of "$ver")")" || true
   if [ -n "$bundle" ]; then
     export BUNDLE="$bundle"
@@ -636,7 +680,7 @@ cmd_add() {
     esac
   done
 
-  local ver tree bundle sh types dflt cur extdir ld list m present=0
+  local ver tree bundle sh types dflt cur extdir ld list m present=0 tree_link=""
   ver="$(current_version)" || die "还没有 current 版本"
   export PHPRT_PHP_VERSION="$ver"
   phprt_set_build_root "$ver"
@@ -648,6 +692,7 @@ cmd_add() {
   bundle="$(bundle_for "$(series_of "$ver")")" || die "缺少 bundle: php$(series_of "$ver")"
   export BUNDLE="$bundle" TREE="$tree" PREFIX="$tree" DEPS="$tree/deps"
 
+  tree_link="$(link_mode_get "$tree" 2>/dev/null || true)"
   sh="$(ext_recipe_sh "$name")" || die "未知扩展: $name"
   types="$(recipe_types "$sh")"
   dflt="$(recipe_default_mode "$sh")"
@@ -666,6 +711,9 @@ cmd_add() {
   fi
   mode_supported "$sh" "$mode" ||
     die "$name 不支持 $mode（type=$(printf '%s' "$types" | tr ' ' ',')）"
+  if [ "$tree_link" = static ] && [ "$mode" = shared ]; then
+    die "当前树是 --static-all（依赖只有静态库），不能加 shared 扩展；先 phprt install 切回普通安装"
+  fi
 
   extdir="$(ext_dir_of "$tree" 2>/dev/null || true)"
   ld="$tree/lib:$(ls -d "$tree"/deps/*/lib 2>/dev/null | tr '\n' ':')"
@@ -794,6 +842,29 @@ cmd_verify() {
     return 1
   fi
   ok "php 与扩展没有从安装根外借库"
+
+  if [ "$(link_mode_get "$tree" 2>/dev/null || true)" = static ]; then
+    log "3b) 静态链接（bin/php 只允许 glibc）"
+    local needed n bad_static=""
+    needed="$(readelf -d "$tree/bin/php" 2>/dev/null |
+      awk -F'[][]' '/\(NEEDED\)/{print $2}')"
+    for n in $needed; do
+      case "$n" in
+        libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|\
+        libresolv.so.*|libcrypt.so.*|libutil.so.*|libnsl.so.*|\
+        libanl.so.*|libmvec.so.*|ld-linux*) ;;
+        *) bad_static+="$n"$'\n' ;;
+      esac
+    done
+    for f in "$tree"/lib/php/extensions/*/*.so; do
+      [ -e "$f" ] && bad_static+="$f（静态链接下不应有共享扩展）"$'\n'
+    done
+    if [ -n "$bad_static" ]; then
+      printf '    ✗ 静态链接不完整:\n%s' "$bad_static"
+      return 1
+    fi
+    ok "bin/php 只依赖 glibc，且没有共享扩展"
+  fi
 
   log "4) RPATH（只允许 \$ORIGIN 相对路径）"
   local rp="" abs=""

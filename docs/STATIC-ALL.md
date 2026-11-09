@@ -71,18 +71,20 @@ phprt install 8.5 --shared --ext "openssl zlib curl sqlite mbstring"
 
 ### 4.2 PHP 链接
 
-`php.sh` 在静态模式下改写生成的 `Makefile`：
+`php.sh` 在静态模式下做四件事：
 
-```text
-EXTRA_LIBS = -Wl,-Bstatic -Wl,--start-group <原来的库> <static_ldflags> \
-             -Wl,--end-group -Wl,-Bdynamic
-```
+1. 在 `$BUILD_ROOT/static-libs/` 建一个只含依赖 `.a` 软链的目录，并把它
+   插到 `EXTRA_LDFLAGS` / `EXTRA_LDFLAGS_PROGRAM` 的最前面。GNU ld 在第一个
+   有同名库的目录里选定 `libfoo.a`，于是 `-lfoo` 不会退化成 `.so`。
+2. 删掉 configure 自动加的 `-Wl,-rpath,<deps>` 和 `-R <deps>`。
+3. 把 `EXTRA_LIBS` 重复两遍，并把 `static_ldflags()` 的输出放在每一遍末尾。
+   静态库是单向扫描：`libcurl.a` 在 `libssl.a` 之前时，第一遍拉不出后面的
+   符号，第二遍再扫一次就能解决。
+4. 加 `-static-libgcc` 和 `-static-libstdc++`，避免引入项目外的
+   `libgcc_s.so` / `libstdc++.so`。
 
-- `--start-group/--end-group` 解决静态库之间的循环引用和顺序问题。
-- `-Bstatic/-Bdynamic` 只包住扩展库和依赖库，libc 仍动态。
-- `static_ldflags()`（PECL static 用到）放在链接组末尾，而不是 `LDFLAGS` 前面。
-- 加 `-static-libgcc`；有 C++ 依赖时加 `-static-libstdc++`，避免引入
-  项目外的 `libgcc_s.so` / `libstdc++.so`。
+不使用 `-Wl,-Bstatic`：libtool 会把它和 `--start-group` 重排到对象文件之前，
+实际链接时这些库仍然是动态的。
 
 PHP 签名包含链接方式：`static` ↔ `shared` 切换会重编 PHP。
 
@@ -96,7 +98,7 @@ PHP 签名包含链接方式：`static` ↔ `shared` 切换会重编 PHP。
 
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
-| v0 | `openssl zlib curl sqlite mbstring` | 本次实现 |
+| v0 | `openssl zlib curl sqlite mbstring` | 已实现（2026-11-09） |
 | v1 | 补齐 `libxml2`、`libzip`、`libsodium`，默认集完整 | 待做 |
 | v2 | PECL：redis、yaml、ssh2、apcu、msgpack、igbinary、protobuf、amqp、memcached、mongodb、rdkafka | 待做 |
 | v3 | intl/ICU、gd 图片链、xsl、ldap、pgsql、gmp、ffi、tidy | 待做 |
