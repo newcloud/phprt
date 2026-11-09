@@ -174,6 +174,41 @@ build() { ... }    # 下载、configure、make、make install
 
 dep/tool 不写 ini，不碰 PHP 配置。tool 可以依赖另一个 tool，用 `tools=perlshim` 表达。
 
+### 静态链接（`--static-all`）
+
+普通安装只要求 dep 提供共享库；`--static-all` 还要求提供 `.a`。recipe 的义务：
+
+1. 静态构建时把 `.a` 装到 `deps/<名字>-<版本>/lib/` 或 `lib64/` 根目录。
+2. 同时保留 `.so` 不冲突：PHP 静态链接时只用 `.a`，普通安装仍可用 `.so`。
+3. 不要求为静态库单独改安装目录名；`.a` 和 `.so` 可以并存在同一个 `lib/`。
+4. 依赖的私有链接参数（例如 C++ 库的 `-lstdc++`、ICU 的 `-licuuc -licudata`）
+   由 driver 的静态链接累计；recipe 只有在 `pkg-config --static` 也不完整时才
+   需要额外声明。
+5. `wheel=none` 的 dep 可以只提供 `.a`；wheel 化不会因此失败。
+
+静态模式下 driver 会：
+
+- 依赖构建参数里去掉绝对 rpath，只保留 `-L`；
+- 把 PHP 的 `EXTRA_LIBS` 包进 `-Wl,-Bstatic --start-group … --end-group -Wl,-Bdynamic`；
+- 把 `static_ldflags()` 的输出放到链接组末尾；
+- 加 `-static-libgcc`，有 C++ 依赖时加 `-static-libstdc++`。
+
+`static_ldflags()` 的契约（ext recipe 可选）：
+
+```bash
+static_ldflags() {
+  printf '%s\n' -lssh2
+}
+```
+
+- 输出一行一个链接参数，只用于 `--static` / `--static-all` 的 PHP 链接；
+- 不要在里写 `-L` 或 rpath，依赖路径由 driver 统一加；
+- 外部库必须已经在 `build()` / `stage_static()` 阶段构建；
+- 普通 shared 构建不会调用它。
+
+v0 的支持范围是 `openssl zlib curl sqlite mbstring`；完整计划见
+[STATIC-ALL.md](STATIC-ALL.md)。
+
 ### 版本查询（可选，供 `phprt outdated` / `phprt update` 用）
 
 两种写法，按来源复杂度选：

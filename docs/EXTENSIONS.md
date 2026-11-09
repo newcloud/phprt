@@ -153,6 +153,11 @@ tools `autoconf perlshim`。
 - `install` 不带参数时用 `default`；`--build "a=static,b=shared"` 逐项覆盖
   （也支持重复 `--build a=static --build b=shared`）；
   `--static` / `--shared` 全局指定，类型不支持的保持原方式并提示。
+- `install --static-all` 是独立的全静态链接模式：
+  - 扩展和第三方依赖都链接进 `bin/php`；
+  - `type=shared` 的扩展自动排除；
+  - glibc 仍动态，产物可单独复制运行；
+  - 详见 [STATIC-ALL.md](STATIC-ALL.md)。
 - `add ext` 忽略 `default`，必须显式带 `--shared` 或 `--static`；
   不带参数时打印 `type` / `default` 后退出。
 - 编译方式记录在 `$TREE/.phprt-state/mode/<名字>`，切换方式会重编 PHP：
@@ -181,6 +186,19 @@ tools `autoconf perlshim`。
 - 全 static 的树没有 `lib/php/extensions/`，`enable_ext` 和后续 `add ext`
   必须容忍这个目录不存在。
 
+`--static-all` 的支持范围按阶段扩大：
+
+| 阶段 | 范围 | 状态 |
+| --- | --- | --- |
+| v0 | `openssl zlib curl sqlite mbstring` | 已定义 |
+| v1 | 补 `libxml2`、`libzip`、`libsodium`，默认集完整 | 待做 |
+| v2 | PECL：redis、yaml、ssh2、apcu、msgpack、igbinary、protobuf、amqp、memcached、mongodb、rdkafka | 待做 |
+| v3 | intl/ICU、gd 图片链、xsl、ldap、pgsql、gmp、ffi、tidy | 待做 |
+| v4 | imagick | 待做 |
+
+注意：`--static` 仍是“扩展静态、依赖动态”；需要单个可复制文件时用
+`--static-all`。两者都会重编 PHP。
+
 已知构建细节：
 
 - static PECL 把源码放进 `php-src/ext/<名字>` 后必须 `buildconf --force`
@@ -189,6 +207,11 @@ tools `autoconf perlshim`。
   还引用着已删除的 `ext/<名字>/...h`，make 报“没有规则可制作目标”。
 - shared builtin 的 phpize 构建要带上树内依赖的 `CPPFLAGS` / `LDFLAGS` /
   `PKG_CONFIG_PATH`；否则 intl 会链接系统 ICU。
+- `--static-all` 下 PHP 的链接行必须包成
+  `-Wl,-Bstatic --start-group … --end-group -Wl,-Bdynamic`，否则静态库顺序和
+  循环引用会报 `undefined reference`；同时不能给 PHP 写依赖目录的绝对 rpath。
+- 依赖只有 `.so` 时 `--static-all` 会在链接阶段失败；补齐 `.a` 属于 v1 之后的
+  增量工作，不在 v0 范围。
 
 ## 5. 新增清单（9 项，v1 计划表剩余）
 

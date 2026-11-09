@@ -395,3 +395,42 @@ $ scripts/recipe-check.sh --deep
 - 启用 ini / 生成 `myphp` 在 `build.sh` 之后，失败时树已经被标成 `ok`，
   下次 `install` 会直接跳过。现在启用前先写 `activating`，成功后才写 `ok`；
   `add ext` 同样处理。
+
+## `--static-all` 验收（v0，2026-11-09 定义）
+
+目标：扩展和依赖全部链接进 `bin/php`，单独复制可运行；glibc 保持动态。
+完整说明见 [STATIC-ALL.md](STATIC-ALL.md)。
+
+最小范围：
+
+```bash
+phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
+```
+
+| 检查 | 预期 |
+| --- | --- |
+| 构建 | `BUILD-STATUS=ok`；5 个扩展都在 `php -m` |
+| 链接方式 | `.phprt-state/link` 为 `static`；`phprt show` 显示静态链接 |
+| 共享扩展 | `lib/php/extensions/` 不存在或为空 |
+| `ldd bin/php` | 只有 glibc 基础库和动态加载器，没有 `deps/` |
+| `readelf -d bin/php` | 没有 `deps/` 的 RPATH/RUNPATH |
+| 单文件 | 把 `bin/php` 单独复制到空目录，`php -v` / `php -m` 正常 |
+| 功能 | `Phar::canCompress(Phar::GZ)` 为 true；sqlite、mbstring、curl 可调用 |
+| `phprt verify` | 全绿 |
+
+排除规则：
+
+```bash
+phprt install 8.5 --static-all --ext "tidy xdebug" --plan
+```
+
+预期：`xdebug` 被排除并提示；`tidy` 进入 static 列表。实际构建结果在 v0
+实现后补记。
+
+切回普通安装：
+
+```bash
+phprt install 8.5 --shared --ext "openssl zlib curl sqlite mbstring"
+```
+
+预期：`.phprt-state/link` 变回 `shared`，PHP 重新链接到依赖 `.so`。
