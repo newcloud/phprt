@@ -23,6 +23,43 @@ cd ~/blog
 eval "$(./myphp --shell)"   # 想直接敲 php / composer 时
 ```
 
+## 构建后的目录
+
+安装完成后，项目里大概是这个结构：
+
+```text
+<project>/
+├── myphp
+└── .phprt/
+    ├── current -> php-8.5.12
+    ├── php-8.5.12/          # 编译好的 PHP
+    │   ├── bin/php
+    │   ├── lib/phprt/       # 运行时动态库
+    │   ├── deps/            # 第三方库
+    │   └── etc/             # php.ini、conf.d、证书
+    ├── build-php-8.5.12/    # 编译过程
+    │   ├── src/             # 解压的源码
+    │   ├── logs/            # configure / make 日志
+    │   ├── downloads/       # 下载的源码包
+    │   └── tools/           # 构建工具
+    └── buildroots/          # 可选，chroot 构建环境
+```
+
+**`php-8.5.12/`**：编译出的 PHP 版本树，实际运行用的就是它。
+
+- `bin/php`：PHP 本体。
+- `lib/phprt/`：PHP 和扩展依赖的动态库。文件名统一改成 `libssl-rt3.so.3` 这种 `-rt` 形式（wheel 方式），运行时只从这里加载，不会用到系统里的同名库。
+- `deps/`：第三方库的安装目录，比如 OpenSSL、curl、libxml2。
+- `etc/php.ini`：主配置。
+- `etc/conf.d/`：扩展和 CA 的配置。
+- `etc/ssl/cert.pem`：curl / openssl 用的根证书。
+
+**`build-php-8.5.12/`**：编译过程目录，放源码、下载包、日志和构建工具。
+不需要时可以直接删，不影响已经装好的 PHP；下次构建会按需重新生成。构建过程中不要删。
+
+**`buildroots/`**：可选的 chroot 构建环境，`phprt buildroot` 创建。
+不需要时用 `phprt buildroot remove` 删除，不要直接 `rm -rf`，避免残留挂载。
+
 ## 支持的 PHP 版本
 
 当前只支持 **PHP 8.5**（8.5.x）。其他系列（8.6、7.4 等）后续再支持。
