@@ -22,7 +22,7 @@ upstream_key() {
 
 # http_get <url> <输出文件>
 # 代理顺序：用户代理（https_proxy / HTTPS_PROXY，其次 http_proxy / HTTP_PROXY）
-# → 直连 → PHPRT_PROXY。http_proxy 只设置时，HTTPS 请求也用它。
+# → 直连。http_proxy 只设置时，HTTPS 请求也用它。
 http_get() {
   local url="$1" out="$2" tmp proxy
   local -a hdr=()
@@ -55,9 +55,6 @@ http_get() {
   fi
 
   if _phprt_curl; then
-    mv -f "$tmp" "$out"; return 0
-  fi
-  if _phprt_curl -x "${PHPRT_PROXY:-http://127.0.0.1:10808}"; then
     mv -f "$tmp" "$out"; return 0
   fi
   rm -f "$tmp"

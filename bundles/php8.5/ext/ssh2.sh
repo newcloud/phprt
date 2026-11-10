@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=ssh2 switch=ENABLE_SSH2 version=SSH2_VERSION modules=ssh2 ini=20-ssh2.ini tools=autoconf,perlshim needs=libssh2 optional= upstream=pecl:ssh2 type=static,shared default=shared
+# phprt: contract=v2 kind=ext name=ssh2 switch=ENABLE_SSH2 version=SSH2_VERSION modules=ssh2 ini=20-ssh2.ini tools=autoconf,perlshim needs=libssh2 optional= upstream=pecl:ssh2 type=static,shared default=shared category=Network
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

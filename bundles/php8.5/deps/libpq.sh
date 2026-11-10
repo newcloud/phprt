@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=dep name=libpq version=LIBPQ_VERSION needs= optional= tools=perlshim
+# phprt: contract=v2 kind=dep name=libpq version=LIBPQ_VERSION needs=openssl optional= tools=perlshim
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
+
+# libpq 固定带 TLS：pgsql 和 pdo_pgsql 都不再暴露 ssl 开关。
 
 # 只列 18.x；跨大版本（17→18）不属于安全更新
 versions() {
@@ -13,13 +15,16 @@ build() {
   need_cmds gcc make tar
 
   local D SIG TAR SRC PERL_DIR
+  local -a OPTS
   D="$(dep_dir_of libpq)"
-  SIG="libpq=$LIBPQ_VERSION"
+  SIG="libpq=$LIBPQ_VERSION;ssl=1:${OPENSSL_VERSION:-none}"
 
   if [ "$FORCE" != 1 ] && stamp_ok libpq "$SIG" && [ -f "$D/lib/libpq.so" ]; then
     ok "libpq 已安装，跳过"; return 0
   fi
 
+  ensure_needs libpq
+  dep_env libpq
   ensure_clean_target libpq "$D"
 
   TAR="$(basename "$LIBPQ_URL")"
@@ -41,9 +46,12 @@ build() {
   export PERL5LIB="$PERL_DIR/share/perl5core${PERL5LIB:+:$PERL5LIB}"
 
   cd "$SRC"
-  # 只要客户端库 libpq + pg_config，不编服务端
+  # 只要客户端库 libpq + pg_config，不编服务端。
+  # PG 18 的开关名：SSL 用 --with-ssl=openssl（--with-openssl 是旧写法）。
+  # libpq 不用 zlib/ICU（那是服务端的事），显式关掉，免得探测到宿主库。
+  OPTS=(--without-readline --without-zlib --without-icu --with-ssl=openssl)
   log "configure（只装 libpq）"
-  ./configure --prefix="$D" --without-readline --without-zlib \
+  ./configure --prefix="$D" "${OPTS[@]}" \
     > "$LOGS/libpq-configure.log" 2>&1 \
     || { tail -30 "$LOGS/libpq-configure.log"; die "libpq configure 失败"; }
 

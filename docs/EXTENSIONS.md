@@ -11,16 +11,21 @@
 
 ## 1. 现状
 
-| 类别 | v1 | v2 | 缺 |
-| --- | --- | --- | --- |
-| builtin | 17 | 3 | 14 |
-| ext（PECL） | 8 | 1 | 7 |
-| deps | 20 | 4 | 16 |
-| tools | 3 | 2 | 1 |
-| 合计 | 48 | 10 | 38 |
+数字口径：`bundles/php8.5/{builtin,ext,deps,tools}/*.sh` 的文件数（2026-11-10）。
 
-v2 现有的 10 个：builtin `curl openssl zip`；ext `swoole`；deps `curl libzip openssl zlib`；
-tools `autoconf perlshim`。
+| 类别 | v1 | v2 |
+| --- | --- | --- |
+| builtin | 17 | 30 |
+| ext（PECL） | 8 | 14 |
+| deps | 20 | 30 |
+| tools | 3 | 3 |
+| 合计 | 48 | 77 |
+
+v2 现在可选 44 个扩展（30 builtin + 14 PECL），`DEFAULT_EXTS` 18 个。
+v1 的 25 个扩展全部覆盖（`sqlite` 在 v2 拆成 `sqlite3`），另外多了 amqp /
+imagick / memcached / mongodb / rdkafka / ssh2 / tidy / gmp / pdo_mysql /
+pdo_pgsql / pgsql / pcntl / posix / sockets / shmop / sysvmsg / sysvsem /
+sysvshm / readline。
 
 ## 2. v2 当前约束
 
@@ -40,11 +45,11 @@ tools `autoconf perlshim`。
 | 10 | **wheel 化不手写 ELF**：库放 `lib/` 或 `lib64/` 根目录，真实文件是 `.so.N` 且 SONAME 带 ABI 号；例外只用 `wheel=none/exclude/alias/singleton` | `RECIPE.md` 6 |
 | 11 | **不写系统目录、不引入第二份 CA**；CA 固定在 `etc/ssl/cert.pem` | `AGENTS.md` 9/10 |
 | 12 | **重编代价**：改 builtin 会改 PHP 签名；改 dep 的 recipe 或版本会让依赖它的 PHP 和扩展重编；只改 ext 通常只重编该 ext | `build.sh` |
-| 13 | **下载/离线**：源码包优先仓库 `downloads/`（当前软链到 v1 的），缺的进 `build-php-<版本>/downloads/`；`OFFLINE=1` 是全局离线开关 | `common.sh:find_source` |
-| 14 | **已实现**：`phprt update <依赖> [版本]`（同系列安全更新、`--dry-run`、失败回滚）；**未实现**：install / add 的在线检查（M2）、`--no-update-check`、`--offline` 参数、批量/扩展更新 | 代码现状 |
+| 13 | **下载/离线**：源码包统一放 `.phprt/downloads/`；`download` / `install` / `add ext` / `update` 共用前置下载，`curl -C -` 续传；`--offline` 只用本地 | `runner/sources.sh` |
+| 14 | **已实现**：`phprt update <依赖> [版本]`（同系列安全更新、`--dry-run`、失败回滚）、`phprt download`、`--downloads` / `--downloads-print-urls` / `--offline`；**未实现**：install 的在线版本检查、批量/扩展更新 | 代码现状 |
 | 15 | **所有 pin 都填了真实 `*_SHA256`**（PHP 与全部依赖/扩展），下载即校验 | 2026-11-09 回填 |
 | 16 | **v1 / v2 不能共用一个 `.phprt`**，会互相覆盖。测试项目分开：`v2demo` 最小集、`v2ext` 扩展开发集 | 实测 |
-| 17 | **暂缓/不做**：imap、grpc、mcrypt、odbc、snmp、pspell、dba、solr、oauth、readline、sqlsrv、oci8 | v1 文档 |
+| 17 | **暂缓/不做**：imap、grpc、mcrypt、odbc、snmp、pspell、dba、solr、oauth、sqlsrv、oci8（readline 已在 2026-11-10 接入） | v1 文档 |
 
 ## 3. 三类节点与命名
 
@@ -70,7 +75,7 @@ tools `autoconf perlshim`。
 
 基线 = 当前 pin；目标 = 同系列下一个安全 patch（批次开工时按上游确认，不跨小版本）。
 
-### 4.1 依赖与工具（17）
+### 4.1 依赖与工具
 
 > 2026-11-09：17 个库全部构建成功，SONAME 均有 ABI 号；有安全更新的
 > `libpng` / `aom` / `jpeg` 已完成“基线 → 目标”升级轮（在 v2up 副本里做，
@@ -91,8 +96,10 @@ tools `autoconf perlshim`。
 | libxml2 | dep | zlib | `LIBXML2_VERSION` | 2.15.4 | 2.15.4 | 无（当前即最新） | ✅ |
 | libxslt | dep | libxml2 | `LIBXSLT_VERSION` | 1.1.45 | 1.1.45 | 无（当前即最新） | ✅ |
 | libyaml | dep | — | `LIBYAML_VERSION` | 0.2.5 | 0.2.5 | 无（当前即最新） | ✅ |
+| ncurses | dep | — | `NCURSES_VERSION` | 6.5 | 6.5 | 无（当前即最新） | ✅ |
 | oniguruma | dep | — | `ONIGURUMA_VERSION` | 6.9.10 | 6.9.10 | 无（当前即最新） | ✅ |
 | openldap | dep | — | `OPENLDAP_VERSION` | 2.6.16 | 2.6.16 | 无（当前即最新） | ✅ |
+| readline | dep | ncurses | `READLINE_VERSION` | 8.3 | 8.3 | 无（当前即最新） | ✅ |
 | sqlite | dep | — | `SQLITE_VERSION` | 3.54.1 | 3.54.1 | 无（当前即最新） | ✅ |
 | webp | dep | — | `WEBP_VERSION` | 1.6.0 | 1.6.0 | 无（当前即最新） | ✅ |
 
@@ -116,7 +123,7 @@ tools `autoconf perlshim`。
 > igbinary / msgpack 在 v1 里写 ini 的位置需要迁移时核对（v1 审计表没有列出），
 > 以 v1 recipe 的实际文件名为准，并同步更新本表。
 
-### 4.3 builtin（14）
+### 4.3 builtin（30）
 
 > 2026-11-09：14 个 recipe 全部编译成功，功能调用 14 项全部通过
 > （`intl` 因首次 `--ext` 列表漏写，补编一次后通过），搬移测试通过。
@@ -125,19 +132,74 @@ tools `autoconf perlshim`。
 | 名称 | 依赖 | modules | ini | 升级增量 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | bz2 | bzip2 | bz2 | - | 无（builtin） | ✅ |
+| curl | curl | curl | - | 无（builtin） | ✅ |
 | ffi | libffi | ffi | - | 无（builtin） | ✅ |
 | ftp | — | ftp | - | 无（builtin） | ✅ |
-| gd | zlib, libpng, jpeg, freetype, webp, aom, avif | gd | - | 无（builtin） | ✅ |
+| gd | zlib, libpng（必需）, jpeg, freetype, webp（默认）, aom+avif（可选，默认关闭） | gd | - | 无（builtin） | ✅ |
 | gettext | —（glibc） | gettext | - | 无（builtin） | ✅ |
+| gmp | gmp | gmp | - | 无（builtin） | ✅ |
 | intl | icu | intl | - | 无（builtin） | ✅ |
 | ldap | openldap | ldap | - | 无（builtin） | ✅ |
 | libxml2 | libxml2 | dom,xml,simplexml,xmlreader,xmlwriter,soap | - | 无（builtin） | ✅ |
 | mbstring | oniguruma | mbstring | - | 无（builtin） | ✅ |
-| mysqli | —（mysqlnd） | mysqli,pdo_mysql | - | 无（builtin） | ✅ |
+| mysqli | zlib（mysqlnd 压缩协议） | mysqli | - | 无（builtin） | ✅ |
+| openssl | openssl | openssl | - | 无（builtin） | ✅ |
+| pcntl | — | pcntl | - | 无（builtin） | ✅ |
+| pdo_mysql | zlib（mysqlnd 压缩协议） | pdo_mysql | - | 无（builtin） | ✅ |
+| pcntl | — | pcntl | - | 无（builtin） | ✅ |
+| posix | — | posix | - | 无（builtin） | ✅ |
+| readline | readline（ncurses） | readline | - | 无（builtin） | ✅ |
+| shmop | — | shmop | - | 无（builtin） | ✅ |
+| sockets | — | sockets | - | 无（builtin） | ✅ |
+| sysvmsg | — | sysvmsg | - | 无（builtin） | ✅ |
+| sysvsem | — | sysvsem | - | 无（builtin） | ✅ |
+| sysvshm | — | sysvshm | - | 无（builtin） | ✅ |
+| pdo_pgsql | libpq | pdo_pgsql | - | 无（builtin） | ✅ |
+| pgsql | libpq | pgsql | - | 无（builtin） | ✅ |
+| posix | — | posix | - | 无（builtin） | ✅ |
+| readline | ncurses, readline | readline | - | 无（builtin） | ✅ |
 | sodium | libsodium | sodium | - | 无（builtin） | ✅ |
-| sqlite | sqlite | sqlite3,pdo_sqlite | - | 无（builtin） | ✅ |
+| shmop | — | shmop | - | 无（builtin） | ✅ |
+| sockets | — | sockets | - | 无（builtin） | ✅ |
+| sqlite3 | sqlite | sqlite3,pdo_sqlite | - | 无（builtin） | ✅ |
+| sysvmsg | — | sysvmsg | - | 无（builtin） | ✅ |
+| sysvsem | — | sysvsem | - | 无（builtin） | ✅ |
+| sysvshm | — | sysvshm | - | 无（builtin） | ✅ |
+| tidy | tidy | tidy | - | 无（builtin） | ✅ |
 | xsl | libxslt | xsl | - | 无（builtin） | ✅ |
+| zip | libzip | zip | - | 无（builtin） | ✅ |
 | zlib | zlib | zlib | - | 无（builtin） | ✅ |
+
+gd 的子项由 recipe 的 `opts()` 描述：默认 `jpeg png webp freetype`，`avif` 可选且默认关闭；
+PNG 是 PHP 8.5 gd 的必需项，固定启用。安装时可用 `--opt gd=...` 指定。
+
+其它带子项的扩展（括号内为默认值）：
+
+| 扩展 | 子项 | 影响 |
+| --- | --- | --- |
+| curl | `sftp`（关） | libcurl `--with-libssh2`；多一个 libssh2 依赖 |
+| zip | `bzip2`（关） | libzip `-DENABLE_BZIP2=ON`；多一个 bzip2 依赖 |
+| redis | `lzf`（关） | `--enable-redis-lzf`，用 redis 自带的 FastLZ |
+| openssl | `legacy_provider`（关） | `--with-openssl-legacy-provider`，默认加载老算法 |
+
+默认值原则：只增加体积和依赖的默认关。libpq 固定用 `--with-ssl=openssl`
+（PG 18 的写法；`--with-openssl` 是旧写法），TLS 不再暴露成子项；libpq 不使用
+zlib/ICU，也没有对应子项。
+
+### 数据库扩展与依赖
+
+| 扩展 | 底层依赖 | 说明 |
+| --- | --- | --- |
+| mysqli / pdo_mysql | mysqlnd（PHP 内置）+ zlib | `--with-mysqli=mysqlnd` / `--with-pdo-mysql=mysqlnd`，不下载 MySQL 客户端；mysqlnd 压缩协议用树内 zlib |
+| pgsql / pdo_pgsql | libpq | 两个扩展共用一份 libpq，固定带 TLS |
+| sqlite3（含 pdo_sqlite） | sqlite | 一个 recipe 同时产出 `sqlite3` 和 `pdo_sqlite` |
+
+`mysqlnd`、`libpq`、`sqlite` 是依赖，不是可选扩展：不选对应扩展时不会构建，
+多个扩展选中同一依赖时只构建一次；它们不会出现在 `phprt select` 菜单里。
+
+选择器按 recipe 头部 `category=` 分组，顺序：Database、Cache & Storage、
+Compression、Cryptography、Image Processing、Internationalization、Network、
+Runtime、Other。`menu_order` 只影响分类内顺序。
 
 > builtin 的版本跟 PHP 走，没有独立的“降级/升级”。等价验证是：关闭时 `php -m` 里没有，
 > 开启并重编后有；PHP 自身升级单独做一轮（8.5.11 → 8.5.12）。
@@ -174,7 +236,7 @@ tools `autoconf perlshim`。
 | --- | --- | --- | --- |
 | builtin 单模块 | curl ffi ftp gd gettext gmp intl ldap mbstring sodium tidy xsl zip | `static,shared` | `static` |
 | builtin 核心耦合 | bz2 openssl zlib | `static` | `static` |
-| builtin 多模块 | libxml2 mysqli pgsql sqlite | `static` | `static` |
+| builtin 多模块 | libxml2 sqlite3 | `static` | `static` |
 | PECL 普通 | amqp apcu igbinary imagick memcached mongodb msgpack protobuf rdkafka redis ssh2 yaml | `static,shared` | `shared` |
 | PECL 只 shared | swoole xdebug | `shared` | `shared` |
 
@@ -193,8 +255,8 @@ tools `autoconf perlshim`。
 
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
-| v0 | `openssl zlib curl sqlite mbstring` | 已实现（2026-11-09） |
-| LTO v0 | `--static-all-lto`：PHP + `openssl zlib curl sqlite oniguruma` | 已实现（2026-11-09） |
+| v0 | `openssl zlib curl sqlite3 mbstring` | 已实现（2026-11-09） |
+| LTO v0 | `--static-all-lto`：PHP + `openssl zlib curl sqlite3 oniguruma` | 已实现（2026-11-09） |
 | v1 | `libxml2` 已接入；`libzip`、`libsodium` 待做 | 部分完成（2026-11-09） |
 | v2 | PECL：redis、yaml、ssh2、apcu、msgpack、igbinary、protobuf、amqp、memcached、mongodb、rdkafka | 待做 |
 | v3 | intl/ICU、gd 图片链、xsl、ldap、pgsql、gmp、ffi、tidy | 待做 |
@@ -305,7 +367,7 @@ tools `autoconf perlshim`。
 | --- | --- |
 | 基线 | 关闭该 builtin 编一次，`php -m` 里没有它 |
 | 升级 | 开启后重编 PHP，`php -m` 里出现它 |
-| 多模块 | `libxml2` / `sqlite` / `mysqli` 每个模块都要确认 |
+| 多模块 | `libxml2` / `sqlite3` 每个模块都要确认 |
 | PHP 自身 | 单独一轮：8.5.11 → 8.5.12（两棵树可以并存） |
 
 ## 8. 开发方式
@@ -324,6 +386,7 @@ tools `autoconf perlshim`。
 | 日期 | 模块 | 分类 | 现象 | 处理 | 状态 | 影响框架 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-11-09 | libxml2 / sqlite | 框架 | 同名 builtin/dep，`ext_modules` 取到 dep，报“没有编译” | 加 `ext_recipe_sh`（builtin → ext） | 已修复 | 是 |
+| 2026-11-10 | `enabled_dep_names` | 框架 | 最后一个依赖没编时函数返回 1，`set -e` 下 `php.sh` 静默退出（只选数据库扩展的树才触发） | 函数末尾 `return 0` | 已修复 | 是 |
 | 2026-11-09 | igbinary | 框架 | PECL 的 `3.2.17RC1` 被标成 stable，归一化后变成 `3.2.17`，下载 404 | PECL 解析丢弃 RC/alpha/beta；3.2.16 即最新 | 已修复 | 是 |
 | 2026-11-09 | gmp | 扩展内部 | GMP 6.3.0 的编译器探测程序依赖隐式函数声明，GCC 15 默认 gnu23 报“could not find a working compiler” | recipe 里 `CC=gcc -std=gnu17` | 已修复 | 否 |
 | 2026-11-09 | tidy | 依赖内部 | tidy-html5 5.8.0 的 `cmake_minimum_required(<3.5)` 被 CMake 4 拒绝 | 加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` | 已修复 | 否 |
@@ -535,5 +598,6 @@ PHP 不用重编，重跑 `install` 只补 ini。
 ## 12. 明确不做
 
 imap（uw-imap 维护成本高）、grpc（构建链过重）、mcrypt（已废弃）、
-odbc / snmp / pspell / dba / solr / oauth（小众）、readline（`php -a` 非刚需）、
-sqlsrv / oci8（私有驱动）。
+odbc / snmp / pspell / dba / solr / oauth（小众）、sqlsrv / oci8（私有驱动）。
+readline 原计划不做（`php -a` 非刚需），2026-11-10 按需求接入：新增 ncurses 6.5 和
+GNU readline 8.3 两个依赖，builtin recipe 只在选中时拉依赖，默认集不含它。

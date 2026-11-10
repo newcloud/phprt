@@ -22,12 +22,12 @@ build_args() {
     # OPcache 自 PHP 8.5 起固定编入 PHP，--enable-opcache 已被上游移除
     --enable-filter --enable-phar --enable-fileinfo
     --enable-bcmath --enable-calendar --enable-exif
-    --enable-pcntl --enable-posix --enable-sockets
-    --enable-shmop --enable-sysvmsg --enable-sysvsem --enable-sysvshm
+    # pcntl / posix / sockets / shmop / sysv* 和 readline 现在是 builtin recipe，
+    # 由各自的 flags() 决定 --enable-* / --disable-*（posix 在 PHP 里默认 enabled，
+    # 不选时 recipe 会显式 --disable-posix）。
     # PHP 默认会尝试编译这些扩展。phprtv2 不提供对应 recipe，显式关掉，
-    # 避免 configure 去探测系统库（sqlite3 / libxml2 / zlib）。
+    # 避免 configure 去探测系统库（libxml2 / zlib）。
     # 如果以后加了对应 builtin recipe，它的 --flags 在后面，会覆盖这里的负向参数。
-    --without-sqlite3 --without-pdo-sqlite
     --without-libxml --disable-dom --disable-simplexml
     --disable-xml --disable-xmlreader --disable-xmlwriter
     --without-zlib

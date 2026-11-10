@@ -34,13 +34,13 @@
 
 ```bash
 # 最小版本：现有依赖已经都有 .a
-phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
+phprt install 8.5 --static-all --ext "openssl zlib curl sqlite3 mbstring"
 
 # 只看计划，不构建
-phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring" --plan
+phprt install 8.5 --static-all --ext "openssl zlib curl sqlite3 mbstring" --plan
 
 # 切回普通（依赖动态）安装
-phprt install 8.5 --shared --ext "openssl zlib curl sqlite mbstring"
+phprt install 8.5 --shared --ext "openssl zlib curl sqlite3 mbstring"
 ```
 
 规则：
@@ -99,25 +99,25 @@ PHP 签名包含链接方式：`static` ↔ `shared` 切换会重编 PHP。
 
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
-| v0 | `openssl zlib curl sqlite mbstring` | 已实现（2026-11-09） |
-| LTO | `--static-all-lto`：PHP + `openssl zlib curl sqlite oniguruma` | v0 已实现（2026-11-09） |
+| v0 | `openssl zlib curl sqlite3 mbstring` | 已实现（2026-11-09） |
+| LTO | `--static-all-lto`：PHP + `openssl zlib curl sqlite3 oniguruma` | v0 已实现（2026-11-09） |
 | v1 | `libxml2` 已提供 `.a`；`libzip`、`libsodium` 待做 | 部分完成（2026-11-09） |
 | v2 | PECL：redis、yaml、ssh2、apcu、msgpack、igbinary、protobuf、amqp、memcached、mongodb、rdkafka | 待做 |
 | v3 | intl/ICU、gd 图片链、xsl、ldap、pgsql、gmp、ffi、tidy | 待做 |
 | v4 | imagick | 待做 |
 | 最后 | glibc 全静态实验（`-static`） | 可选 |
 
-v0 选择 `openssl zlib curl sqlite mbstring` 的原因：这些依赖当前已经产出 `.a`，
+v0 选择 `openssl zlib curl sqlite3 mbstring` 的原因：这些依赖当前已经产出 `.a`，
 可以先验证 CLI、链接和验收流程，不需要改任何 `deps/` recipe。
 
-默认集 `openssl zlib libxml2 curl sqlite mysqli mbstring zip sodium gettext`
+默认集 `openssl zlib libxml2 curl sqlite3 mysqli pdo_mysql mbstring zip sodium gettext`
 在 v1 完成后才能全部使用 `--static-all`。
 
 ## 6. 验收
 
 ```bash
 cd /path/to/project
-phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
+phprt install 8.5 --static-all --ext "openssl zlib curl sqlite3 mbstring"
 phprt show
 phprt verify
 ```

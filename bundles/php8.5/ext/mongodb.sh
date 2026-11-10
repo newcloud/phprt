@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=mongodb switch=ENABLE_MONGODB version=MONGODB_VERSION modules=mongodb ini=20-mongodb.ini tools=autoconf,perlshim needs= optional= upstream=pecl:mongodb type=static,shared default=shared
+# phprt: contract=v2 kind=ext name=mongodb switch=ENABLE_MONGODB version=MONGODB_VERSION modules=mongodb ini=20-mongodb.ini tools=autoconf,perlshim needs= optional= upstream=pecl:mongodb type=static,shared default=shared category=Database menu_order=60
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

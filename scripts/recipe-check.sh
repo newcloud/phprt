@@ -79,6 +79,40 @@ for s in "${series[@]}"; do
         fail=1
         continue
       fi
+      if recipe_has_func "$f" opts; then
+        if ! out="$(bash "$f" --opts 2>&1)"; then
+          printf '  ✗ %s/%s opts() 执行失败\n' "$kind" "$name"
+          printf '%s\n' "$out" | sed 's/^/      /'
+          fail=1
+          continue
+        fi
+        if ! printf '%s\n' "$out" | awk -F'\t' '
+          NF == 0 { next }
+          NF < 3 || $1 !~ /^[a-z][a-z0-9_]*$/ || $2 !~ /^(on|off|fixed)$/ || seen[$1]++ {
+            exit 1
+          }
+        '; then
+          printf '  ✗ %s/%s opts() 输出格式错误（需要 key<TAB>state<TAB>label）\n' "$kind" "$name"
+          fail=1
+          continue
+        fi
+        osw okey ostate olabel ovar obad=0
+        osw="$(recipe_field "$f" switch)"
+        while IFS=$'\t' read -r okey ostate olabel; do
+          [ -n "$okey" ] || continue
+          [ "$ostate" = fixed ] && continue
+          ovar="$(ext_opt_var "$osw" "$okey")"
+          if ! grep -q "$ovar" "$f"; then
+            printf '  ✗ %s/%s opts() 的 %s 没有在 recipe 里使用 %s\n' \
+              "$kind" "$name" "$okey" "$ovar"
+            obad=1
+          fi
+        done <<< "$out"
+        if [ "$obad" = 1 ]; then
+          fail=1
+          continue
+        fi
+      fi
       if [ "$deep" != 1 ] || [ "$kind" = builtin ]; then
         printf '  ok %s/%s\n' "$kind" "$name"
         continue

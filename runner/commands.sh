@@ -10,7 +10,9 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
       系列写法（8.5）用 bundle.conf 的 pin；精确写法（8.5.12）装指定版本。
 
       扩展选择:
-      --ext "a b"          选择扩展；默认用 bundle.conf 的 DEFAULT_EXTS
+      --ext "a b"          选择扩展；不写时终端里用菜单交互选择
+      --opt "gd=jpeg,webp" 设置扩展的子选项；需要和 --ext 一起用
+                           未列出的非 fixed 子项关闭，fixed 子项始终开启
 
       编译方式:
       --build "tidy=static,curl=shared"
@@ -22,13 +24,24 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
       --static-all         扩展和第三方依赖都静态链接进 bin/php；
                            type=shared 的扩展（如 xdebug）自动排除。
                            glibc 仍动态，产物可单独复制运行。
-                           当前支持：openssl zlib curl sqlite mbstring
+                           当前支持：openssl zlib curl sqlite3 mbstring
       --static-all-lto     在 --static-all 基础上给 PHP 本体和依赖都开 LTO；
                            状态记录在 .phprt-state/lto。
       不指定时按 recipe 的 default=（builtin 默认 static，PECL 默认 shared）。
 
       其他:
       --plan               只打印构建计划（依赖、PHP、static/shared 分组），不构建
+      --downloads          只把源码下载到 .phprt/downloads，不构建
+      --downloads-print-urls
+                           只打印源码 URL，不下载、不构建
+      --download-jobs N    全局下载并发数（默认 10）
+      --download-host-jobs N
+                           同一站点并发数（默认 2）
+      --timeout N          单个文件最长下载秒数（默认 900）
+      --proxy URL          本次下载使用的代理
+      --ui auto|plain|progress
+                           下载界面；默认终端里用进度框
+      --offline            只用 .phprt/downloads，不联网
       --recompile          强制重编 PHP（依赖和扩展签名保留）
       --clean-src          清空已解压源码，重新解压后再编
       --yes                对提示一律回答“是”
@@ -38,15 +51,35 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
       --host               切回宿主构建（并记为默认）
       --plan               只打印构建计划，不进入 chroot
 
+  phprt download <系列|版本> [--ext "a b"] [--print-urls]
+      只把构建需要的源码包下载到 <项目>/.phprt/downloads。
+      不编译，不创建版本树和构建目录。扩展默认取 DEFAULT_EXTS。
+
+      --ext "a b"             选择扩展；会自动带上依赖和构建工具
+      --print-urls            只打印实际缓存文件名和 URL（#deps-名字 文件）
+      --download-jobs N       全局下载并发数（默认 10）
+      --download-host-jobs N
+                              同一站点并发数（默认 2）
+      --timeout N             单个文件最长下载秒数（默认 900）
+      --proxy URL             本次下载使用的代理
+      --ui auto|plain|progress
+                              下载界面；默认终端里用进度框
+      文件已存在会跳过；中断后再次运行会从断点续传。
+
   phprt update <依赖> [版本]
       依赖库的同系列安全更新（如 openssl 3.5.9 -> 3.5.10）。
       省略版本时查询上游最新安全版本；--dry-run 只打印计划。
       只更新一个依赖；受影响的 PHP/扩展按签名重建。
+      --downloads          只下载目标版本的源码，不修改配置、不构建
+      --downloads-print-urls
+                           只打印目标源码 URL
+      --download-jobs N / --download-host-jobs N / --timeout N / --proxy URL
+                           全局并发、单站点并发、单文件超时、代理
 
       构建环境:
       --chroot / --host    指定构建环境（并记为默认）
 
-  phprt add ext <名字> --shared|--static [--chroot|--host]
+  phprt add ext <名字> --shared|--static [--opt "gd=jpeg,webp"] [--downloads|--downloads-print-urls]
       在当前版本树里加一个扩展。必须先读契约再显式选方式：
 
         --shared   编译成 <名字>.so，不重编 PHP，可随时停用
@@ -54,7 +87,9 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
 
       契约里 type=shared 的（如 xdebug）只能 --shared；
       type=static 的（如 libxml2）只能 --static。
-      已经是同一种方式时直接跳过；切到另一种方式会重编 PHP。
+      已经是同一种方式、又没带 --opt 时直接跳过；带 --opt 会按新子选项重编。
+      切到另一种方式同样会重编 PHP。
+      --opt 只改点名的扩展，树里其它扩展的子选项保持不变。
       不带参数会打印契约支持的方式并退出。
 
   phprt remove ext <名字>
@@ -79,6 +114,25 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
   phprt list
       列出已安装的版本，当前版本前面标 *。
 
+  phprt select [系列|版本]
+      交互选择要编译的扩展和子选项。↑↓ 移动，Home/End 跳转，Space 切换选中，
+      Enter 展开/收起子项（在最后一行「确认并继续」上回车完成）。结果打印到 stdout：
+      扩展: ... / 子选项: ...
+      --default 不进入菜单，直接打印 DEFAULT_EXTS。
+      非终端时也走 --default 的行为。
+
+  phprt ext list [系列] [选项]
+      列出某个 PHP 系列的全部可用扩展，不要求已经安装。
+      不写系列时用当前版本；没有 current 且仓库只有一个 bundle 时自动用它。
+
+      --php <系列>      指定系列，如 --php 8.5
+      --default         只看 DEFAULT_EXTS
+      --installed       只看当前树已启用的扩展
+      --builtin         只看 builtin
+      --pecl            只看 PECL
+      --names           只输出扩展名，一行一个
+      --json            输出 JSON
+
   phprt outdated [--all] [--json] [系列]
       检查上游版本。默认只查当前 php.ini 启用的扩展及其依赖；
       --all 查全部已接入模块；--json 输出机器可读结果。
@@ -97,7 +151,11 @@ contract（recipe 头部）:
   PHPRT_WORK      构建区基目录（默认 <项目>/.phprt）
   OFFLINE=1       不联网（outdated 会直接报告未查询）
   https_proxy / HTTPS_PROXY / http_proxy / HTTP_PROXY
-                  查询和下载使用的代理；直连失败会自动尝试
+                  查询和下载使用的代理；未设置时直连
+  PHPRT_ARIA2=0   禁用 aria2c，强制用 curl
+  PHPRT_ARIA2_CONNECTIONS=4
+                  每个文件用 aria2c 下载时的连接数
+  PHPRT_SELECT=0  禁用交互菜单；TTY 下退回简单的文本提示
 
 扩展清单由 bundles/php<系列>/{builtin,ext}/*.sh 决定；新增一个 recipe
 文件就会出现在可选清单里，不需要改 driver。
@@ -106,10 +164,11 @@ contract（recipe 头部）:
   phprt install 8.5
   phprt install 8.5.12
   phprt install 8.5 --ext "openssl curl zip swoole"
+  phprt install 8.5 --ext "gd" --opt gd=jpeg,png,webp,freetype
   phprt install 8.5 --ext "tidy curl" --build "tidy=static,curl=shared"
   phprt install 8.5 --ext "tidy redis xdebug" --static
-  phprt install 8.5 --static-all --ext "openssl zlib curl sqlite mbstring"
-  phprt install 8.5 --static-all-lto --ext "openssl zlib curl sqlite mbstring"
+  phprt install 8.5 --static-all --ext "openssl zlib curl sqlite3 mbstring"
+  phprt install 8.5 --static-all-lto --ext "openssl zlib curl sqlite3 mbstring"
   phprt add ext tidy --shared
   phprt add ext gmp --static
   phprt add ext redis --shared
@@ -117,6 +176,8 @@ contract（recipe 头部）:
   phprt update openssl 3.5.10 --dry-run
   phprt outdated --all --json
   phprt use 8.5
+  phprt ext list 8.5
+  phprt ext list --php 8.5 --names
   phprt show --tree curl
   phprt buildroot create
   phprt install 8.5 --chroot --ext "curl redis"
@@ -149,6 +210,94 @@ bundle_for() {
 
 normalize_exts() {
   printf '%s' "$1" | tr ',' ' ' | tr -s ' '
+}
+
+# 只准备源码，不编译。参数与 install 的下载部分保持一致。
+cmd_download() {
+  local arg="" exts="" print_urls=0 ext_given=0 opt_spec=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --php)       arg="${2:-}"; shift 2 ;;
+      --php=*)     arg="${1#*=}"; shift ;;
+      --ext)       exts="${2:-}"; ext_given=1; shift 2 ;;
+      --ext=*)     exts="${1#*=}"; ext_given=1; shift ;;
+      --opt)       opt_spec="${opt_spec:+$opt_spec }${2:-}"; shift 2 ;;
+      --opt=*)     opt_spec="${opt_spec:+$opt_spec }${1#*=}"; shift ;;
+      --print-urls|--urls) print_urls=1; shift ;;
+      --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
+      --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
+      --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
+      --ui) export PHPRT_UI="${2:-}"; shift 2 ;;
+      --ui=*) export PHPRT_UI="${1#*=}"; shift ;;
+      --proxy)     export https_proxy="${2:-}" http_proxy="${2:-}" HTTPS_PROXY="${2:-}" HTTP_PROXY="${2:-}"; shift 2 ;;
+      --proxy=*)   export https_proxy="${1#*=}" http_proxy="${1#*=}" HTTPS_PROXY="${1#*=}" HTTP_PROXY="${1#*=}"; shift ;;
+      -h|--help)
+        printf '用法: phprt download <系列|版本> [--ext "a b"] [--opt "gd=jpeg,webp"] [--print-urls] [--download-jobs N] [--download-host-jobs N] [--timeout N] [--proxy URL]\n'
+        return 0 ;;
+      -*) die "未知参数: $1" ;;
+      *)
+        if [ -z "$arg" ]; then arg="$1"; else die "多余参数: $1"; fi
+        shift ;;
+    esac
+  done
+  [ -n "$arg" ] || die "用法: phprt download <系列|版本>（如 download 8.5）"
+
+  local exact=0 series
+  case "$arg" in
+    *.*.*) exact=1 ;;
+  esac
+  if [ "$exact" = 1 ]; then
+    printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$' ||
+      die "版本号格式不对: $arg（精确版如 8.5.12）"
+    series="$(series_of "$arg")"
+  else
+    printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+$' ||
+      die "系列格式不对: $arg（应为 major.minor，如 8.5）"
+    series="$arg"
+  fi
+
+  local bundle
+  bundle="$(bundle_for "$series")" ||
+    die "找不到 bundle: php$series（需要 phprt 仓库或 PHPRT_REPO）"
+  export BUNDLE="$bundle"
+  load_bundle_conf "$bundle" "$series"
+
+  if [ "$exact" = 1 ]; then
+    export PHPRT_PHP_VERSION="$arg"
+    apply_php_override
+  fi
+
+  DOWNLOADS="${PHPRT_DOWNLOADS:-$PHPRT_HOME/downloads}"
+  export DOWNLOADS
+
+  if [ -z "$exts" ]; then
+    exts="${DEFAULT_EXTS:-}"
+  fi
+  exts="$(normalize_exts "$exts")"
+  if [ -n "$opt_spec" ]; then
+    [ "$ext_given" = 1 ] || die "--opt 需要和 --ext 一起用"
+    validate_ext_opts "$exts" "$opt_spec"
+    export PHPRT_EXT_OPTS="$opt_spec"
+  fi
+  load_tree_ext_opts "$(tree_of "$PHP_VERSION")"
+
+  local e mode_env=""
+  for e in $exts; do
+    ext_recipe_sh "$e" >/dev/null 2>&1 || die "未知扩展: $e$(ext_name_hint "$e")"
+    mode_env+="${mode_env:+ }$e=$(recipe_default_mode "$(ext_recipe_sh "$e")")"
+  done
+  export PHPRT_EXT_MODES="$mode_env" SELECTED_EXTS="$exts"
+
+  if [ "$print_urls" = 1 ]; then
+    source_plan "$exts"
+    source_plan_print_urls
+    return 0
+  fi
+
+  prefetch_sources "$exts" 1
 }
 
 # 安装 / 重建 PHP。
@@ -215,16 +364,33 @@ cmd_install() {
   local arg="" exts="" recompile=0 assume_yes=0 plan=0 clean_src=0
   local build_spec="" global_mode="" static_all=0 lto=0 saw_shared=0
   local chroot_mode="" env_set=0
+  local downloads_only=0 print_urls=0 offline=0
+  local ext_given=0 opt_spec=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --ext)       exts="${2:-}"; shift 2 ;;
-      --ext=*)     exts="${1#*=}"; shift ;;
+      --offline)   offline=1; shift ;;
+      --ext)       exts="${2:-}"; ext_given=1; shift 2 ;;
+      --ext=*)     exts="${1#*=}"; ext_given=1; shift ;;
+      --opt)       opt_spec="${opt_spec:+$opt_spec }${2:-}"; shift 2 ;;
+      --opt=*)     opt_spec="${opt_spec:+$opt_spec }${1#*=}"; shift ;;
       --build)     build_spec="${build_spec:+$build_spec,}${2:-}"; shift 2 ;;
       --build=*)   build_spec="${build_spec:+$build_spec,}${1#*=}"; shift ;;
       --static)    global_mode=static; shift ;;
       --static-all) static_all=1; lto=0; global_mode=static; shift ;;
       --static-all-lto) static_all=1; lto=1; global_mode=static; shift ;;
       --shared)    global_mode=shared; saw_shared=1; shift ;;
+      --downloads|--download|--predownload) downloads_only=1; shift ;;
+      --downloads-print-urls|--print-urls|--urls) print_urls=1; shift ;;
+      --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
+      --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
+      --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
+      --ui) export PHPRT_UI="${2:-}"; shift 2 ;;
+      --ui=*) export PHPRT_UI="${1#*=}"; shift ;;
+      --proxy)     export https_proxy="${2:-}" http_proxy="${2:-}" HTTPS_PROXY="${2:-}" HTTP_PROXY="${2:-}"; shift 2 ;;
+      --proxy=*)   export https_proxy="${1#*=}" http_proxy="${1#*=}" HTTPS_PROXY="${1#*=}" HTTP_PROXY="${1#*=}"; shift ;;
       --chroot)    chroot_mode=chroot; env_set=1; shift ;;
       --host)      chroot_mode=host; env_set=1; shift ;;
       --recompile) recompile=1; shift ;;
@@ -237,6 +403,7 @@ cmd_install() {
     esac
   done
   [ -n "$arg" ] || die "用法: phprt install <系列|版本>（如 install 8.5 / install 8.5.12）"
+  [ "$offline" = 1 ] && export OFFLINE=1
   [ "$env_set" = 1 ] && buildroot_set_env "$chroot_mode"
 
   if [ "$static_all" = 1 ]; then
@@ -266,7 +433,7 @@ cmd_install() {
     die "找不到 bundle: php$series（需要 phprt 仓库或 PHPRT_REPO）"
 
   # shellcheck disable=SC1090
-  . "$bundle/bundle.conf"
+  load_bundle_conf "$bundle" "$series"
   export BUNDLE="$bundle"
   pin="$PHP_VERSION"
 
@@ -285,7 +452,8 @@ cmd_install() {
     if [ -n "$imax" ] &&
        [ "$(printf '%s\n%s\n' "$imax" "$concrete" | sort -V | tail -1)" = "$imax" ] &&
        [ "$recompile" != 1 ] && [ "$plan" != 1 ] && [ -z "$exts" ] &&
-       [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ]; then
+       [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ] &&
+       [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ]; then
       if [ "$imax" = "$concrete" ]; then
         ok "PHP $concrete 已安装，无需重复安装"
       else
@@ -314,7 +482,8 @@ cmd_install() {
   # 精确版已装齐：停止（系列版走到这里说明目标高于已装最高版，不会重入）
   if [ "$complete" = 1 ] && [ "$exact" = 1 ] &&
      [ "$recompile" != 1 ] && [ "$plan" != 1 ] && [ -z "$exts" ] &&
-     [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ]; then
+     [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ] &&
+     [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ]; then
     ok "PHP $concrete 已安装"
     [ "$concrete" = "$(current_version 2>/dev/null || true)" ] ||
       printf '    切换: phprt use %s\n' "$concrete"
@@ -338,7 +507,9 @@ cmd_install() {
     if [ -z "$exts" ] && [ -f "$tree/BUILD-PLAN" ]; then
       exts="$(sed -n 's/^EXTENSIONS="\(.*\)"$/\1/p' "$tree/BUILD-PLAN" | head -1)"
     fi
-    if [ -z "$exts" ] && [ -t 0 ] && [ "$assume_yes" != 1 ]; then
+    if [ -z "$exts" ] && [ -t 0 ] && [ "$assume_yes" != 1 ] &&
+       [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ] &&
+       ! ui_select_available; then
       printf '\n可选扩展: %s\n默认: %s\n' \
         "$(BUNDLE="$bundle" all_ext_names | paste -sd' ' -)" "${DEFAULT_EXTS:-}"
       local ans=""
@@ -347,8 +518,37 @@ cmd_install() {
     fi
     [ -n "$exts" ] || exts="${DEFAULT_EXTS:-}"
   fi
-  [ "$exts" = "none" ] && exts=""
+
+  # 没写 --ext 时用 gum 交互选择；--yes / 非终端 / --print-urls 保持原来的
+  # 默认扩展行为，避免脚本和 CI 卡在菜单上。
+  if [ "$ext_given" != 1 ] && [ "$assume_yes" != 1 ] &&
+     [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ] &&
+     ui_select_available; then
+    local init_opts=""
+    [ -f "$tree/.build-opts" ] && init_opts="$(tr '\n' ' ' < "$tree/.build-opts")"
+    init_opts="${init_opts% }"
+    if ui_ext_select "$series" "$concrete" "$tree" "${exts:-${DEFAULT_EXTS:-}}" "$init_opts"; then
+      exts="$UI_SELECTED_EXTS"
+      PHPRT_EXT_OPTS="$UI_SELECTED_OPTS"
+      export PHPRT_EXT_OPTS
+    else
+      printf '已取消\n' >&2
+      return 130
+    fi
+  fi
+
+  if [ "$exts" = "none" ]; then
+    exts=""
+  fi
   exts="$(normalize_exts "$exts")"
+
+  if [ -n "$opt_spec" ]; then
+    [ "$ext_given" = 1 ] ||
+      die "--opt 需要和 --ext 一起用（交互选择时直接在菜单里改子选项）"
+    validate_ext_opts "$exts" "$opt_spec"
+    export PHPRT_EXT_OPTS="$opt_spec"
+  fi
+  load_tree_ext_opts "$tree"
 
   # --static-all 只编契约里支持 static 的扩展；shared-only 直接排除。
   if [ "$static_all" = 1 ] && [ -n "$exts" ]; then
@@ -388,7 +588,21 @@ cmd_install() {
   # 编译方式：--build > --static/--shared > 契约 default
   local mode_env=""
   mode_env="$(resolve_install_modes "$exts" "$build_spec" "$global_mode" "$tree")"
-  export PHPRT_EXT_MODES="$mode_env"
+  export PHPRT_EXT_MODES="$mode_env" SELECTED_EXTS="$exts"
+
+  # 下载与构建分开：先把源码备齐，构建阶段不再联网。
+  if [ "$print_urls" = 1 ]; then
+    source_plan "$exts"
+    source_plan_print_urls
+    return 0
+  fi
+  if [ "$downloads_only" = 1 ]; then
+    prefetch_sources "$exts" 0 || return 1
+    return 0
+  fi
+  if [ "$plan" != 1 ]; then
+    prefetch_sources "$exts" 0 || die "源码下载失败；未进入构建"
+  fi
 
   # 明确的 --recompile 只强制重编 PHP，依赖和扩展签名保留
   local force_php=0
@@ -420,6 +634,7 @@ cmd_install() {
        PHPRT_SEED="${PHPRT_SEED:-}" \
        PHPRT_FORCE_PHP="$force_php" \
        PHPRT_CLEAN_SRC="$clean_src" \
+       PHPRT_NO_DOWNLOAD=1 \
        run_build_env bash "$PHPRT_RUNNER/build.sh" \
          --bundle "$build_bundle" \
          --tree "$tree" \
@@ -477,40 +692,51 @@ installed_dep_version() {
   printf '%s\n' "$found"
 }
 
-# 下载新版本源码包（此时 bundle.conf 里的 SHA 还是旧的，不能走 ensure_source）
+# 下载新版本源码包（此时配置里的 SHA 还是旧版本，不能按新版本校验）。
+# 续传、代理和失败报告统一走 sources.sh。
 download_update_source() {
-  local url="$1" dest="$2" tmp
+  local url="$1" dest="$2" name="$3" ver="$4" label="${5:-deps}"
   mkdir -p "$DOWNLOADS"
-  if [ -s "$dest" ]; then
-    ok "源码已缓存: $(basename "$dest")"
+  if source_cached_ok "$dest" "" "$url"; then
+    ok "[$label] $name $ver  已存在"
     return 0
   fi
-  command -v curl >/dev/null 2>&1 || die "缺少 curl，无法下载 $url"
-  tmp="$DOWNLOADS/.$(basename "$dest").part.$$"
-  rm -f "$tmp"
-  log "下载 $(basename "$dest")"
-  if ! curl -fsSL --connect-timeout 15 --max-time 1800 -o "$tmp" "$url"; then
-    if [ -n "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${HTTP_PROXY:-}" ]; then
-      rm -f "$tmp"
-      die "下载失败: $url"
-    fi
-    log "直连失败，走代理 ${PHPRT_PROXY:-http://127.0.0.1:10808}"
-    curl -fsSL --connect-timeout 15 --max-time 1800 \
-      -x "${PHPRT_PROXY:-http://127.0.0.1:10808}" -o "$tmp" "$url" ||
-      { rm -f "$tmp"; die "下载失败: $url"; }
+  log "[$label] $name $ver  下载中"
+  printf '      %s\n' "$url"
+  if ! source_curl_download "$url" "$dest"; then
+    warn "[$label] $name $ver 失败（文件保留，下次运行可继续）"
+    printf '    %s\n' "$url" >&2
+    return 1
   fi
-  mv -f "$tmp" "$dest"
+  if ! source_verify_file "$dest" "" "$url"; then
+    warn "[$label] $name $ver 下载不完整"
+    return 1
+  fi
+  ok "[$label] $name $ver 完成（$(source_human_size "$dest")）"
 }
 
 cmd_update() {
   local dep="" want="" dry=0 chroot_mode="" env_set=0 a
+  local downloads_only=0 print_urls=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --dry-run) dry=1; shift ;;
+      --downloads|--download|--predownload) downloads_only=1; shift ;;
+      --downloads-print-urls|--print-urls|--urls) print_urls=1; shift ;;
+      --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
+      --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
+      --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
+      --ui) export PHPRT_UI="${2:-}"; shift 2 ;;
+      --ui=*) export PHPRT_UI="${1#*=}"; shift ;;
+      --proxy)   export https_proxy="${2:-}" http_proxy="${2:-}" HTTPS_PROXY="${2:-}" HTTP_PROXY="${2:-}"; shift 2 ;;
+      --proxy=*) export https_proxy="${1#*=}" http_proxy="${1#*=}" HTTPS_PROXY="${1#*=}" HTTP_PROXY="${1#*=}"; shift ;;
       --chroot)  chroot_mode=chroot; env_set=1; shift ;;
       --host)    chroot_mode=host; env_set=1; shift ;;
       -h|--help)
-        printf '用法: phprt update <依赖> [版本] [--dry-run] [--chroot|--host]\n'
+        printf '用法: phprt update <依赖> [版本] [--dry-run] [--downloads] [--downloads-print-urls] [--chroot|--host]\n'
         return 0
         ;;
       -*) die "未知参数: $1" ;;
@@ -529,20 +755,21 @@ cmd_update() {
   [ -n "$dep" ] || die "用法: phprt update <依赖> [版本] [--dry-run]"
   [ "$env_set" = 1 ] && buildroot_set_env "$chroot_mode"
 
-  local ver tree bundle sh vvar uvar svar cur vers
+  local ver tree bundle sh vvar uvar svar cur vers series conf
   ver="$(current_version)" || die "还没有安装 PHP（先跑 phprt install <系列>）"
   tree="$(tree_of "$ver")"
   [ -x "$tree/bin/php" ] || die "树不存在或未构建: $tree"
   [ "$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)" = ok ] ||
     die "上次构建未完成，先跑 phprt install $ver 修好树"
 
-  bundle="$(bundle_for "$(series_of "$ver")")" ||
-    die "找不到 bundle: php$(series_of "$ver")"
+  series="$(series_of "$ver")"
+  bundle="$(bundle_for "$series")" ||
+    die "找不到 bundle: php$series"
   export BUNDLE="$bundle"
-  # shellcheck disable=SC1090
-  . "$bundle/bundle.conf"
+  load_bundle_conf "$bundle" "$series"
   export PHPRT_PHP_VERSION="$ver"
   phprt_set_build_root "$ver"
+  load_tree_ext_opts "$tree"
 
   sh="$bundle/deps/$dep.sh"
   [ -f "$sh" ] || die "未知依赖: $dep（$bundle/deps/ 里没有）"
@@ -575,15 +802,23 @@ cmd_update() {
     die "只允许同系列安全更新：$cur -> $want（跨系列请用 phprt install）"
 
   local conf oldurl newurl archive dest sha bak olddir status
-  conf="$bundle/bundle.conf"
-  oldurl="$(sed -n "s/^$uvar=\"\\([^\"]*\\)\".*$/\\1/p" "$conf" | head -1)"
-  [ -n "$oldurl" ] || die "bundle.conf 里没有 $uvar"
+  conf="$(builder_conf_of "$series")"
+  if [ ! -f "$conf" ]; then
+    conf="$bundle/bundle.conf"
+  fi
+  oldurl="${!uvar:-}"
+  [ -n "$oldurl" ] || die "配置里没有 $uvar"
   case "$oldurl" in
     *"$cur"*) newurl="${oldurl//$cur/$want}" ;;
     *) die "URL 里找不到版本 $cur，不能自动改: $oldurl" ;;
   esac
-  archive="$(basename "$newurl")"
+  archive="$(source_file_of_url "$newurl")"
   dest="$DOWNLOADS/$archive"
+
+  if [ "$print_urls" = 1 ]; then
+    printf '#deps-%s %s\n%s\n' "$dep" "$archive" "$newurl"
+    return 0
+  fi
 
   printf '依赖: %s\n' "$dep"
   printf '  当前: %s\n' "$cur"
@@ -599,7 +834,9 @@ cmd_update() {
     return 0
   fi
 
-  download_update_source "$newurl" "$dest"
+  download_update_source "$newurl" "$dest" "$dep" "$want" deps ||
+    die "源码下载失败；未修改配置"
+  [ "$downloads_only" = 1 ] && return 0
   sha="$(sha256sum "$dest" | cut -d' ' -f1)"
 
   bak="$(mktemp -d "$BUILD_ROOT/update-backup.XXXXXX")"
@@ -628,11 +865,21 @@ cmd_update() {
     die "$reason；已回滚到 $dep $cur"
   }
 
-  sed -i "s|^$vvar=.*|$vvar=$want|" "$conf" || rollback_update "改 $vvar 失败"
-  sed -i "s|^\\($uvar=\"\\)[^\"]*\"|\\1$newurl\"|" "$conf" ||
-    rollback_update "改 $uvar 失败"
+  if grep -q "^$vvar=" "$conf"; then
+    sed -i "s|^$vvar=.*|$vvar=$want|" "$conf" || rollback_update "改 $vvar 失败"
+  else
+    printf '%s=%s\n' "$vvar" "$want" >> "$conf" || rollback_update "写 $vvar 失败"
+  fi
+  if grep -q "^$uvar=" "$conf"; then
+    sed -i "s|^\\($uvar=\"\\)[^\"]*\"|\\1$newurl\"|" "$conf" ||
+      rollback_update "改 $uvar 失败"
+  else
+    printf '%s="%s"\n' "$uvar" "$newurl" >> "$conf" || rollback_update "写 $uvar 失败"
+  fi
   if grep -q "^$svar=" "$conf"; then
     sed -i "s|^$svar=.*|$svar=$sha|" "$conf" || rollback_update "改 $svar 失败"
+  else
+    printf '%s=%s\n' "$svar" "$sha" >> "$conf" || rollback_update "写 $svar 失败"
   fi
   # shellcheck disable=SC1090
   . "$conf"
@@ -648,12 +895,14 @@ cmd_update() {
   export PHPRT_SEED="${PHPRT_SEED:-}"
   export PHPRT_FORCE_PHP=0 PHPRT_CLEAN_SRC=0
 
+  prefetch_sources "$exts" 0 || rollback_update "源码下载失败"
+
   need_cmds flock
   exec 9>"$BUILD_ROOT/.lock"
   flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
 
   log "更新依赖 $dep: $cur -> $want"
-  if ! run_build_env bash "$PHPRT_RUNNER/build.sh" \
+  if ! PHPRT_NO_DOWNLOAD=1 run_build_env bash "$PHPRT_RUNNER/build.sh" \
          --bundle "$bundle" --tree "$tree" --exts "$exts"; then
     rollback_update "构建失败"
   fi
@@ -1067,6 +1316,8 @@ cmd_show() {
       # builtin 的 needs() 依赖 ENABLE_* 开关
       export SELECTED_EXTS="$exts"
       builtin_apply_switches
+      load_tree_ext_opts "$tree"
+      apply_ext_opts
       printf '    链接树:\n'
       show_php_link_tree "$tree"
       local php_closed
@@ -1101,6 +1352,217 @@ cmd_list() {
     else
       printf '  %s\n' "$name"
     fi
+  done
+}
+
+# phprt select [系列|版本] [--php 系列] [--default]
+# 交互选择扩展和子选项，结果打印到 stdout。install 内部也调用同一套 UI。
+cmd_select() {
+  local arg="" php_arg="" use_default=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --php)     php_arg="${2:-}"; shift 2 ;;
+      --php=*)   php_arg="${1#*=}"; shift ;;
+      --default) use_default=1; shift ;;
+      -h|--help)
+        printf '用法: phprt select [系列|版本] [--php 系列] [--default]\n'
+        return 0 ;;
+      -*) die "未知参数: $1" ;;
+      *)  [ -z "$arg" ] || die "多余参数: $1"; arg="$1"; shift ;;
+    esac
+  done
+  [ -n "$arg" ] || arg="$php_arg"
+
+  local series="" concrete="" bundle tree initial init_opts cur
+  if [ -n "$arg" ]; then
+    case "$arg" in
+      *.*.*)
+        printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$' ||
+          die "版本号格式不对: $arg"
+        series="$(series_of "$arg")"
+        concrete="$arg" ;;
+      *)
+        printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+$' ||
+          die "系列格式不对: $arg（应为 major.minor，如 8.5）"
+        series="$arg" ;;
+    esac
+  else
+    cur="$(current_version 2>/dev/null || true)"
+    [ -n "$cur" ] || die "请指定系列，如 phprt select 8.5"
+    series="$(series_of "$cur")"
+    concrete="$cur"
+  fi
+
+  bundle="$(bundle_for "$series")" || die "找不到 bundle: php$series"
+  export BUNDLE="$bundle"
+  load_bundle_conf "$bundle" "$series"
+  [ -n "$concrete" ] || concrete="$PHP_VERSION"
+  export PHPRT_PHP_VERSION="$concrete"
+  tree="$(tree_of "$concrete")"
+
+  cur="$(current_version 2>/dev/null || true)"
+  initial="${DEFAULT_EXTS:-}"
+  if [ -n "$cur" ] && [ "$(series_of "$cur")" = "$series" ]; then
+    initial="$(tree_exts "$cur" 2>/dev/null || true)"
+  fi
+  init_opts=""
+  [ -f "$tree/.build-opts" ] && init_opts="$(tr '\n' ' ' < "$tree/.build-opts")"
+  init_opts="${init_opts% }"
+
+  if [ "$use_default" = 1 ] || ! ui_select_available; then
+    printf '扩展: %s\n' "$initial"
+    [ -n "$init_opts" ] && printf '子选项: %s\n' "$init_opts"
+    return 0
+  fi
+  UI_SELECT_QUIET=1
+  if ! ui_ext_select "$series" "$concrete" "$tree" "$initial" "$init_opts"; then
+    UI_SELECT_QUIET=0
+    return 130
+  fi
+  UI_SELECT_QUIET=0
+  printf '扩展: %s\n' "$UI_SELECTED_EXTS"
+  if [ -n "$UI_SELECTED_OPTS" ]; then
+    printf '子选项: %s\n' "$UI_SELECTED_OPTS"
+  fi
+  return 0
+}
+
+# phprt ext list [系列] [--php 系列] [--default] [--installed]
+#                [--builtin|--pecl] [--names|--json]
+cmd_ext() {
+  local sub="${1:-list}"
+  case "$sub" in
+    list) shift ;;
+    -h|--help)
+      printf '用法: phprt ext list [系列] [--php 系列] [--default] [--installed] [--builtin|--pecl] [--names|--json]\n'
+      return 0 ;;
+    *) die "未知子命令: ext $sub（当前只有 ext list）" ;;
+  esac
+
+  local arg="" php_arg="" only_default=0 only_installed=0 only_kind=""
+  local names=0 json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --php)       php_arg="${2:-}"; shift 2 ;;
+      --php=*)     php_arg="${1#*=}"; shift ;;
+      --all)       shift ;;   # 默认就是全部，保留参数方便脚本
+      --default)   only_default=1; shift ;;
+      --installed) only_installed=1; shift ;;
+      --builtin)   only_kind=builtin; shift ;;
+      --pecl)      only_kind=pecl; shift ;;
+      --names)     names=1; shift ;;
+      --json)      json=1; shift ;;
+      -h|--help)
+        printf '用法: phprt ext list [系列] [--php 系列] [--default] [--installed] [--builtin|--pecl] [--names|--json]\n'
+        return 0 ;;
+      -*) die "未知参数: $1" ;;
+      *)
+        [ -z "$arg" ] || die "多余参数: $1"
+        arg="$1"; shift ;;
+    esac
+  done
+
+  [ -n "$arg" ] || arg="$php_arg"
+  local series="" cur repo display
+  cur="$(current_version 2>/dev/null || true)"
+  if [ -n "$arg" ]; then
+    case "$arg" in
+      *.*.*)
+        printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$' ||
+          die "版本号格式不对: $arg"
+        series="$(series_of "$arg")"
+        display="$arg" ;;
+      *)
+        printf '%s' "$arg" | grep -Eq '^[0-9]+\.[0-9]+$' ||
+          die "系列格式不对: $arg（应为 major.minor，如 8.5）"
+        series="$arg"
+        display="$arg" ;;
+    esac
+  elif [ -n "$cur" ]; then
+    series="$(series_of "$cur")"
+    display="$cur"
+  else
+    repo="$(repo_root)"
+    local -a dirs=("$repo"/bundles/php*)
+    [ -d "${dirs[0]:-}" ] || die "找不到 bundle（需要 phprt 仓库或 PHPRT_REPO）"
+    [ "${#dirs[@]}" -eq 1 ] ||
+      die "有多个 bundle，请指定系列: phprt ext list 8.5"
+    series="$(basename "${dirs[0]}")"
+    series="${series#php}"
+    display="$series"
+  fi
+
+  local bundle
+  bundle="$(bundle_for "$series")" || die "找不到 bundle: php$series"
+  export BUNDLE="$bundle"
+  load_bundle_conf "$bundle" "$series"
+
+  local enabled=" " has_tree=0
+  if [ -n "$cur" ] && [ "$(series_of "$cur")" = "$series" ]; then
+    has_tree=1
+    enabled=" $(tree_exts "$cur") "
+  fi
+  if [ "$only_installed" = 1 ] && [ "$has_tree" != 1 ]; then
+    die "当前没有 PHP $series 的已安装树；先 phprt install $series"
+  fi
+
+  local e sh kind ver modes dflt dflt_set inst cat line
+  local -a rows=()
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    sh="$(ext_recipe_sh "$e")" || continue
+    kind="$(recipe_kind_of "$sh")"
+    [ "$kind" = builtin ] && kind=builtin || kind=pecl
+    [ -n "$only_kind" ] && [ "$kind" != "$only_kind" ] && continue
+
+    ver="$(recipe_version "$sh")"
+    [ -n "$ver" ] || ver="-"
+    modes="$(recipe_types "$sh" | tr ' ' ',')"
+    dflt="$(recipe_default_mode "$sh")"
+    dflt_set=""
+    case " ${DEFAULT_EXTS:-} " in *" $e "*) dflt_set="*" ;; esac
+    inst=""
+    case "$enabled" in *" $e "*) inst="installed" ;; esac
+
+    [ "$only_default" = 1 ] && [ -z "$dflt_set" ] && continue
+    [ "$only_installed" = 1 ] && [ -z "$inst" ] && continue
+
+    cat="$(ext_category_of "$sh")"
+    rows+=("$e|$kind|$ver|$modes|$dflt|$dflt_set|$inst|$cat")
+  done < <(all_ext_names)
+
+  if [ "$names" = 1 ]; then
+    local row
+    for row in "${rows[@]}"; do printf '%s\n' "${row%%|*}"; done
+    return 0
+  fi
+
+  if [ "$json" = 1 ]; then
+    local first=1 name
+    printf '[\n'
+    for row in "${rows[@]}"; do
+      IFS='|' read -r name kind ver modes dflt dflt_set inst cat <<< "$row"
+      [ "$first" = 1 ] || printf ',\n'
+      first=0
+      printf '  {"name":"%s","kind":"%s","version":"%s","modes":"%s","default":"%s","default_set":%s,"installed":%s,"category":"%s"}' \
+        "$name" "$kind" "$ver" "$modes" "$dflt" \
+        "$([ -n "$dflt_set" ] && printf true || printf false)" \
+        "$([ -n "$inst" ] && printf true || printf false)" "$cat"
+    done
+    printf '\n]\n'
+    return 0
+  fi
+
+  local title="可用扩展"
+  [ "$only_default" = 1 ] && title="默认扩展"
+  [ "$only_installed" = 1 ] && title="已启用扩展"
+  printf 'PHP %s %s（%d）\n\n' "$display" "$title" "${#rows[@]}"
+  printf '%-12s %-7s %-10s %-14s %-7s %s\n' NAME KIND VERSION MODES DEFAULT STATUS
+  local row name
+  for row in "${rows[@]}"; do
+    IFS='|' read -r name kind ver modes dflt dflt_set inst cat <<< "$row"
+    printf '%-12s %-7s %-10s %-14s %-7s %s\n' \
+      "$name" "$kind" "$ver" "$modes" "${dflt_set:--}" "${inst:--}"
   done
 }
 
@@ -1144,12 +1606,12 @@ cmd_outdated() {
     ver="$(current_version 2>/dev/null || true)"
   fi
 
-  local bundle
-  bundle="$(bundle_for "${series:-$(series_of "$ver")}")" ||
-    die "找不到 bundle: php${series:-$(series_of "$ver")}"
+  local bundle series_key
+  series_key="${series:-$(series_of "$ver")}"
+  bundle="$(bundle_for "$series_key")" ||
+    die "找不到 bundle: php$series_key"
   export BUNDLE="$bundle"
-  # shellcheck disable=SC1090
-  . "$bundle/bundle.conf"
+  load_bundle_conf "$bundle" "$series_key"
 
   if [ "${OFFLINE:-0}" = 1 ]; then
     printf '离线模式，未查询上游（outdated 需要联网；去掉 OFFLINE=1 再试）\n' >&2
@@ -1198,6 +1660,8 @@ cmd_outdated() {
     # 当前树实际启用的扩展 -> needs/tools 闭包
     export SELECTED_EXTS="$(tree_exts "$ver")"
     builtin_apply_switches
+    load_tree_ext_opts "$(tree_of "$ver")"
+    apply_ext_opts
     local -a queue=()
     local seen=" "
     for x in $SELECTED_EXTS; do queue+=("$x"); done
@@ -1253,19 +1717,35 @@ cmd_add() {
   shift 2 || true
 
   local mode="" a chroot_mode="" env_set=0
-  for a in "$@"; do
+  local downloads_only=0 print_urls=0 opt_spec=""
+  while [ $# -gt 0 ]; do
+    a="$1"
     case "$a" in
       --shared)
         [ -z "$mode" ] || [ "$mode" = shared ] || die "--shared 和 --static 不能同时用"
-        mode=shared ;;
+        mode=shared; shift ;;
       --static)
         [ -z "$mode" ] || [ "$mode" = static ] || die "--shared 和 --static 不能同时用"
-        mode=static ;;
-      --chroot) chroot_mode=chroot; env_set=1 ;;
-      --host)   chroot_mode=host; env_set=1 ;;
-      --yes|-y) ;;
+        mode=static; shift ;;
+      --opt) opt_spec="${opt_spec:+$opt_spec }${2:-}"; shift 2 ;;
+      --opt=*) opt_spec="${opt_spec:+$opt_spec }${1#*=}"; shift ;;
+      --downloads|--download|--predownload) downloads_only=1; shift ;;
+      --downloads-print-urls|--print-urls|--urls) print_urls=1; shift ;;
+      --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
+      --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
+      --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
+      --ui) export PHPRT_UI="${2:-}"; shift 2 ;;
+      --ui=*) export PHPRT_UI="${1#*=}"; shift ;;
+      --proxy)  export https_proxy="${2:-}" http_proxy="${2:-}" HTTPS_PROXY="${2:-}" HTTP_PROXY="${2:-}"; shift 2 ;;
+      --proxy=*) export https_proxy="${1#*=}" http_proxy="${1#*=}" HTTPS_PROXY="${1#*=}" HTTP_PROXY="${1#*=}"; shift ;;
+      --chroot) chroot_mode=chroot; env_set=1; shift ;;
+      --host)   chroot_mode=host; env_set=1; shift ;;
+      --yes|-y) shift ;;
       -h|--help) usage; return 0 ;;
-      *) die "未知参数: $a（add ext 接受 --shared / --static / --chroot / --host）" ;;
+      *) die "未知参数: $a（add ext 接受 --shared / --static / --opt / --downloads / --downloads-print-urls / --chroot / --host）" ;;
     esac
   done
   [ "$env_set" = 1 ] && buildroot_set_env "$chroot_mode"
@@ -1274,16 +1754,14 @@ cmd_add() {
   ver="$(current_version)" || die "还没有 current 版本"
   export PHPRT_PHP_VERSION="$ver"
   phprt_set_build_root "$ver"
-  ensure_base_files
-  need_cmds flock
-  exec 9>"$BUILD_ROOT/.lock"
-  flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
   tree="$(tree_of "$ver")"
   bundle="$(bundle_for "$(series_of "$ver")")" || die "缺少 bundle: php$(series_of "$ver")"
+  load_bundle_conf "$bundle" "$(series_of "$ver")"
   export BUNDLE="$bundle" TREE="$tree" PREFIX="$tree" DEPS="$tree/deps"
+  load_tree_ext_opts "$tree"
 
   tree_link="$(link_mode_get "$tree" 2>/dev/null || true)"
-  sh="$(ext_recipe_sh "$name")" || die "未知扩展: $name"
+  sh="$(ext_recipe_sh "$name")" || die "未知扩展: $name$(ext_name_hint "$name")"
   types="$(recipe_types "$sh")"
   dflt="$(recipe_default_mode "$sh")"
 
@@ -1315,12 +1793,6 @@ cmd_add() {
   done
   cur="$(ext_current_mode "$tree" "$name" 2>/dev/null || true)"
 
-  if [ "$cur" = "$mode" ] && [ "$present" = 1 ]; then
-    enable_ext "$name"
-    ok "$name 已经是 $mode 方式"
-    return 0
-  fi
-
   # 现有扩展的实际模式 + 本次目标
   list="$(tree_exts "$ver")"
   case " $list " in *" $name "*) ;; *) list="$list $name" ;; esac
@@ -1334,6 +1806,30 @@ cmd_add() {
     fi
     mode_env="$mode_env${mode_env:+ }$e=$em"
   done
+  export PHPRT_EXT_MODES="$mode_env" SELECTED_EXTS="$list"
+  if [ -n "$opt_spec" ]; then
+    validate_ext_opts "$list" "$opt_spec"
+    # 只改这次点名的扩展；其它扩展沿用树里已有的 .build-opts
+    export PHPRT_EXT_OPTS="$(ext_opts_merge "${PHPRT_EXT_OPTS:-}" "$opt_spec")"
+  fi
+
+  if [ "$print_urls" = 1 ]; then
+    source_plan "$list"
+    source_plan_print_urls
+    return 0
+  fi
+  if [ "$downloads_only" = 1 ]; then
+    prefetch_sources "$list" 0 || return 1
+    return 0
+  fi
+
+  # 没带 --opt 且已经在同一种模式下：只补 ini，不重编。
+  # 带 --opt 时即使已安装也要重编——否则没法改子选项。
+  if [ "$cur" = "$mode" ] && [ "$present" = 1 ] && [ -z "$opt_spec" ]; then
+    enable_ext "$name"
+    ok "$name 已经是 $mode 方式"
+    return 0
+  fi
 
   if [ "$mode" = shared ] && [ "$cur" = static ]; then
     warn "$name 当前是 static，改成 shared 需要重编 PHP（先去掉静态版，再编 .so）"
@@ -1345,10 +1841,18 @@ cmd_add() {
     log "编译扩展 $name（shared）"
   fi
 
+  prefetch_sources "$list" 0 || die "源码下载失败；未进入构建"
+
+  ensure_base_files
+  need_cmds flock
+  exec 9>"$BUILD_ROOT/.lock"
+  flock -n 9 || die "另一个 phprt 构建操作正在占用这棵树"
+
   if ! PHPRT_EXT_MODES="$mode_env" \
        PHPRT_SEED="${PHPRT_SEED:-}" \
        PHPRT_FORCE_PHP=0 \
        PHPRT_CLEAN_SRC=0 \
+       PHPRT_NO_DOWNLOAD=1 \
        run_build_env bash "$PHPRT_RUNNER/build.sh" \
          --bundle "$bundle" \
          --tree "$tree" \
@@ -1564,12 +2068,15 @@ main() {
   fi
   case "$cmd" in
     install)  cmd_install "$@" ;;
+    download) cmd_download "$@" ;;
     outdated) cmd_outdated "$@" ;;
     update)   cmd_update "$@" ;;
     use)      cmd_use "$@" ;;
     show)     cmd_show "$@" ;;
     current)  cmd_current ;;
     list|ls)  cmd_list ;;
+    select)   cmd_select "$@" ;;
+    ext)      cmd_ext "$@" ;;
     add)      cmd_add "$@" ;;
     remove|rm) cmd_remove "$@" ;;
     verify)   cmd_verify ;;

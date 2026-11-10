@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=xdebug switch=ENABLE_XDEBUG version=XDEBUG_VERSION modules=xdebug ini=30-xdebug.ini tools=autoconf,perlshim needs=zlib optional= upstream=pecl:xdebug type=shared default=shared
+# phprt: contract=v2 kind=ext name=xdebug switch=ENABLE_XDEBUG version=XDEBUG_VERSION modules=xdebug ini=30-xdebug.ini tools=autoconf,perlshim needs=zlib optional= upstream=pecl:xdebug type=shared default=shared category=Runtime
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

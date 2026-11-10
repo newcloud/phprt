@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=swoole switch=ENABLE_SWOOLE version=SWOOLE_VERSION modules=swoole ini=27-swoole.ini tools=autoconf,perlshim needs=openssl,zlib optional= upstream=pecl:swoole type=shared default=shared
+# phprt: contract=v2 kind=ext name=swoole switch=ENABLE_SWOOLE version=SWOOLE_VERSION modules=swoole ini=27-swoole.ini tools=autoconf,perlshim needs=openssl,zlib optional= upstream=pecl:swoole type=shared default=shared category=Network
 #
 # swoole 6.x 的 SSL 代码无条件编译，上游已移除 --enable-openssl；这里只传
 # --with-openssl-dir，依赖顺序和头/库路径由 needs= 负责，不会产生

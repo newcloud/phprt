@@ -40,8 +40,9 @@ eval "$(./myphp --shell)"   # 想直接敲 php / composer 时
     ├── build-php-8.5.12/    # 编译过程
     │   ├── src/             # 解压的源码
     │   ├── logs/            # configure / make 日志
-    │   ├── downloads/       # 下载的源码包
     │   └── tools/           # 构建工具
+    ├── downloads/           # 所有源码包（PHP、依赖、扩展）
+    │   └── download-urls-php8.5.12-日期.txt
     └── buildroots/          # 可选，chroot 构建环境（需要 sudo）
 ```
 
@@ -54,8 +55,10 @@ eval "$(./myphp --shell)"   # 想直接敲 php / composer 时
 - `etc/conf.d/`：扩展和 CA 的配置。
 - `etc/ssl/cert.pem`：curl / openssl 用的根证书。
 
-**`build-php-8.5.12/`**：编译过程目录，放源码、下载包、日志和构建工具。
+**`build-php-8.5.12/`**：编译过程目录，放源码、日志和构建工具。
 不需要时可以直接删，不影响已经装好的 PHP；下次构建会按需重新生成。构建过程中不要删。
+
+**`downloads/`**：所有源码包。`install`、`add ext`、`update` 会先补齐这里的文件，再开始编译；文件已存在就跳过。
 
 **`buildroots/`**：可选的 chroot 构建环境，`phprt buildroot` 创建。
 不需要时用 `phprt buildroot remove` 删除，不要直接 `rm -rf`，避免残留挂载。
@@ -81,6 +84,79 @@ phprt update openssl --dry-run
 
 `phprt update` 只更新一个依赖库；需要时相关的 PHP 和扩展会重编。
 
+## 提前下载源码
+
+网络不好时，可以先只下载源码，不编译：
+
+```bash
+phprt download 8.5 --ext "swoole openssl curl"
+```
+
+下载目录固定为项目里的 `.phprt/downloads`。`install`、`add ext`、`update`
+也会复用这个目录，文件存在就跳过，不会重复下载。
+
+只查看下载链接，不下载：
+
+```bash
+phprt download 8.5 --ext "swoole openssl curl" --print-urls
+```
+
+输出格式是“实际缓存文件名 + URL”：
+
+```text
+#deps-curl curl-8.23.0.tar.xz
+https://curl.se/download/curl-8.23.0.tar.xz
+#ext-swoole swoole-6.2.5.tgz
+https://pecl.php.net/get/swoole-6.2.5.tgz
+```
+
+`#` 开头是注释，可以直接保存后用 `wget -i` 或 `aria2c -i` 下载。下载完把文件放进
+`.phprt/downloads`，再执行 `phprt install 8.5 --offline`。
+
+`install`、`add ext`、`update` 也接受同样的参数：
+
+```bash
+phprt install 8.5 --ext "swoole openssl curl" --downloads
+phprt install 8.5 --ext "swoole openssl curl" --downloads-print-urls
+phprt add ext swoole --shared --downloads
+phprt update openssl 3.5.10 --downloads
+```
+
+下载默认全局 10 路并发，但同一站点最多 2 个；可以用 `--download-jobs N` 和
+`--download-host-jobs N` 调整。终端里会先列出所有要下载的包和完整地址，然后按这两个限制
+启动；进度框宽度固定，不会随进度数字或 URL 长度变化。框内只显示包名、进度、
+速度和状态，其余显示“等待”，完成一个自动补上下一个。单个文件默认最多下载
+900 秒，可以用 `--timeout N` 调整；超时或连续 60 秒低于 1KB/s 就放弃该文件，
+继续下载其它文件。管道或 CI 里
+自动改成逐行日志，也可以用 `--ui plain` 强制关闭进度框。代理只使用用户配置的
+`http_proxy`、`https_proxy` 或 `--proxy URL`；都没有就直连。中断后再次运行会
+从断点继续。
+
+如果系统里装了 `aria2c`，phprt 会用它替代 curl 下载，每个文件默认 4 个连接，
+大文件通常会快一些。没有 `aria2c` 时自动退回 curl。
+
+```bash
+# Fedora
+sudo dnf install aria2
+# Debian / Ubuntu
+sudo apt install aria2
+```
+
+`PHPRT_ARIA2=0` 可以强制用 curl；`PHPRT_ARIA2_CONNECTIONS=4` 可以调整每个
+文件的连接数。
+
+GitHub 下载会先直连，失败后按顺序尝试镜像：
+
+```text
+https://gh-proxy.com/
+https://ghfast.top/
+https://ghproxy.net/
+https://gh.llkk.cc/
+```
+
+直连默认最多等 60 秒（`PHPRT_GITHUB_DIRECT_TIMEOUT`），之后换镜像并从断点续传。
+镜像列表可以用 `PHPRT_GITHUB_MIRRORS="镜像1 镜像2"` 覆盖；设为空字符串可关闭。
+
 ## 需要安装的环境
 
 构建时需要系统里有 C/C++ 工具链：
@@ -90,30 +166,157 @@ gcc gcc-c++ make cmake pkgconf-pkg-config patchelf
 tar xz unzip binutils m4 perl curl
 ```
 
+可选：`aria2`（提供 `aria2c`）。装了会用它多连接下载，没装用 curl。
+可选：`gum`。只用于下载进度框；没装就用逐行日志。选择扩展的菜单由
+`runner/ui.sh` 自己绘制，不依赖 gum。
+
 Fedora：
 
 ```bash
 sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config patchelf \
-    tar xz unzip binutils m4 perl curl
+    tar xz unzip binutils m4 perl curl aria2
 ```
+
+Debian / Ubuntu 可以额外安装：
+
+```bash
+sudo apt install aria2
+```
+
+`gum` 不在所有发行版的默认仓库里；可以用发行版包、`go install
+github.com/charmbracelet/gum@latest`，或从 GitHub Releases 下载。只影响下载
+进度框的外观，不影响扩展选择。
 
 缺命令时 phprt 会在用到的那一步报 `缺少命令: xxx`。
 
 ## 特点
 
 1. **动态库依赖隔离**：PHP 和扩展运行时只用 `.phprt` 里的库，系统升级 libssl、libcurl 不影响项目。
-2. **足够多的扩展支持**：34 个常用内置和 PECL 扩展，默认集开箱即用。
+2. **足够多的扩展支持**：44 个常用内置和 PECL 扩展，默认集开箱即用。
 3. **项目自包含、可搬移**：`./myphp` 和 `.phprt` 一起复制到别的目录或机器照常运行。
 4. **可直接升级 PHP**：出 8.5.13 时，`phprt install 8.5.13 --ext "..."` 装新版本。
 5. **依赖安全更新**：`phprt update openssl` 自动升到同系列最新安全小版本。
 6. **扩展可增删**：shared 扩展随时加、随时停用，不用重装 PHP。
-7. **可生成单个 php**：`--static-all` / `--static-all-lto` 生成一个 `bin/php`，方便分发（当前支持 openssl zlib curl sqlite mbstring）。
+7. **可生成单个 php**：`--static-all` / `--static-all-lto` 生成一个 `bin/php`，方便分发（当前支持 openssl zlib curl sqlite3 mbstring）。
 8. **干净构建**：可选 chroot 构建环境，不混入宿主工具链。
-9. **离线构建**：提前把源码包放进 phprt 仓库的 `downloads/`，断网时直接构建。
+9. **离线构建**：用 `phprt download` 提前把源码放进 `.phprt/downloads`，断网时直接构建。
 
 ## 支持的扩展
 
-默认集：`openssl zlib libxml2 curl sqlite mysqli mbstring zip sodium gettext`（表中带 ★）。
+查看某个 PHP 系列的全部可用扩展：
+
+```bash
+phprt ext list 8.5
+phprt ext list 8.5 --default
+phprt ext list --php 8.5 --names
+phprt ext list --installed
+phprt ext list 8.5 --json
+```
+
+不写系列时用当前版本；没有 current 且仓库只有一个 bundle 时自动用它。
+`--json` 适合脚本和生成文档表格。
+
+### 交互选择扩展
+
+`phprt install 8.5` 不写 `--ext` 时，需要构建的情况下会打开内置的选择器：
+
+```bash
+phprt install 8.5                  # 选完扩展再装
+phprt select 8.5                   # 只选择并打印，不安装
+phprt install 8.5 --yes            # 不询问，直接用默认集（脚本/CI）
+```
+
+已经装好的树会直接提示“已安装”，不会重新询问；要重新选可以跑
+`phprt select 8.5`，或加 `--recompile` 再安装。
+
+选择器里 `↑↓` 移动，`Home`/`End` 跳到首项/末项，`Space` 切换选中，
+`Enter` 展开或收起有子项的扩展（在最后一行「确认并继续」上回车就是完成），
+`Esc` 取消；在子项或已展开的父行上按 `Esc` 是先收起、再按一次才取消。不是终端、`--yes`、
+`--print-urls` 或 `PHPRT_SELECT=0` 时自动退回默认集。
+
+打开时停在最后的确认行，按 `Home` 回到第一个扩展。菜单画在当前命令行下面，
+不清屏：`$ phprt select 8.5` 那行和上面的历史输出一直看得见，退出后只清掉
+菜单这一块。想要全屏菜单可以设 `PHPRT_ALT_SCREEN=1`。
+
+有子项的扩展展开后直接排在下面：
+
+```text
+选择要编译的扩展 · Space 切换 · Enter 展开/收起
+  Database
+  [x] mysqli
+  [x] pdo_mysql
+  [ ] pdo_pgsql
+  [ ] pgsql
+  [x] sqlite3
+  [ ] mongodb
+  Cache & Storage
+  [ ] memcached
+  [ ] redis ▶
+  Compression
+  [x] zip
+  [x] zlib
+  Image Processing
+> [-] gd ▼
+      [ ] jpeg
+      [x] png (固定)
+      [ ] webp
+      [x] avif
+      [x] freetype
+  ✔ 确认并继续（18 个扩展）
+  Esc 取消 · Home/End 跳转
+```
+
+菜单按 recipe 头部的 `category=` 分组，顺序固定为：Database、Cache & Storage、
+Compression、Cryptography、Image Processing、Internationalization、Network、
+Runtime、Other。分类标题不是可选项，`↑↓`、`Home/End`、`PgUp/PgDn` 会跳过它们。
+
+父行是三态标记：
+
+- `[x]`：选中；有子项时要求所有非固定子项都开
+- `[-]`：选中，但至少有一个非固定子项关着（gd 默认 avif 关，所以默认显示 `[-]`）
+- `[ ]`：未选中
+
+`▼` 表示已展开，`▶` 表示已收起；没有子项的扩展没有箭头。固定子项（`png`）
+始终是 `[x]`，显示成灰色、Space 不会改动它，也不参与“全开”判断。
+
+当前光标行加粗、蓝底白字（`NO_COLOR` 或 `TERM=dumb` 时改反显）。在父行按
+`Space` 切换这个扩展要不要编，重新选中会恢复上次的子项配置；父扩展没选中时
+也能展开，子项显示 `[ ]`，在子项上按 `Space` 会自动选中父扩展。
+
+gd 默认启用 `jpeg png webp freetype`；AVIF 默认关闭。PNG 是 PHP 8.5 gd 的
+硬性依赖，不能关闭。脚本里可以用 `--opt` 直接指定：
+
+```bash
+phprt install 8.5 --ext "gd" --opt gd=jpeg,png,webp,freetype
+phprt install 8.5 --ext "gd" --opt gd=jpeg,png
+phprt install 8.5 --ext "gd" --opt gd=jpeg,png,webp,avif,freetype
+```
+
+`--opt` 的语义是「列出的非 fixed 子项开启，未列出的关闭」；fixed 子项始终开启。
+不写 `--opt` 时用 recipe 里的默认状态。
+
+其它扩展也有子项（括号里是默认值）：
+
+| 扩展 | 子项 | 说明 |
+| --- | --- | --- |
+| curl | `sftp`（关） | SFTP/SCP，会多编一个 libssh2 |
+| zip | `bzip2`（关） | libzip 的 bzip2 后端 |
+| redis | `lzf`（关） | LZF 压缩，用 redis 自带的 FastLZ，不引入外部库 |
+| openssl | `legacy_provider`（关） | 默认加载 legacy provider，兼容老算法/老服务端 |
+
+```bash
+phprt install 8.5 --ext "curl zip" --opt "curl=sftp zip=bzip2"
+phprt add ext redis --shared --opt redis=lzf
+```
+
+`add ext --opt` 会按新子项重编这个扩展（static 的需要重编 PHP），
+树里其它扩展的子项保持不变。
+
+默认集：`openssl zlib libxml2 curl sqlite3 mysqli pdo_mysql mbstring zip sodium gettext pcntl posix sockets shmop sysvmsg sysvsem sysvshm`（表中带 ★）。
+
+数据库相关的扩展拆成独立条目：`mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql`、`sqlite3`
+（`sqlite3` 一起产出 `sqlite3` 和 `pdo_sqlite` 两个模块）。`mysqlnd`、`libpq`、`sqlite`
+是底层依赖，由构建系统按选择自动计算、去重和构建，不出现在扩展清单里。
 
 编译方式：
 
@@ -135,11 +338,27 @@ sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config patchelf \
 | ldap | LDAP 目录 | 静态 | 静态 / shared |
 | libxml2 | XML / DOM / SimpleXML / SOAP | 静态 ★ | 仅静态 |
 | mbstring | 多字节字符串 | 静态 ★ | 静态 / shared |
-| mysqli | MySQL（mysqli / pdo_mysql） | 静态 ★ | 仅静态 |
+| mysqli | MySQL 专用扩展（mysqlnd） | 静态 ★ | 仅静态 |
 | openssl | 加密 / TLS | 静态 ★ | 仅静态 |
-| pgsql | PostgreSQL（pgsql / pdo_pgsql） | 静态 | 仅静态 |
+| pcntl | 进程控制（fork / 信号） | 静态 ★ | 静态 / shared |
+| pdo_mysql | PDO 的 MySQL 驱动（mysqlnd） | 静态 ★ | 仅静态 |
+| pdo_pgsql | PDO 的 PostgreSQL 驱动（libpq） | 静态 | 仅静态 |
+| pgsql | PostgreSQL 专用扩展（libpq） | 静态 | 仅静态 |
+| pcntl | 进程控制 | 静态 ★ | 静态 / shared |
+| posix | POSIX 接口 | 静态 ★ | 静态 / shared |
+| readline | 交互式 CLI 行编辑 | 静态 | 静态 / shared |
+| shmop | 共享内存 | 静态 ★ | 静态 / shared |
+| sockets | Socket 接口 | 静态 ★ | 静态 / shared |
+| sysvmsg | System V 消息队列 | 静态 ★ | 静态 / shared |
+| sysvsem | System V 信号量 | 静态 ★ | 静态 / shared |
+| sysvshm | System V 共享内存 | 静态 ★ | 静态 / shared |
+| posix | POSIX 接口（用户 / 进程信息） | 静态 ★ | 静态 / shared |
+| readline | 交互式 CLI 行编辑（`php -a`） | 关 | 静态 / shared |
+| shmop | 共享内存段 | 静态 ★ | 静态 / shared |
+| sockets | 底层 socket | 静态 ★ | 静态 / shared |
 | sodium | 现代加密 | 静态 ★ | 静态 / shared |
-| sqlite | SQLite（sqlite3 / pdo_sqlite） | 静态 ★ | 仅静态 |
+| sqlite3 | SQLite（含 pdo_sqlite 模块） | 静态 ★ | 仅静态 |
+| sysvmsg / sysvsem / sysvshm | System V IPC（消息 / 信号量 / 共享内存） | 静态 ★ | 静态 / shared |
 | tidy | HTML 清理 | 静态 | 静态 / shared |
 | xsl | XSLT | 静态 | 静态 / shared |
 | zip | ZIP 压缩包 | 静态 ★ | 静态 / shared |

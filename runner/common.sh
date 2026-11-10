@@ -8,9 +8,9 @@ PHPRT_RUNNER="${PHPRT_RUNNER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 export PHPRT_RUNNER
 
 if [ -t 1 ]; then
-  C_R=$'\033[0m'; C_C=$'\033[1;36m'; C_G=$'\033[1;32m'; C_Y=$'\033[1;33m'; C_E=$'\033[1;31m'
+  C_R=$'\033[0m'; C_C=$'\033[1;36m'; C_G=$'\033[1;32m'; C_Y=$'\033[1;33m'; C_E=$'\033[1;31m'; C_D=$'\033[2m'
 else
-  C_R=""; C_C=""; C_G=""; C_Y=""; C_E=""
+  C_R=""; C_C=""; C_G=""; C_Y=""; C_E=""; C_D=""
 fi
 
 log()  { printf '%s==>%s %s\n' "$C_C" "$C_R" "$*"; }
@@ -110,6 +110,10 @@ find_source() {
     dirs+=("$base/downloads")
   done
   dirs+=("$DOWNLOADS")
+  # 旧布局：源码包放在 build-php-<版本>/downloads/。只读兼容，升级后不用重下。
+  for d in "$PHPRT_HOME"/build-php-*/downloads; do
+    [ -d "$d" ] && dirs+=("$d")
+  done
   dirs+=("${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/phprt/downloads")
   dirs+=("$HOME/.phprt/downloads")     # 旧版全局缓存
   dirs+=("$PHPRT_HOME/downloads")      # 更早的 v1 项目布局（只读兼容）
@@ -119,35 +123,36 @@ find_source() {
   return 1
 }
 
+# 下载并校验单个源码包。下载/续传全部交给 curl -C -，这里只做校验和失败报告。
 ensure_source() {
   local name="$1" url="$2" sha="$3"
-  local dst="$DOWNLOADS/$name" tmp
+  local dst="$DOWNLOADS/$name" src
   mkdir -p "$DOWNLOADS"
+
   if [ ! -s "$dst" ]; then
-    local src=""
     src="$(find_source "$name" || true)"
     if [ -n "$src" ]; then
       copy_hard "$src" "$dst"
       ok "源码缓存: $name"
-    else
-      command -v curl >/dev/null 2>&1 || die "缺少 curl，无法下载 $name"
-      log "下载 $name -> $dst"
-      # 唯一临时文件 + 原子改名：多个项目共享同一个 downloads 时不会互相截断
-      tmp="$DOWNLOADS/.${name}.part.$$"
-      rm -f "$tmp"
-      if ! curl -fsSL --connect-timeout 15 --max-time 1800 -o "$tmp" "$url"; then
-        # bundle.conf 的网络约定：先直连；直连失败自动走代理。
-        # 已 export https_proxy 时 curl 优先用用户的，不再叠代理。
-        [ -z "${https_proxy:-}${HTTPS_PROXY:-}" ] || { rm -f "$tmp"; die "下载失败: $url"; }
-        log "直连失败，走代理 ${PHPRT_PROXY:-http://127.0.0.1:10808}"
-        curl -fsSL --connect-timeout 15 --max-time 1800 \
-          -x "${PHPRT_PROXY:-http://127.0.0.1:10808}" -o "$tmp" "$url" ||
-          { rm -f "$tmp"; die "下载失败: $url"; }
-      fi
-      mv -f "$tmp" "$dst"
     fi
   fi
-  sha_check "$dst" "$sha"
+
+  if [ ! -s "$dst" ]; then
+    if [ "${PHPRT_NO_DOWNLOAD:-0}" = 1 ]; then
+      die "源码缺失: $name（构建阶段不再联网；先运行 phprt download）"
+    fi
+    log "下载 $name -> $dst"
+    source_curl_download "$url" "$dst" || die "下载失败: $url"
+  fi
+
+  if ! source_verify_file "$dst" "$sha" "$url"; then
+    if [ "${PHPRT_NO_DOWNLOAD:-0}" = 1 ]; then
+      die "源码校验失败: $name（先运行 phprt download 重新下载）"
+    fi
+    log "重新下载 $name"
+    source_curl_download "$url" "$dst" || die "下载失败: $url"
+    source_verify_file "$dst" "$sha" "$url" || die "源码校验失败: $name"
+  fi
 }
 
 extract() {
@@ -215,13 +220,20 @@ module_sh() {
 }
 
 # 扩展名（builtin / PECL）专用解析：同名 dep 不能抢。
-# 例：libxml2 / sqlite / zlib 的 builtin 与 dep 同名，依赖解析仍走 module_sh
+# 例：libxml2 / zlib 的 builtin 与 dep 同名，依赖解析仍走 module_sh
 # 的 deps 优先顺序，扩展解析走这里。
 ext_recipe_sh() {
   local n="$1"
   [ -f "$BUNDLE/builtin/$n.sh" ] && { printf '%s\n' "$BUNDLE/builtin/$n.sh"; return 0; }
   [ -f "$BUNDLE/ext/$n.sh" ] && { printf '%s\n' "$BUNDLE/ext/$n.sh"; return 0; }
   return 1
+}
+
+# 扩展改过名字时给一句提示（只用于“未知扩展”报错）
+ext_name_hint() {
+  case "$1" in
+    sqlite) printf '；SQLite 已合并到 sqlite3（同时产出 pdo_sqlite）' ;;
+  esac
 }
 
 # 安装位置：dep -> deps/<名字>-<版本>；tool -> tools/<名字>-<版本>；
@@ -285,6 +297,202 @@ builtin_apply_switches() {
     printf -v "$sw" '%s' "$v"
     export "${sw?}"
   done
+}
+
+# ---------------------------------------------------------------------------
+# 扩展子选项：recipe 可选定义 opts()
+#
+# 输出（每行三列，TAB 分隔）：
+#   key<TAB>state<TAB>label
+#
+# state：
+#   on    默认启用
+#   off   默认关闭
+#   fixed 始终启用；界面展示但不可关闭
+#
+# key 映射到环境变量 ${switch}_${KEY}，例如 gd 的 jpeg -> ENABLE_GD_JPEG。
+# 驱动只认这三列，不认具体扩展名；将来要加分组/说明，在后面追加列即可。
+# ---------------------------------------------------------------------------
+ext_opt_var() {  # $1=switch $2=key -> 环境变量名
+  local sw="$1" key="$2"
+  printf '%s_%s\n' "$sw" "$(printf '%s' "$key" | tr '[:lower:]-' '[:upper:]_')"
+}
+
+recipe_opts_meta() {  # $1=recipe 文件 -> key<TAB>state<TAB>label
+  local sh="$1" out
+  recipe_has_func "$sh" opts || return 0
+  out="$(BUNDLE="${BUNDLE:-$(cd "$(dirname "$sh")/.." && pwd)}" bash "$sh" --opts)" ||
+    { warn "读取子选项失败: $sh"; return 1; }
+  printf '%s\n' "$out" | awk -F'\t' '
+    NF == 0 { next }
+    NF < 3 || $1 !~ /^[a-z][a-z0-9_]*$/ || $2 !~ /^(on|off|fixed)$/ || seen[$1]++ {
+      exit 1
+    }
+  ' || { warn "opts() 输出格式错误（需要 key<TAB>state<TAB>label）: $sh"; return 1; }
+  printf '%s\n' "$out"
+}
+
+ext_opts_get() {  # $1="gd=..." $2=扩展名 -> 子选项列表；没写返回 2
+  local pair
+  for pair in $1; do
+    if [ "${pair%%=*}" = "$2" ]; then
+      printf '%s\n' "${pair#*=}"
+      return 0
+    fi
+  done
+  return 2
+}
+
+# ---------------------------------------------------------------------------
+# 扩展分类：选择器按这个顺序分组，recipe 头部用 category=<名字> 声明。
+# 值不能带空格（头部字段用空格分隔）；显示名可以带空格。
+# ---------------------------------------------------------------------------
+PHPRT_EXT_CATEGORIES=(Database CacheStorage Compression Cryptography Image Internationalization Network Runtime Other)
+
+ext_category_rank() {  # $1=分类名 -> 1..N；未知按 Other
+  local c i=0
+  for c in "${PHPRT_EXT_CATEGORIES[@]}"; do
+    i=$((i + 1))
+    [ "$c" = "$1" ] && { printf '%s' "$i"; return 0; }
+  done
+  printf '%s' "${#PHPRT_EXT_CATEGORIES[@]}"
+}
+
+ext_category_label() {  # $1=分类名 -> 界面显示名
+  case "$1" in
+    CacheStorage) printf 'Cache & Storage' ;;
+    Image)        printf 'Image Processing' ;;
+    '')           printf 'Other' ;;
+    *)            printf '%s' "$1" ;;
+  esac
+}
+
+ext_category_of() {  # $1=recipe 文件 -> 分类名（缺省 Other）
+  local c
+  c="$(recipe_field "$1" category)"
+  case " ${PHPRT_EXT_CATEGORIES[*]} " in
+    *" $c "*) printf '%s' "$c" ;;
+    *)        printf 'Other' ;;
+  esac
+}
+
+ext_menu_order() {  # $1=recipe 文件 -> 分类内的排序号（缺省 1000）
+  local o
+  o="$(recipe_field "$1" menu_order)"
+  case "$o" in ''|*[!0-9]*) printf '1000' ;; *) printf '%s' "$o" ;; esac
+}
+
+# 合并两份子选项 spec：同名扩展用新的，其它保留。
+# `add ext --opt` 只改点名的扩展，不该把树里其它扩展的配置重置成默认。
+ext_opts_merge() {  # $1=已有 spec $2=新增 spec
+  local base="${1:-}" add="${2:-}" pair e out=""
+  for pair in $base; do
+    e="${pair%%=*}"
+    case " $add " in
+      *" $e="*) continue ;;
+    esac
+    out="${out}${out:+ }$pair"
+  done
+  for pair in $add; do
+    out="${out}${out:+ }$pair"
+  done
+  printf '%s' "$out"
+}
+
+apply_ext_opts() {
+  local e sh sw key state label var v pair meta list
+  local -A want=()
+  for pair in ${PHPRT_EXT_OPTS:-}; do
+    case "$pair" in
+      *=*) want["${pair%%=*}"]="${pair#*=}" ;;
+      *)   warn "PHPRT_EXT_OPTS 格式应为 扩展=opt1,opt2: $pair" ;;
+    esac
+  done
+  for e in ${SELECTED_EXTS:-}; do
+    sh="$(ext_recipe_sh "$e")" || continue
+    recipe_has_func "$sh" opts || continue
+    sw="$(recipe_field "$sh" switch)"
+    [ -n "$sw" ] || continue
+    meta="$(recipe_opts_meta "$sh")" || continue
+    if [ -n "${want[$e]+x}" ]; then
+      list="${want[$e]}"
+    else
+      list="__default__"
+    fi
+    while IFS=$'\t' read -r key state label; do
+      [ -n "$key" ] || continue
+      var="$(ext_opt_var "$sw" "$key")"
+      if [ "$list" = "__default__" ]; then
+        case "$state" in on|fixed) v=1 ;; *) v=0 ;; esac
+      else
+        case ",$list," in *",$key,"*) v=1 ;; *) v=0 ;; esac
+        [ "$state" = fixed ] && v=1
+      fi
+      printf -v "$var" '%s' "$v"
+      export "$var"
+    done <<< "$meta"
+  done
+}
+
+ext_opts_effective() {  # $1=扩展列表 -> "gd=jpeg,png,..."（只列有 opts 的扩展）
+  local e sh sw key state label var on list out="" meta
+  for e in $1; do
+    sh="$(ext_recipe_sh "$e")" || continue
+    recipe_has_func "$sh" opts || continue
+    sw="$(recipe_field "$sh" switch)"
+    meta="$(recipe_opts_meta "$sh")" || continue
+    list=""
+    while IFS=$'\t' read -r key state label; do
+      [ -n "$key" ] || continue
+      if [ "$state" = fixed ]; then
+        on=1
+      else
+        var="$(ext_opt_var "$sw" "$key")"
+        on="${!var:-0}"
+      fi
+      [ "$on" = 1 ] && list="${list}${list:+,}$key"
+    done <<< "$meta"
+    out="${out}${out:+ }$e=$list"
+  done
+  printf '%s\n' "$out"
+}
+
+validate_ext_opts() {  # $1=扩展列表 $2="gd=jpeg,webp ..."
+  local exts="$1" spec="${2:-}" pair e sh list key k meta
+  local -a keys=()
+  for pair in $spec; do
+    case "$pair" in
+      *=*) e="${pair%%=*}"; list="${pair#*=}" ;;
+      *)   die "--opt 格式应为 扩展=opt1,opt2: $pair" ;;
+    esac
+    case " $exts " in
+      *" $e "*) ;;
+      *) die "--opt 的扩展 $e 不在本次扩展列表里" ;;
+    esac
+    sh="$(ext_recipe_sh "$e")" || die "未知扩展: $e"
+    recipe_has_func "$sh" opts || die "$e 没有可配置的子选项"
+    meta="$(recipe_opts_meta "$sh")" || die "读取 $e 的子选项失败"
+    keys=()
+    while IFS=$'\t' read -r key state label; do
+      [ -n "$key" ] && keys+=("$key")
+    done <<< "$meta"
+    for k in ${list//,/ }; do
+      [ -n "$k" ] || continue
+      case " ${keys[*]} " in
+        *" $k "*) ;;
+        *) die "$e 没有子选项 $k（可用: ${keys[*]}）" ;;
+      esac
+    done
+  done
+}
+
+load_tree_ext_opts() {  # $1=tree；命令行已经给了就不覆盖
+  [ -n "${PHPRT_EXT_OPTS:-}" ] && return 0
+  local f="$1/.build-opts"
+  [ -s "$f" ] || return 0
+  PHPRT_EXT_OPTS="$(tr '\n' ' ' < "$f")"
+  PHPRT_EXT_OPTS="${PHPRT_EXT_OPTS% }"
+  export PHPRT_EXT_OPTS
 }
 
 # ---------------------------------------------------------------------------
@@ -408,7 +616,7 @@ mode_of() {
   m="$(ext_current_mode "$TREE" "$n" 2>/dev/null || true)"
   if [ -n "$m" ]; then
     sh="$(ext_recipe_sh "$n")" || return 1
-    # 老树可能还是契约不允许的方式（zlib/sqlite 以前默认 shared）；
+    # 老树可能还是契约不允许的方式（zlib 以前默认 shared）；
     # 这种情况按契约 default 迁移，不能把不支持的方式带进 build.sh。
     mode_supported "$sh" "$m" && { printf '%s\n' "$m"; return 0; }
   fi
@@ -537,6 +745,18 @@ recipe_validate() {
   [ -z "$missing" ] || die "recipe 缺少必填字段:$missing
 文件: $sh
 规范: docs/RECIPE.md#31-字段矩阵"
+
+  # category：builtin/ext 必填，值必须是已知分类（选择器按它分组）
+  local cat
+  cat="$(recipe_field "$sh" category)"
+  if [ "$kind" = builtin ] || [ "$kind" = ext ]; then
+    [ -n "$cat" ] || die "recipe 缺少 category: $sh（可选: ${PHPRT_EXT_CATEGORIES[*]}）"
+    case " ${PHPRT_EXT_CATEGORIES[*]} " in
+      *" $cat "*) ;;
+      *) die "category 不合法: $cat（$sh）
+可选: ${PHPRT_EXT_CATEGORIES[*]}" ;;
+    esac
+  fi
 
   # switch：builtin/ext 必填且必须是 ENABLE_*，dep/tool 禁止
   sw="$(recipe_field "$sh" switch)"
@@ -697,6 +917,7 @@ recipe_main() {
 
   case "$verb" in
     --meta)    recipe_meta "$sh" ;;
+    --opts)    recipe_has_func "$sh" opts && opts || true ;;
     --version) recipe_version "$sh" ;;
     --flags)
       recipe_has_func "$sh" flags || die "$kind/$name 没有 flags()"
@@ -720,19 +941,18 @@ recipe_main() {
     enable)    recipe_has_func "$sh" enable && enable || true ;;
     verify)    recipe_has_func "$sh" verify && verify || true ;;
     ""|-h|--help)
-      printf '用法: %s {--meta|--version|--flags|--needs|--check|build|stage-static|enable|verify}\n' "$name" ;;
+      printf '用法: %s {--meta|--opts|--version|--flags|--needs|--check|build|stage-static|enable|verify}\n' "$name" ;;
     *) die "未知动词: $verb（$kind/$name）" ;;
   esac
 }
 
 ensure_base_files() {
   # 配置不再放在 .phprt 根下：php.ini / conf.d 都属于具体版本树（标准布局）。
-  # 构建工作区按版本分：build-php-<版本>/{src,logs,tools,downloads,.lock}。
-  # BUILD_ROOT 由调用方在知道 PHP 版本后设置（见 phprt_set_build_root）。
+  # 构建工作区按版本分：build-php-<版本>/{src,logs,tools,.lock}。
+  # 源码包统一放在 .phprt/downloads，不跟构建目录走。
   [ -n "${BUILD_ROOT:-}" ] ||
     die "内部错误：ensure_base_files 之前没有设置 BUILD_ROOT"
-  mkdir -p "$BUILD_ROOT/src" "$BUILD_ROOT/logs" "$BUILD_ROOT/tools" \
-           "$BUILD_ROOT/downloads"
+  mkdir -p "$BUILD_ROOT/src" "$BUILD_ROOT/logs" "$BUILD_ROOT/tools"
 }
 
 default_php_ini() {
@@ -974,7 +1194,7 @@ phprt_set_build_root() {
   BUILD_ROOT="$(phprt_build_root "$1")"
   SRCDIR="$BUILD_ROOT/src"
   LOGS="$BUILD_ROOT/logs"
-  DOWNLOADS="${PHPRT_DOWNLOADS:-$BUILD_ROOT/downloads}"
+  DOWNLOADS="${PHPRT_DOWNLOADS:-$PHPRT_HOME/downloads}"
   export BUILD_ROOT SRCDIR LOGS DOWNLOADS
 }
 
@@ -1028,9 +1248,9 @@ run_build_env() {
   # build.sh 在 chroot 里重新读这些环境变量；先确保它们进入子进程环境
   local v
   for v in SELECTED_EXTS PHPRT_SEED PHPRT_FORCE_PHP PHPRT_CLEAN_SRC \
-           PHPRT_EXT_MODES PHPRT_PHP_VERSION PHPRT_WORK PHPRT_DOWNLOADS \
-           JOBS OFFLINE PHPRT_PROXY https_proxy HTTPS_PROXY \
-           http_proxy HTTP_PROXY NO_PROXY no_proxy GITHUB_TOKEN; do
+           PHPRT_EXT_MODES PHPRT_EXT_OPTS PHPRT_PHP_VERSION PHPRT_WORK \
+           PHPRT_DOWNLOADS PHPRT_NO_DOWNLOAD JOBS OFFLINE https_proxy \
+           HTTPS_PROXY http_proxy HTTP_PROXY NO_PROXY no_proxy GITHUB_TOKEN; do
     [ -n "${!v:-}" ] && export "$v"
   done
 
@@ -1074,10 +1294,10 @@ run_build_env() {
 if [ -n "${BUILD_ROOT:-}" ]; then
   SRCDIR="${SRCDIR:-$BUILD_ROOT/src}"
   LOGS="${LOGS:-$BUILD_ROOT/logs}"
-  DOWNLOADS="${DOWNLOADS:-${PHPRT_DOWNLOADS:-$BUILD_ROOT/downloads}}"
+  DOWNLOADS="${DOWNLOADS:-${PHPRT_DOWNLOADS:-$PHPRT_HOME/downloads}}"
   export SRCDIR LOGS DOWNLOADS
 else
-  DOWNLOADS="${DOWNLOADS:-${PHPRT_DOWNLOADS:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/phprt/downloads}}"
+  DOWNLOADS="${DOWNLOADS:-${PHPRT_DOWNLOADS:-$PHPRT_HOME/downloads}}"
   export DOWNLOADS
 fi
 
@@ -1089,6 +1309,14 @@ export VENDOR
 # 上游版本查询（upstream_latest_* / version_cmp 等），recipe 也能直接用。
 # shellcheck disable=SC1091
 . "$PHPRT_RUNNER/upstream.sh"
+
+# 源码清单与下载
+# shellcheck disable=SC1091
+. "$PHPRT_RUNNER/sources.sh"
+
+# 交互式扩展选择（纯 bash 自绘菜单）
+# shellcheck disable=SC1091
+. "$PHPRT_RUNNER/ui.sh"
 
 # PECL 扩展的通用构建流程（ext_pecl_build），recipe 只写差异部分。
 # shellcheck disable=SC1091
@@ -1150,9 +1378,28 @@ apply_php_override() {
 
 load_config() {
   [ -n "${BUNDLE:-}" ] || return 0
-  # shellcheck disable=SC1090
-  . "$BUNDLE/bundle.conf"
+  load_bundle_conf "$BUNDLE"
   apply_php_override
+}
+
+# 先读 phprt 自带的 bundle 模板，再读项目自己的 builder-<系列>.conf。
+# 项目文件可以只写覆盖项；删掉某行就自动回落到模板值。
+builder_conf_of() {  # $1=系列
+  printf '%s/builder-%s.conf\n' "$PHPRT_HOME" "$1"
+}
+
+load_bundle_conf() {  # $1=bundle 目录 [$2=系列]
+  local b="${1:-${BUNDLE:-}}" series="${2:-}"
+  [ -n "$b" ] || return 0
+  [ -n "$series" ] || series="$(series_of "${PHP_VERSION:-0.0}")"
+  # shellcheck disable=SC1090
+  . "$b/bundle.conf"
+  local p
+  p="$(builder_conf_of "$series")"
+  if [ -f "$p" ]; then
+    # shellcheck disable=SC1090
+    . "$p"
+  fi
 }
 
 dep_dir() { printf '%s/%s-%s\n' "$DEPS" "$1" "$2"; }
@@ -1276,6 +1523,8 @@ enabled_dep_names() {
     d="$(dep_dir_of "$n")" || continue
     [ -d "$d" ] && printf '%s\n' "$n"
   done
+  # 最后一个没编的依赖会让循环返回 1；调用方在 $(...) 里配 set -e 会直接退出。
+  return 0
 }
 
 dep_env() {

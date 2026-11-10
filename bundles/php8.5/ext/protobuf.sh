@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=protobuf switch=ENABLE_PROTOBUF version=PROTOBUF_VERSION modules=protobuf ini=23-protobuf.ini tools=autoconf,perlshim needs= optional= upstream=pecl:protobuf type=static,shared default=shared
+# phprt: contract=v2 kind=ext name=protobuf switch=ENABLE_PROTOBUF version=PROTOBUF_VERSION modules=protobuf ini=23-protobuf.ini tools=autoconf,perlshim needs= optional= upstream=pecl:protobuf type=static,shared default=shared category=Other
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=memcached switch=ENABLE_MEMCACHED version=MEMCACHED_VERSION modules=memcached ini=20-memcached.ini tools=autoconf,perlshim needs=libmemcached,zlib optional= upstream=pecl:memcached type=static,shared default=shared
+# phprt: contract=v2 kind=ext name=memcached switch=ENABLE_MEMCACHED version=MEMCACHED_VERSION modules=memcached ini=20-memcached.ini tools=autoconf,perlshim needs=libmemcached,zlib optional= upstream=pecl:memcached type=static,shared default=shared category=CacheStorage
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

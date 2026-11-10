@@ -38,6 +38,7 @@ source "${PHPRT_RUNNER:?}/common.sh"
 
 flags()  { ... }   # builtin 必填
 needs()  { ... }   # builtin 必填
+opts()   { ... }   # builtin / ext 可选，子选项；见 3.1.1
 build()  { ... }   # ext / dep / tool 必填
 enable() { ... }   # ext 在 ini != - 时必填
 verify() { ... }   # ext 可选
@@ -81,6 +82,8 @@ recipe_main "$@"
 | `wheel` | 禁止 | 禁止 | 可选 | 禁止 | wheel 化例外，默认 `auto`；见第 6 节 |
 | `upstream` | 如需检查更新 | 如需检查更新 | 必填（可为 `none`） | 必填（可为 `none`） | 上游来源：`github:owner/repo`、`pecl:包名`、`phpnet:x.y`、`none`（不检查）；也可改用 `versions()` |
 | `desc` | 可选 | 可选 | 可选 | 可选 | 一行说明，选择器显示，不参与构建 |
+| `category` | 必填 | 必填 | 禁止 | 禁止 | 选择器分组：`Database`、`CacheStorage`、`Compression`、`Cryptography`、`Image`、`Internationalization`、`Network`、`Runtime`、`Other`（不能带空格） |
+| `menu_order` | 可选 | 可选 | 禁止 | 禁止 | 分类内排序号，缺省 1000；只影响选择器顺序 |
 
 说明：
 
@@ -110,8 +113,48 @@ recipe_main "$@"
   `bundle.conf` 覆盖。driver 通过 `recipe_main --version` 取值，不直接读 bundle.conf。
 - **同名解析分两套。** 扩展名（builtin / PECL）用 `ext_recipe_sh`：builtin → ext；
   依赖名（`needs` / `tools`）用 `module_sh`：deps → ext → tools → builtin。
-  `libxml2`、`sqlite`、`zlib`、`curl`、`openssl` 都有同名的 builtin 和 dep，
-  两套解析不能混用。
+  `libxml2`、`zlib`、`curl`、`openssl` 都有同名的 builtin 和 dep，
+  两套解析不能混用（`sqlite3` 拆分后不再同名，依赖统一叫 `sqlite`）。
+
+### 3.1.1 子选项 opts()（builtin / ext 可选）
+
+一个扩展如果有可变的配置项（例如 gd 的 jpeg/webp/avif），在 recipe 里定义
+`opts()`。驱动和 UI 只读它，不写死任何扩展名：
+
+```bash
+opts() {
+  printf '%s\t%s\t%s\n' \
+    jpeg     on    'JPEG 照片' \
+    png      fixed 'PNG（PHP 8.5 gd 必需）' \
+    webp     on    'WebP' \
+    avif     off   'AVIF（可选，默认关闭）' \
+    freetype on    'FreeType 字体'
+}
+```
+
+每行三列，TAB 分隔：
+
+| 列 | 含义 |
+| --- | --- |
+| `key` | `[a-z][a-z0-9_]*`，对应环境变量 `${switch}_${KEY}`，如 `jpeg` → `ENABLE_GD_JPEG` |
+| `state` | `on` 默认启用 / `off` 默认关闭 / `fixed` 始终启用，UI 只展示不可关闭 |
+| `label` | 界面显示文字；可以留空，驱动回退到 key |
+
+规则：
+
+- `opts()` 只对 builtin / ext 有效；dep / tool 不定义。
+- 驱动在 `needs()` / `flags()` 之前设置这些环境变量；recipe 自己决定它们怎么影响
+  依赖和 configure 参数。`fixed` 项也会设成 1。
+- `--opt "名字=key1,key2"` 表示列出的非 fixed 子项开启，未列出的关闭；fixed 始终开启。
+  不写 `--opt` 时按 `state` 的默认。
+- 选择结果写到版本树的 `.build-opts`，`BUILD-PLAN` 里也有 `EXT_OPTS=`；
+  `install` 续建、`add ext`、`update`、`show --tree` 会读回它。
+- 子项影响依赖时：扩展的 `needs()` 读 `${switch}_${KEY}` 返回依赖名，dep recipe 读
+  同一个变量改 configure 参数，并把开关写进 `SIG=`，否则改了子项不会重编依赖。
+  参考 `pgsql`/`ssl`（deps/libpq.sh）、`curl`/`sftp`（deps/curl.sh）、
+  `zip`/`bzip2`（deps/libzip.sh）。
+- `scripts/recipe-check.sh` 会检查三列格式、key 唯一、state 合法，以及非 fixed 的
+  `${switch}_${KEY}` 确实在 recipe 里被使用。
 
 ### 3.2 兼容别名
 
@@ -259,8 +302,8 @@ v0 的支持范围是 `openssl zlib curl sqlite mbstring`；完整计划见
 
 - 版本查询是**纯查询**：不下载、不解压、不写构建目录；结果缓存在
   `~/.cache/phprt/upstream/`（默认 6 小时）。
-- 代理顺序：`https_proxy` / `HTTPS_PROXY` → `http_proxy` / `HTTP_PROXY` → 直连 →
-  `PHPRT_PROXY`。只设 `http_proxy` 时，HTTPS 请求也用它。
+- 代理顺序：`https_proxy` / `HTTPS_PROXY` → `http_proxy` / `HTTP_PROXY` → 直连。
+  只设 `http_proxy` 时，HTTPS 请求也用它。
 - `OFFLINE=1` 时不发起请求。
 - 下载地址默认由已有的 `*_URL` 模板替换版本号得到；URL 规则特殊的再实现 `download_url <版本>`。
 
@@ -401,7 +444,7 @@ L1 必须检查的字段规则：
 
 ```bash
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=curl switch=ENABLE_LIBCURL modules=curl ini=-
+# phprt: contract=v2 kind=builtin name=curl switch=ENABLE_LIBCURL modules=curl ini=- type=static,shared default=static category=Network
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 
@@ -429,7 +472,7 @@ PECL 扩展用 `ext_pecl_build`（`runner/recipe-ext.sh`），recipe 只写差�
 
 ```bash
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=redis switch=ENABLE_REDIS version=REDIS_VERSION modules=redis ini=20-redis.ini tools=autoconf,perlshim needs= optional= upstream=pecl:redis
+# phprt: contract=v2 kind=ext name=redis switch=ENABLE_REDIS version=REDIS_VERSION modules=redis ini=20-redis.ini tools=autoconf,perlshim needs= optional= upstream=pecl:redis category=CacheStorage
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 
@@ -597,8 +640,8 @@ scripts/recipe-check.sh --deep    # 额外确认上游可查、pin 在版本列�
 
 审计发现：
 
-- `libxml2`、`sqlite`、`mysqli` 是多模块，`modules` 必须写全，不能默认 name。
-- `zlib`、`sqlite` 是共享模块，`ini` 不是 `-`；其余 builtin 静态编入。
+- `libxml2` 和 `sqlite3` 是多模块（`sqlite3` 同时产出 `pdo_sqlite`），`modules` 必须写全，不能默认 name。
+- `zlib` 是共享模块，`ini` 不是 `-`；其余 builtin 静态编入。
 - `mbstring` 的开关叫 `ENABLE_ONIGURUMA`，`zip` 叫 `ENABLE_LIBZIP`，不能按 name 推断。
 
 ### 11.3 ext（php8.5）

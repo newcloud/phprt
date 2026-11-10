@@ -26,7 +26,7 @@ done
 [ -n "$TREE" ] || die "缺少 tree"
 
 # shellcheck disable=SC1090
-. "$BUNDLE/bundle.conf"
+load_config
 apply_php_override
 
 # 构建目录按 PHP 版本分（build-php-<版本>）。commands.sh 已经设好就沿用；
@@ -59,6 +59,9 @@ if [ "${PHPRT_CLEAN_SRC:-0}" = 1 ]; then
 fi
 # 先设置 ENABLE_* 开关：builtin 的 --flags/--needs 和条件依赖都读它们
 builtin_apply_switches
+# 子选项（如 gd 的 jpeg/webp/avif）来自命令行或树里的 .build-opts。
+load_tree_ext_opts "$TREE"
+apply_ext_opts
 
 # ---------------------------------------------------------------- 解析 ----
 BUILTINS=""
@@ -69,7 +72,7 @@ for e in $EXTS; do
   elif [ -f "$BUNDLE/ext/$e.sh" ]; then
     PECL+=" $e"
   else
-    die "未知扩展: $e（既不是 builtin 也不是 ext）"
+    die "未知扩展: $e（既不是 builtin 也不是 ext）$(ext_name_hint "$e")"
   fi
 done
 
@@ -155,6 +158,8 @@ export STATIC_EXT_LDFLAGS="$BUILD_ROOT/static-ext-ldflags"
 : > "$LOGS/build.log"
 printf 'building\n' > "$TREE/BUILD-STATUS"
 printf '%s\n' "$SELECTED_EXTS" > "$TREE/.build-exts"
+EXT_OPTS_EFFECTIVE="$(ext_opts_effective "$SELECTED_EXTS")"
+printf '%s\n' "$EXT_OPTS_EFFECTIVE" > "$TREE/.build-opts"
 
 # 先把配置迁/建到树内的标准位置（ext recipe 的 stamp 检查会看这里）
 ensure_tree_config "$TREE"
@@ -168,6 +173,7 @@ PHP_VERSION=$PHP_VERSION
 PHP_URL="$PHP_URL"
 PHP_SHA256="$PHP_SHA256"
 EXTENSIONS="$SELECTED_EXTS"
+EXT_OPTS="$EXT_OPTS_EFFECTIVE"
 MODES="$MODES"
 LINK_MODE="$(link_mode)"
 LTO_MODE="$(lto_mode)"

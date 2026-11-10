@@ -4,6 +4,43 @@
 再后：构建目录按 PHP 版本拆分、精确版不再复制 bundle）。环境：Fedora 43，
 源码包复用 `/home/z/testphp/phprt/downloads`（`downloads` 是指向它的软链）。
 
+## 源码目录调整（2026-11-10）
+
+源码包从 `build-php-<版本>/downloads/` 移到项目级 `.phprt/downloads/`，
+`download` 与 `install` / `add ext` / `update` 共用同一套前置下载逻辑。
+
+已验证：
+
+- `phprt download 8.5 --ext "swoole openssl curl" --print-urls` 输出
+  `#php` / `#deps-*` / `#tools-*` / `#ext-*` + 实际缓存文件名 + URL，
+  且不创建 `.phprt`。
+- 不带 `--ext` 时取 `DEFAULT_EXTS`，依赖闭包和层级正确。
+- 精确版 `phprt download 8.5.13 --ext "swoole" --print-urls` 的 PHP URL
+  换成 8.5.13，依赖仍按 8.5 系列。
+- `phprt install 8.5 --ext "gettext" --downloads` 只下载，不创建
+  `php-8.5.12/`、`build-php-8.5.12/` 或 `current`。
+- 下载完成后再次运行显示“已存在”，不重复下载。
+- 下载清单写在 `.phprt/downloads/download-urls-php8.5.12-日期.txt`。
+- `install --downloads-print-urls` 只打印，不建目录。
+- 构建阶段设置 `PHPRT_NO_DOWNLOAD=1`；`ensure_source` 缺文件直接报错。
+- 单个文件超时（`--timeout N`）只中止该文件，保留已下载部分，继续下载其它文件；
+  失败文件在最后汇总，退出码非 0。
+- 代理只使用用户配置的 `http_proxy` / `https_proxy` / `--proxy`；
+  都没配置就直连。
+- `--ui progress` 在终端里用 gum 外框 + 固定宽度多行进度条；非终端自动退回
+  逐行日志。完整 URL 在框上方打印一次，框内不放 URL，避免宽度和行数跳动。
+  进度按目标文件大小轮询，支持全局并发 10、单站点并发 2、续传起点、速度和超时状态。
+- `phprt ext list 8.5` 列出 44 个扩展；`--default` 18 个；`--installed` 在
+  v2all 中列出 43 个已启用；`--names`、`--json` 输出正常。
+- GitHub 源码先直连，失败后按 `PHPRT_GITHUB_MIRRORS` 顺序换镜像；实测
+  tidy 5.8.0 直连超时后由 `gh-proxy.com` 下载成功，SHA256 匹配。
+- 装有 `aria2c` 时优先用 aria2c（默认每文件 4 连接）下载，失败自动退回 curl；
+  两种方式都验证过本地源下载和 SHA256 校验。
+- 代理设置 `HTTP_PROXY` 时也显式传给 `curl -x`，HTTPS 下载会使用它；
+  `NO_PROXY` / `no_proxy` 仍然生效。
+
+下面“目录整理”一节记录的是调整前的布局，保留作历史记录。
+
 ## 范围
 
 - 只写 PHP 8.5.12。
@@ -268,7 +305,7 @@ perlshim     tool     5.42.0       5.42.3       5.44.0
 - `OFFLINE=1 phprt outdated` 不联网，打印“离线模式，未查询上游”，退出码 3。
   `--offline` 不是 `outdated` 的参数，它属于 `install` / `update`（M2）。
 - 代理：`https_proxy`/`HTTPS_PROXY` 优先，没有时用 `http_proxy`/`HTTP_PROXY`
-  （HTTPS 请求也走它）；代理不通会尝试直连，最后才用 `PHPRT_PROXY`。
+  （HTTPS 请求也走它）；代理不通会尝试直连。
   实测 `http_proxy=http://127.0.0.1:10808` 可用，坏端口会自动直连兜底。
 - 查询结果缓存 6 小时：`~/.cache/phprt/upstream/`。
 
@@ -715,3 +752,81 @@ rootfs 可见性和清理逻辑：
 - PHP 签名不变时跳过 PHP，wheel 重新整理后 `verify` 全绿；
 - 用损坏的 3.5.10 源码包触发构建失败，确认回滚恢复 `bundle.conf`、旧依赖
   目录和 `lib/phprt`，`myphp` 仍能启动。
+
+## 扩展交互选择与 gd 子选项（2026-11-10）
+
+| 检查 | 结果 |
+| --- | --- |
+| `bash gd.sh --opts` | 输出 5 行 `key<TAB>state<TAB>label`；jpeg/webp/freetype=on，png=fixed，avif=off |
+| 默认 flags / needs | `--with-jpeg --with-freetype --with-webp --without-avif`；deps 为 libpng jpeg freetype webp，无 aom/avif |
+| `--opt gd=jpeg,png,webp,avif,freetype` | 增加 `--with-avif`，deps 增加 aom avif |
+| `--opt gd=jpeg,png` | 只保留 jpeg；freetype/webp/avif 都输出 `--without-*` |
+| `--opt gd=` | 只保留固定的 png（libpng） |
+| `--opt gd=bogus` | 报错并列出可用子项 |
+| `install --ext gd --print-urls` | 默认不出现 aom/avif；显式开 avif 后出现 |
+| `phprt select 8.5`（pty） | 打开时停在最后一行「确认并继续」；直接回车使用默认 18 个扩展 |
+| 主列表 gd（pty） | 收起时 `[ ] gd ▶`；展开后子项为 `    [ ] jpeg` / `    [x] png (固定)` / … |
+| 三态标记（pty） | 未选中 `[ ]`；选中但 avif 关时 `[-]`；五个子项全开时 `[x]`；无子项扩展选中直接 `[x]` |
+| 展开/收起（pty） | gd 上 Enter 显示 `▼` 和 5 个子项，再按 Enter 回到 `▶`；普通扩展上 Enter 无动作 |
+| Space 切换（pty） | 父行切换该扩展选中；子行切换子项，父扩展未选中时会先被选中 |
+| 固定子项（pty） | gd 未选中时 png 仍显示 `[x] png (固定)`；灰色显示，Space 无效 |
+| 子项记忆（pty） | 关闭 gd 再打开，子项配置保持（如 jpeg 开、webp 关） |
+| Esc（pty） | 子项或已展开的父行上 Esc 先收起、光标回到父行；收起状态下再按 Esc 退出码 130 |
+| 按键延迟（pty） | 单帧 5–20ms（列表和 opts() 元数据已缓存），帧间无清屏 |
+| 屏幕管理（pty） | 默认同屏绘制，全程没有 smcup/rmcup；每帧以 `\033[0J` 收尾，无 `\033[2J` 重绘 |
+| 命令行保留（pty） | 先打印 `$ phprt select 8.5` 再启动；菜单出现在下一行，运行中和退出后该行都在 |
+| 选中行样式（pty） | 光标行输出 `\033[1;97;44m`（加粗 + 蓝底）；`NO_COLOR=1` 时用 `\033[1;7m` 反显 |
+| alternate screen（pty） | `PHPRT_ALT_SCREEN=1` 时各 1 次 smcup/rmcup，退出恢复原屏幕 |
+| Home/End（pty） | 打开在确认行，`Home` 跳到第一个扩展，`End` 回确认行 |
+| 小窗口（pty，LINES=10） | 视口 6 行（同屏模式预留 4 行），头尾固定，可滚动 |
+| 确认方式 | 只有主菜单最后一行，回车完成；直接回车使用默认 18 个扩展 |
+| 非终端 / `--yes` | 不进入菜单，使用默认集 |
+| `scripts/recipe-check.sh` | 65 个 recipe 通过，新增 opts() 格式与变量检查 |
+| 实际构建 gd（默认子项） | `/tmp` 空项目 `install 8.5 --ext gd --yes` 成功；`gd_info` 为 JPEG/PNG/WebP/FreeType=1、AVIF 空；`.build-opts` 和 `BUILD-PLAN` 记录 `gd=jpeg,png,webp,freetype` |
+| `phprt select` 读取已装树 | 在 gdbuild 中预选 gd，并读回 `.build-opts` 的 jpeg/png/webp/freetype |
+| v2all `phprt verify` | 7 项全绿 |
+
+## 新增子项：pgsql/curl/zip/redis/openssl（2026-11-10）
+
+| 检查 | 结果 |
+| --- | --- |
+| `bash <recipe> --opts` | pgsql `ssl(on)`；curl `sftp(off)`；zip `bzip2(off)`；redis `lzf(off)`；openssl `legacy_provider(off)` |
+| `scripts/recipe-check.sh` | 65 个 recipe 通过；5 个新 key 都在 recipe 里被使用 |
+| `install --plan`（六个扩展，on 状态） | deps 为 `perlshim openssl zlib libssh2 curl bzip2 libzip libpq autoconf` |
+| `add ext redis --shared --opt redis=lzf` | `Redis::COMPRESSION_LZF` 为 true；未重编 PHP |
+| `add ext pgsql --static --opt "pgsql=ssl curl=sftp zip=bzip2 openssl=legacy_provider"` | 一次 PHP 重编全部生效；`pg_config --configure` 为 `--with-ssl=openssl --without-zlib --without-icu`，libpq 链接树内 libssl/libcrypto |
+| curl sftp | `curl_version()["protocols"]` 包含 `sftp`；php 的 NEEDED 有 `libssh2-rt1.so.1` |
+| zip bzip2 | 写入 `ZipArchive::CM_BZIP2` 后 `comp_method=12`，读回内容一致；php 的 NEEDED 有 `libbz2-rt1.0.so.1.0` |
+| openssl legacy_provider | `openssl_get_cipher_methods()` 含 `des-ede3-cbc`、`rc4`、`bf-cbc` |
+| `add ext --opt` 合并 | 树上已有 6 项子选项时，只传 `redis=lzf`，`.build-opts` 其余 5 项保持不变 |
+| `add ext` 无 `--opt` | 已安装且模式相同：1.5 秒返回，不重编 |
+| v2ext `phprt verify` | 7 项全绿 |
+| `install` 全量（`/tmp` 新项目，带 5 项 `--opt`） | 构建成功；`.build-opts` 与 `BUILD-PLAN` 的 `EXT_OPTS=` 都是 `openssl=legacy_provider curl=sftp zip=bzip2 pgsql=ssl redis=lzf` |
+| install 树功能调用 | `sftp=yes`；zip `method=12 ok=yes`；`Redis::COMPRESSION_LZF` true；legacy 算法可用；libpq 链接 libssl/libcrypto |
+| install 树 `phprt verify` | 7 项全绿；`show --tree pgsql` 显示 libpq → libssl → libcrypto |
+
+> 实测发现：PG 18 的 libpq 只用 `--with-ssl=openssl`；zlib/ICU 是服务端用的，
+> libpq 产物没有 libz/ICU 依赖，所以 pgsql 只有 `ssl` 一个子项。
+
+## 数据库扩展拆分与分类菜单（2026-11-10）
+
+| 检查 | 结果 |
+| --- | --- |
+| recipe 结构 | `mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql` 各自独立；`sqlite3` 一个 recipe 同时产出 `sqlite3` + `pdo_sqlite` |
+| 扩展总数 | `phprt ext list 8.5` 列出 36 个（builtin 22 + PECL 14） |
+| `--plan --ext mysqli` / `pdo_mysql` | deps 只有 `zlib`（mysqlnd 压缩协议）；不出现 libpq/sqlite |
+| `--plan --ext pgsql` / `pdo_pgsql` | deps `perlshim openssl libpq` |
+| `--plan --ext "pgsql pdo_pgsql"` | libpq 只出现一次 |
+| `--plan --ext sqlite3` | deps 只有 `sqlite` |
+| 默认集 | `openssl zlib libxml2 curl sqlite3 mysqli pdo_mysql mbstring zip sodium gettext` + 7 个 sys/pcntl 扩展（共 18 个） |
+| `add ext pdo_mysql --static`（v2demo） | `PDO` + `pdo_mysql`，没有 `mysqli`；`--with-pdo-mysql=mysqlnd --without-mysqli` |
+| `add ext sqlite3 --static` | 同时出现 `sqlite3` 与 `pdo_sqlite`，PDO 驱动新增 sqlite |
+| `add ext pdo_pgsql --static` | `pdo_pgsql` 可用；`pg_config --configure` 含 `--with-ssl=openssl`，libpq 链树内 libssl/libcrypto |
+| 老树识别 | v2ext 的 `phprt show` 自动列出 `pdo_mysql pdo_pgsql sqlite3`（按模块名反推） |
+| 菜单（pty） | 分组顺序 Database / Cache & Storage / Compression / …；`Home` 落在 `mysqli`，`End` 回确认行，标题行不可选中 |
+| 分类内顺序 | Database 为 mysqli、pdo_mysql、pdo_pgsql、pgsql、sqlite3、mongodb（`menu_order`） |
+| `--ext sqlite` | 报错：`未知扩展: sqlite；SQLite 已合并到 sqlite3（同时产出 pdo_sqlite）` |
+| `scripts/recipe-check.sh` | 67 个 recipe 通过（含 category 必填校验） |
+| 全量 `install`（仅数据库扩展） | `/tmp` 新项目 `--ext "openssl mysqli pdo_mysql pgsql pdo_pgsql sqlite3"` 成功；`PDO::getAvailableDrivers()` 为 mysql/pgsql/sqlite |
+| install 树 `phprt verify` | 7 项全绿；mysqlnd 压缩协议链的是树内 `libz-rt1.so.1` |
+| 框架修复 | `enabled_dep_names` 在最后一个依赖未构建时返回 1，导致 `php.sh` 在 `set -e` 下静默退出；已加 `return 0` |

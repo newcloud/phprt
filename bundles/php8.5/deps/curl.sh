@@ -3,10 +3,12 @@
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 
-# openssl 是条件依赖：只有 OpenSSL 开关打开时才参与构建顺序和链接；zlib 总是需要
+# openssl 是条件依赖：只有 OpenSSL 开关打开时才参与构建顺序和链接；zlib 总是需要。
+# libssh2 只在 curl 的 sftp 子项打开时需要。
 needs() {
   printf '%s\n' zlib
   [ "${ENABLE_OPENSSL:-0}" = 1 ] && printf '%s\n' openssl
+  [ "${ENABLE_LIBCURL_SFTP:-0}" = 1 ] && printf '%s\n' libssh2
   return 0
 }
 
@@ -14,9 +16,11 @@ build() {
   need_cmds gcc make tar
   lto_on deps && need_cmds gcc-ar gcc-ranlib
 
-  local D SIG TAR SRC OPTS ZLIB_D OPENSSL_D
+  local D SIG TAR SRC OPTS ZLIB_D OPENSSL_D LIBSSH2_D SFTP=0
+  local -a link_deps=(openssl zlib)
   D="$(dep_dir_of curl)"
-  SIG="curl=$LIBCURL_VERSION;openssl=${ENABLE_OPENSSL:-0}:${OPENSSL_VERSION:-none};zlib=1:${ZLIB_VERSION:-none};dict=1"
+  SIG="curl=$LIBCURL_VERSION;openssl=${ENABLE_OPENSSL:-0}:${OPENSSL_VERSION:-none};zlib=1:${ZLIB_VERSION:-none};sftp=${ENABLE_LIBCURL_SFTP:-0}:${LIBSSH2_VERSION:-none};dict=1"
+  [ "${ENABLE_LIBCURL_SFTP:-0}" = 1 ] && { SFTP=1; link_deps+=(libssh2); }
 
   if [ "$FORCE" != 1 ] && stamp_ok curl "$SIG" && [ -f "$D/lib/libcurl.so" ]; then
     ok "libcurl 已安装，跳过"; return 0
@@ -40,7 +44,7 @@ build() {
 
   OPTS=(
     --without-libpsl --without-brotli --without-zstd --without-libidn2
-    --without-libssh2 --without-nghttp2 --without-nghttp3
+    --without-nghttp2 --without-nghttp3
     --disable-ldap --disable-ldaps
     --disable-rtsp --enable-dict --disable-telnet --disable-tftp
     --disable-pop3 --disable-imap --disable-smtp --disable-gopher
@@ -49,6 +53,12 @@ build() {
   )
   ZLIB_D="$(dep_dir_of zlib)"
   OPENSSL_D="$(dep_dir_of openssl)"
+  if [ "$SFTP" = 1 ]; then
+    LIBSSH2_D="$(dep_dir_of libssh2)"
+    OPTS+=(--with-libssh2="$LIBSSH2_D")
+  else
+    OPTS+=(--without-libssh2)
+  fi
   [ "${ENABLE_OPENSSL:-0}" = 1 ] && OPTS+=(--with-openssl="$OPENSSL_D") || OPTS+=(--without-openssl)
   OPTS+=(--with-zlib="$ZLIB_D")
 
@@ -59,10 +69,11 @@ build() {
   lto_c="$(dep_lto_cflags)"
   lto_ld="$(dep_lto_ldflags)"
   ldflags="-L$OPENSSL_D/lib -L$ZLIB_D/lib -Wl,-rpath,$OPENSSL_D/lib:$ZLIB_D/lib -Wl,--enable-new-dtags"
+  [ "$SFTP" = 1 ] && ldflags="$ldflags -L$LIBSSH2_D/lib -Wl,-rpath,$LIBSSH2_D/lib"
   [ -n "$lto_ld" ] && ldflags="$ldflags $lto_ld"
   local -a cfg_env=(
-    PKG_CONFIG_PATH="$(dep_pc_path openssl zlib)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-    CPPFLAGS="$(dep_include_flags openssl zlib)"
+    PKG_CONFIG_PATH="$(dep_pc_path "${link_deps[@]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    CPPFLAGS="$(dep_include_flags "${link_deps[@]}")"
     LDFLAGS="$ldflags"
     AR="$ar_bin"
     RANLIB="$ranlib_bin"

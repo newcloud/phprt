@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=gmp switch=ENABLE_GMP modules=gmp ini=- type=static,shared default=static
+# phprt: contract=v2 kind=builtin name=gmp switch=ENABLE_GMP modules=gmp ini=- type=static,shared default=static category=Other
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

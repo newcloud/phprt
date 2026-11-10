@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=zlib switch=ENABLE_ZLIB modules=zlib ini=- type=static default=static
+# phprt: contract=v2 kind=builtin name=zlib switch=ENABLE_ZLIB modules=zlib ini=- type=static default=static category=Compression
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

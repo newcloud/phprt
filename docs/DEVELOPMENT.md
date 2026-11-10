@@ -104,18 +104,93 @@ scripts/recipe-check.sh --deep    # 再联网确认上游版本
     │   ├── lib/phprt/         # 运行时库 + wheel.map
     │   └── deps/<库>-<版本>/
     ├── build-php-8.5.12/      # 构建区，可删
-    │   ├── src/ logs/ tools/ downloads/
+    │   ├── src/ logs/ tools/
     │   └── .lock
+    ├── downloads/             # 所有源码包，跨版本共享
     └── buildroots/            # 可选，chroot rootfs
 ```
 
 约束：
 
-- `.phprt` 顶层只放 `current`、`php-*`、`build-php-*`、`buildroots`。
+- `.phprt` 顶层只放 `current`、`php-*`、`build-php-*`、`downloads`、`buildroots`。
 - 构建区按 PHP 版本分，删掉只影响该版本的增量重建。
+- 源码包统一放 `.phprt/downloads`，不再写进 `build-php-*`；旧构建目录的
+  `downloads/` 只读兜底。
 - 扩展状态不落盘，按 `myphp` 相同环境跑 `php -m` 推导。
 
-### 3.3 构建基目录
+### 3.3 源码清单与下载
+
+`runner/sources.sh` 负责从 recipe 契约推导源码：
+
+- `version=LIBCURL_VERSION` → `LIBCURL_URL` / `LIBCURL_SHA256` / `LIBCURL_VERSION`；
+- 缓存文件名统一取 URL 最后一段；
+- `#deps-名字 文件` / `#ext-名字 文件` 用于 URL 清单和手动下载；
+- 依赖按 `needs()` + `tools=` 递归，层级 = 依赖最大层级 + 1；
+- 内置扩展没有独立源码，源码来自 PHP 包。
+
+`phprt download`、`install`、`add ext`、`update` 共用 `prefetch_sources`：
+先补齐源码，再构建。构建阶段设置 `PHPRT_NO_DOWNLOAD=1`，缺文件直接报错，
+不会编译到一半再联网。
+
+`curl -C -` 负责续传，不再维护 `.part` 文件；有 SHA256 用 SHA256 判断，
+没有 SHA256 时用远端 `Content-Length` 判断。删除缓存文件时会打印原因。
+
+如果找到 `aria2c`，下载优先用它：每个文件默认 4 连接，`--continue` 续传，
+失败后再退回 curl。`PHPRT_ARIA2=0` 关闭，`PHPRT_ARIA2_CONNECTIONS` 调整连接数。
+aria2c 的控制文件是 `<文件>.aria2`，失败退回 curl 前会清掉。
+
+GitHub 源码先直连，失败后按 `PHPRT_GITHUB_MIRRORS` 的顺序（默认
+gh-proxy.com / ghfast.top / ghproxy.net / gh.llkk.cc）换镜像，前缀形式是
+`<镜像><原始 URL>`。直连默认最多 60 秒，可用 `PHPRT_GITHUB_DIRECT_TIMEOUT`
+调整；换镜像时保留已下载部分继续续传。
+
+终端里 `prefetch_sources` 走 `prefetch_sources_progress`：先打印完整下载地址，
+再用 gum 画固定宽度的框。全局默认最多 10 个在下载，同一 host 最多 2 个；
+队列按依赖顺序扫描，host 满了就跳过，优先启动其它站点。
+GitHub 主站、codeload 和常见镜像算同一个 host 桶。框内只放包名、进度、速度和
+状态，URL 不放进框里，避免每帧宽度和行数变化。主进程轮询目标文件大小和状态
+文件，实时刷新。非终端、`NO_COLOR`、`--ui plain` 时走逐行输出。
+
+### 3.4 交互选择与子选项
+
+`runner/ui.sh` 负责菜单，`install` 不写 `--ext` 且 stdin/stdout 都是终端时调用：
+
+- 主菜单是树形列表：父行是 `[x]/[-]/[ ]` + 名字 + `▼/▶`，展开后子项缩进排在下
+  面；最后一行是「确认并继续」；
+- `Space` 切换父行选中或子项开关，`Enter` 展开/收起（在确认行上回车完成），
+  子项和已展开的父行上 `Esc` 先收起，其它位置 `Esc` 取消；
+- 固定子项（如 gd 的 png）始终 `[x]`、灰色显示、`Space` 无效，也不参与三态判断；
+- 父扩展没选中也能展开，子项显示 `[ ]`；在子项上按 `Space` 会先选中父扩展；
+- 纯 bash 自绘：整帧一次 `printf`，每行 `\r\033[2K` 就地覆盖，不清屏；
+  默认同屏绘制，命令行和历史输出保持可见，退出时只清菜单画布；
+  `PHPRT_ALT_SCREEN=1` 才切 alternate screen；光标行加粗 + 背景色；
+- 扩展列表和 `opts()` 元数据在会话开始时取一次（`UI_EXT_LIST`、`UI_OPTS_META`），
+  按键时只重算被改动的那一行，单帧约 5–20ms；
+- 非终端、`--yes`、`--print-urls` 或 `PHPRT_SELECT=0` 时不进入菜单，沿用默认集。
+
+子项数据只来自 recipe 的 `opts()`（`key<TAB>state<TAB>label`），驱动不写死包名。
+`apply_ext_opts` 把选中的 key 映射成 `${switch}_${KEY}`：
+`gd` + `jpeg` → `ENABLE_GD_JPEG=1`。`fixed` 项始终为 1，未列出的非 fixed 项为 0。
+选择结果写入版本树的 `.build-opts`，`BUILD-PLAN` 里记录 `EXT_OPTS=`；续建、`add ext`、
+`update`、`show --tree` 会读回。命令行 `--opt "gd=jpeg,webp"` 可以跳过菜单直接指定。
+
+子项也可以影响依赖：
+
+- 扩展的 `needs()` 读同一个 `${switch}_${KEY}` 决定加不加依赖（`curl` 的 `sftp` →
+  `libssh2`，`zip` 的 `bzip2` → `bzip2`）；
+- 对应的 dep recipe 读同一个变量改 configure 参数，并把开关写进自己的 `SIG=`，
+  否则改了子项不会触发依赖重编（`deps/libpq.sh`、`deps/curl.sh`、`deps/libzip.sh`）；
+- `install --opt` 是整棵树的完整指定；`add ext --opt` 只覆盖点名的扩展，其余扩展
+  沿用 `.build-opts`（`ext_opts_merge`），且带了 `--opt` 就会重编，即使已经在同一种模式下。
+
+菜单分组来自 recipe 头部的 `category=`（`Database`、`CacheStorage`、`Compression`、
+`Cryptography`、`Image`、`Internationalization`、`Network`、`Runtime`、`Other`）。
+顺序表在 `runner/common.sh` 的 `PHPRT_EXT_CATEGORIES`，分类内可按 `menu_order=` 排序。
+分类标题行不参与导航（`UI_MENU_SKIP`），`↑↓ / Home / End / PgUp / PgDn` 都会跳过。
+数据库扩展按驱动拆分：`mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql`、`sqlite3`
+（含 `pdo_sqlite`）；`mysqlnd`、`libpq`、`sqlite` 是依赖，不进菜单。
+
+### 3.5 构建基目录
 
 `PHPRT_WORK` 可以把构建区放到项目外：
 
@@ -139,7 +214,7 @@ runner/build.sh --bundle <bundle> --tree <tree> --exts "<扩展列表>"
 
 1. 读扩展选择，按 `builtin` / `ext` 分开；
 2. 按 `needs()` 递归算出依赖闭包和拓扑顺序；
-3. 逐个构建依赖；
+3. 逐个构建依赖（源码已由 `prefetch_sources` 备齐）；
 4. 构建 PHP；
 5. 构建 shared 扩展；
 6. 整理运行时库（wheel）；
@@ -226,7 +301,7 @@ autotools 的 `.la` 里记的是绝对路径，依赖目录被清理后旧 `.la`
 ## 7. 全静态相关
 
 - `--static-all`：扩展和第三方依赖都链接进 `bin/php`，glibc 仍动态。
-  当前支持 `openssl zlib curl sqlite mbstring`。见 [STATIC-ALL.md](STATIC-ALL.md)。
+  当前支持 `openssl zlib curl sqlite3 mbstring`。见 [STATIC-ALL.md](STATIC-ALL.md)。
 - `--static-all-lto`：在 `--static-all` 基础上给 PHP 和依赖都开 LTO。
   见 [STATIC-ALL-LTO.md](STATIC-ALL-LTO.md)。
 - 全静态 libc 的分析和发布限制见 [STATIC-LIBC.md](STATIC-LIBC.md)。

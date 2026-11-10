@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=rdkafka switch=ENABLE_RDKAFKA version=RDKAFKA_VERSION modules=rdkafka ini=20-rdkafka.ini tools=autoconf,perlshim needs=librdkafka optional= upstream=pecl:rdkafka type=static,shared default=shared
+# phprt: contract=v2 kind=ext name=rdkafka switch=ENABLE_RDKAFKA version=RDKAFKA_VERSION modules=rdkafka ini=20-rdkafka.ini tools=autoconf,perlshim needs=librdkafka optional= upstream=pecl:rdkafka type=static,shared default=shared category=Network
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

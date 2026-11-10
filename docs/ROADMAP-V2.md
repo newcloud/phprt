@@ -18,12 +18,12 @@ phprtv2 用来验证一套分层：
 | 能力 | 实现位置 | 说明 |
 | --- | --- | --- |
 | 版本树 | `.phprt/php-<版本>/` | 标准 PHP 布局（`bin/etc/lib/deps`），可整体搬移 |
-| 构建区按版本分 | `.phprt/build-php-<版本>/` | `src/logs/tools/downloads`，整目录可删 |
+| 构建区按版本分 | `.phprt/build-php-<版本>/` | `src/logs/tools`，整目录可删 |
 | 精确版安装 | `phprt install 8.5.11` | 不复制 bundle，靠 `apply_php_override` 换版本信息 |
 | 扩展状态 | `runner/common.sh:tree_exts` | 不落盘，按 `myphp` 环境跑 `php -m` |
 | 签名增量构建 | `runner/build.sh` + `.phprt-stamp-*` | 依赖 / PHP / ext 三层签名 |
 | 校验 | `phprt verify` | PHP、扩展、动态库、RPATH、配置路径、CA、wheel |
-| 离线与缓存 | `runner/common.sh:find_source/ensure_source` | 仓库 `downloads/` 为种子，缺包下载到本版本 `build-php-*/downloads/` |
+| 源码清单与下载 | `runner/sources.sh` | `.phprt/downloads` 为项目级缓存；按依赖层级 4 路并发，`curl -C -` 续传 |
 
 这些是后续任务的基座，暂时不动。
 
@@ -49,7 +49,7 @@ driver 只能通过 recipe 的头部字段和标准函数取信息，不能出�
 | --- | --- |
 | `upstream` | 版本发现来源。常见来源不用写函数，driver 调公共实现 |
 | `desc` | 一行说明，交互选择器显示；不参与构建 |
-| `opts` | 可选子开关（如 gd 的图片格式），供选择器生成二级菜单 |
+| `opts` | 可选子开关（如 gd 的图片格式），供选择器展开成子项行 |
 
 ### 3.2 recipe 可选函数（覆盖默认实现）
 
@@ -70,7 +70,7 @@ upstream_latest_github <owner/repo> [--prerelease]
 upstream_latest_pecl <package>
 upstream_latest_php <大版本.小版本>
 upstream_latest_cpan <package>
-http_get <url>                       # 复用 PHPRT_PROXY、超时、User-Agent
+http_get <url>                       # 复用用户代理、超时、User-Agent
 cache_get / cache_put <key> <ttl>    # ~/.cache/phprt/upstream，默认 6 小时
 version_cmp <a> <b>                  # 语义化比较，处理 -dev/-rc
 version_is_safe <当前> <候选>         # 只接受 major.minor 相同、patch 变大
@@ -112,7 +112,7 @@ version_is_safe <当前> <候选>         # 只接受 major.minor 相同、patch
    - `--all`：检查 `bundles/` 里所有已接入的模块（含没启用的），用于评估升级面。
    - `--json` 供后续 UI 或 CI 使用。
    - 支持代理：`https_proxy` / `HTTPS_PROXY`，没有时用 `http_proxy` / `HTTP_PROXY`
-     （HTTPS 请求也走它）；代理失败会尝试直连，最后才用 `PHPRT_PROXY`。
+     （HTTPS 请求也走它）；代理失败会尝试直连。
    - 退出码：查询成功为 0（有没有更新都是 0），网络/上游不可用为 3。
 6. 新增契约门禁：
    - `scripts/recipe-check.sh`：开发用脚本，静态校验全部 recipe；`--deep` 再联网确认
@@ -149,7 +149,7 @@ version_is_safe <当前> <候选>         # 只接受 major.minor 相同、patch
 - 命令：`phprt outdated [--all] [--json] [系列]`。`OFFLINE=1` 是全局离线模式，
   不属于 `outdated` 的参数；离线时 `outdated` 只报告“未查询”，退出码 3。
 - 默认范围 = 当前树的 `php -m` 扩展 + `needs`/`tools` 闭包；`--all` 才遍历全部 recipe。
-  代理顺序：用户代理（https_proxy → http_proxy）→ 直连 → `PHPRT_PROXY`。
+  代理顺序：用户代理（https_proxy → http_proxy）→ 直连。
 - 契约门禁：开发脚本 `scripts/recipe-check.sh [--deep]`，不挂 `phprt` 子命令。
   静态检查覆盖字段、switch、version、ini、函数、顶层代码、依赖可解析、upstream 格式；
   `--deep` 还要求上游可查、pin 在列表里。
@@ -311,20 +311,20 @@ phprt update openssl --dry-run
    ```text
    PHPRT_SEED
    → phprt 仓库 downloads/
-   → .phprt/build-php-<版本>/downloads/
+   → .phprt/downloads/
+   → .phprt/build-php-<版本>/downloads/（旧布局，只读）
    → ~/.cache/phprt/downloads/
    → ~/.phprt/downloads/（旧缓存）
    ```
 
-3. 缺包时**不进入构建**：一次性列出缺的文件名和查找过的目录，退出码 1。
+3. 缺包时**不进入构建**：一次性列出缺的文件名和下载链接，退出码 1。
    提示里直接给补救方式：
 
    ```text
    离线模式缺少源码包：curl-8.23.0.tar.xz
-   请放到以下任一目录后重试：
-     /path/to/phprt/downloads/
-     /path/to/project/.phprt/build-php-8.5.12/downloads/
-   或设置 PHPRT_SEED=/共享盘/phprt-downloads
+   请放到以下目录后重试：
+     /path/to/project/.phprt/downloads/
+   或在可联网环境运行 phprt download 生成链接
    ```
 
    不允许「装到一半才发现缺包」，所有源码包在开始编译前一次性确认。
@@ -362,7 +362,7 @@ phprt update openssl --dry-run
 
 - builtin `gd`：`--with-jpeg --with-png --with-webp --with-avif --with-freetype`
 - 新增 deps：`libjpeg-turbo`、`libpng`、`libwebp`、`libavif`、`freetype`（`libaom` 视 avif 需要而定）
-- `opts=jpeg,png,webp,avif,freetype`，选择器按 `opts` 生成二级菜单，不写死在 UI 里
+- `opts=jpeg,png,webp,avif,freetype`，选择器按 `opts` 展开成子项行，不写死在 UI 里
 - 可选依赖用 `optional=` 表达，未选中的格式不参与链接
 
 ### 6.3 第三批：数据库与国际化
@@ -388,6 +388,12 @@ phprt update openssl --dry-run
 - 对比 `runner/` 目录，除通用逻辑外无非预期改动。
 
 ## 7. M4：交互式扩展选择
+
+> 已实现第一版（2026-11-10）：`runner/ui.sh`、`phprt select`、`install` 无 `--ext`
+> 时的菜单、recipe 的 `opts()` 子选项（gd 已接入）。菜单最初用 `gum choose`，
+> 因为每次动作都要重启进程、整块菜单空白约 250ms，已改为纯 bash 自绘：整帧一次
+> 写出、行级覆盖、会话级 alternate screen，单帧 5–20ms。下面的完整目标（分组、
+> `PHPRT_KEYS` 脚本化按键、`phprt select --out` 等）仍按后续迭代做。
 
 ### 7.1 原型的问题（`gum-test3.sh` demo）
 
@@ -416,7 +422,10 @@ phprt update openssl --dry-run
 优先纯 bash + `tput`（零外部依赖）。如果维护成本过高，再评估：
 
 - `dialog` / `whiptail`：系统常见，但样式受发行版影响。
-- `gum`（charmbracelet）：交互好，但引入外部二进制，离线环境不可用。
+- `gum`（charmbracelet）：交互好，但引入外部二进制，离线环境不可用；每次动作
+  都要重启进程，整块菜单会空白约 250ms（试过，已弃用）。
+
+最终选了纯 bash + ANSI 自绘：整帧一次写出、会话级 alternate screen。
 
 无论选哪种，UI 都放在 `runner/ui.sh`，`command` 只调用 `ui_select`。
 

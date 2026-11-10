@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=igbinary switch=ENABLE_IGBINARY version=IGBINARY_VERSION modules=igbinary ini=20-igbinary.ini tools=autoconf,perlshim needs= optional= upstream=pecl:igbinary type=static,shared default=shared
+# phprt: contract=v2 kind=ext name=igbinary switch=ENABLE_IGBINARY version=IGBINARY_VERSION modules=igbinary ini=20-igbinary.ini tools=autoconf,perlshim needs= optional= upstream=pecl:igbinary type=static,shared default=shared category=Other
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

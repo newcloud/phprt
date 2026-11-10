@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=imagick switch=ENABLE_IMAGICK version=IMAGICK_VERSION modules=imagick ini=20-imagick.ini tools=autoconf,perlshim needs=imagemagick optional= upstream=pecl:imagick type=static,shared default=shared
+# phprt: contract=v2 kind=ext name=imagick switch=ENABLE_IMAGICK version=IMAGICK_VERSION modules=imagick ini=20-imagick.ini tools=autoconf,perlshim needs=imagemagick optional= upstream=pecl:imagick type=static,shared default=shared category=Image
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

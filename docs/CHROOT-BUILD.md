@@ -54,7 +54,7 @@ phprt buildroot env [chroot|host]
 
 ```bash
 phprt buildroot create
-phprt install 8.5 --chroot --ext "openssl zlib curl sqlite mbstring"
+phprt install 8.5 --chroot --ext "openssl zlib curl sqlite3 mbstring"
 phprt verify
 ```
 
@@ -118,7 +118,7 @@ PHPRT_REPO PHPRT_RUNNER PHPRT_PROJECT PHPRT_HOME PHPRT_WORK
 PHPRT_SEED PHPRT_DOWNLOADS PHPRT_PHP_VERSION PHPRT_EXT_MODES
 PHPRT_FORCE_PHP PHPRT_CLEAN_SRC PHPRT_LINK_MODE PHPRT_LTO
 BUILD_ROOT BUNDLE TREE PREFIX DEPS SELECTED_EXTS DOWNLOADS VENDOR
-JOBS OFFLINE PHPRT_PROXY https_proxy HTTPS_PROXY http_proxy HTTP_PROXY
+JOBS OFFLINE https_proxy HTTPS_PROXY http_proxy HTTP_PROXY
 HOME=/home/phprt PATH=... TMPDIR=/tmp
 ```
 
@@ -162,7 +162,7 @@ ca-certificates
 2026-11-09 真实环境（Fedora 43，sudo 非交互）：
 
 - `create`：409 包 / 659M；dnf 缓存复用后再次 create 约 20s。
-- `phprt install 8.5 --chroot --ext "openssl zlib curl sqlite mbstring"`：
+- `phprt install 8.5 --chroot --ext "openssl zlib curl sqlite3 mbstring"`：
   在 chroot 里完成依赖和 PHP 构建；宿主 `phprt verify` 全绿。
 - `phprt add ext tidy --shared --chroot`：只编 tidy 和它的依赖，宿主功能调用通过。
 - 产物属主是宿主 `1000:1000`（`--userspec`），不是 root。
@@ -181,6 +181,8 @@ ca-certificates
 - rootfs 在项目内时，chroot 内通过项目 bind 还会看到它一次；构建只用精确路径。
 - `PHPRT_WORK`、`PHPRT_SEED`、`PHPRT_DOWNLOADS` 在项目/仓库外时会自动追加 bind；
   其他外部路径需要放进 `PHPRT_CHROOT_BINDS`。
+- 项目 `.phprt/downloads` 在项目 bind 内，chroot 里直接可见；用
+  `PHPRT_DOWNLOADS` 指到项目外时会自动追加 bind。
 - 仓库/项目的 `downloads/` 如果是软链，会自动把真实目录也 bind 进去；
   宿主 `~/.cache/phprt/downloads` 仍不会自动进入 chroot，需要时用
   `PHPRT_SEED` 或 `PHPRT_DOWNLOADS`。
