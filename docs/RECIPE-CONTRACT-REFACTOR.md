@@ -6,7 +6,7 @@
 >
 > 目标文档：`docs/RECIPE.md`（规范）、`docs/EXTENSIONS.md`（进度与台账）
 >
-> 本文只描述方案，不代表已经实现。
+> 本文描述方案；当前实施状态见第 0 节。
 
 ## 0. 实施状态（2026-11-10）
 
@@ -18,7 +18,7 @@
 | Phase 3 | 已完成 | accessor 收口；消费者侧不再直接读字段 |
 | Phase 4 | 已完成 | builtin `needs=`、`notes.conf`、readline/ncurses/posix note |
 | Phase 5 | 部分完成 | AGENTS 读取顺序、templates、verify modules；lint/doc-check 待做 |
-| Phase 6 | 部分完成 | ext `configure_args()` 已进 JSON；版本/source/opts/wheel 收口待做 |
+| Phase 6 | 部分完成 | ext `configure_args()` 已进 JSON；recipe-check 复用 opts validator；版本/source/wheel 收口待做 |
 | Phase 7 | 部分完成 | `tests/contract` fixtures；v3 decoder 待做 |
 
 ## 1. 目标
@@ -157,7 +157,7 @@
 | `flags_source` | string | `flags()`、`configure_args()` 或 `build()` |
 | `flags_on` | string[]/null | switch=1 或默认子项时的 configure 参数 |
 | `flags_off` | string[]/null | switch=0 时的 configure 参数 |
-| `hooks` | string[] | 实现的函数 |
+| `hooks` | string[] | 实现的函数（含 `configure_args`） |
 | `upstream` | string/null | 版本来源 |
 | `notes` | object[] | `{slug, text}` |
 

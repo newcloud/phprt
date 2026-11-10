@@ -223,7 +223,6 @@ _recipe_validate_field() {  # $1=file $2=key $3=value $4=kind
 recipe_validate() {
   local sh="$1" kind name hdr key row missing="" dup bad
   local scope req val dflt has allowed required
-  local -a spec_keys=()
 
   kind="$(recipe_kind_of "$sh")"
   name="$(recipe_name_of "$sh")"
@@ -243,7 +242,6 @@ recipe_validate() {
     _recipe_spec_row "$key" || die "recipe 有未知字段: $key
 文件: $sh
 规范: docs/RECIPE.md#3-头部字段"
-    spec_keys+=("$key")
   done
 
   for row in "${PHPRT_CONTRACT_SPEC[@]}"; do

@@ -111,9 +111,10 @@ recipe_main "$@"
 - **`wheel` 只对 dep 开放。** SONAME 是编译产物，不在 recipe 里描述；这个字段只表达
   例外（静态库、`dlopen` 别名、singleton 组），见第 6 节。
 - **`modules` 的多模块情况必须写全**：`libxml2` → `dom,xml,simplexml,xmlreader,xmlwriter,soap`，
-  `sqlite` → `sqlite3,pdo_sqlite`，`mysqli` → `mysqli,pdo_mysql`。ext 单模块可省略，默认 name。
-- `version` 变量在兼容期可以定义在 `bundle.conf`，目标是在 recipe 内给默认值、允许
-  `bundle.conf` 覆盖。driver 通过 `recipe_main --version` 取值，不直接读 bundle.conf。
+  `sqlite3` → `sqlite3,pdo_sqlite`。ext 单模块可省略，默认 name。
+- `version` 变量在兼容期定义在 `bundle.conf`；driver 当前按变量名取值，并在
+  `recipe_main --version` 里返回值。目标（Phase 6）是 recipe 内给默认值、允许
+  `bundle.conf` 覆盖，driver 统一通过 `recipe_version` 取值。
 - **同名解析分两套。** 扩展名（builtin / PECL）用 `ext_recipe_sh`：builtin → ext；
   依赖名（`needs` / `tools`）用 `module_sh`：deps → ext → tools → builtin。
   `libxml2`、`zlib`、`curl`、`openssl` 都有同名的 builtin 和 dep，
