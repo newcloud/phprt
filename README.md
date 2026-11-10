@@ -242,29 +242,35 @@ phprt install 8.5 --yes            # 不询问，直接用默认集（脚本/CI�
 
 ```text
 选择要编译的扩展 · Space 切换 · Enter 展开/收起
-  Database
+Database
   [x] mysqli
   [x] pdo_mysql
   [ ] pdo_pgsql
   [ ] pgsql
   [x] sqlite3
   [ ] mongodb
-  Cache & Storage
+
+Cache & Storage
   [ ] memcached
   [ ] redis ▶
-  Compression
+
+Compression
   [x] zip
   [x] zlib
-  Image Processing
+
+Image Processing
 > [-] gd ▼
       [ ] jpeg
       [x] png (固定)
       [ ] webp
       [x] avif
       [x] freetype
+
   ✔ 确认并继续（18 个扩展）
-  Esc 取消 · Home/End 跳转
+63/63 · Esc 取消 · Home/End 跳转
 ```
+
+分类标题顶格、用暗色显示；扩展行缩进 2 格，子选项缩进 6 格；分类之间和确认行前各留一个空行。
 
 菜单按 recipe 头部的 `category=` 分组，顺序固定为：Database、Cache & Storage、
 Compression、Cryptography、Image Processing、Internationalization、Network、

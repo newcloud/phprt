@@ -63,6 +63,7 @@ UI_RESET=$'\033[0m'
 UI_DIM=$'\033[2m'
 UI_CYAN=$'\033[36m'
 UI_BOLD=$'\033[1m'
+UI_CAT=""
 UI_SEL=""
 
 ui_select_available() {
@@ -326,14 +327,14 @@ ui_opt_row() {  # -> UI_ROW_TEXT / UI_ROW_DIM
   local name="$1" key="$2" state="$3" current="$4" mark="[ ]"
   UI_ROW_DIM=0
   if [ "$state" = fixed ]; then
-    UI_ROW_TEXT="    [x] $key (固定)"
+    UI_ROW_TEXT="      [x] $key (固定)"
     UI_ROW_DIM=1
     return 0
   fi
   if ui_ext_enabled "$name" && ui_opts_has_key "$current" "$key"; then
     mark="[x]"
   fi
-  UI_ROW_TEXT="    $mark $key"
+  UI_ROW_TEXT="      $mark $key"
 }
 
 ui_ext_row_label() {  # $1=扩展名 -> 主菜单一行（兼容函数形式）
@@ -347,8 +348,10 @@ ui_ext_row_label() {  # $1=扩展名 -> 主菜单一行（兼容函数形式）
 ui_init_colors() {
   if [ -n "${NO_COLOR:-}" ] || [ "${TERM:-dumb}" = dumb ]; then
     UI_SEL=$'\033[1;7m'          # 无法确定颜色支持时用反显
+    UI_CAT=$'\033[2m'            # 分类标题只靠暗色区分
   else
     UI_SEL=$'\033[1;97;44m'      # 加粗、亮白字、蓝底
+    UI_CAT=$'\033[2;36m'         # 分类标题：暗青色，比扩展行更弱
   fi
 }
 
@@ -405,7 +408,11 @@ ui_menu_draw() {
     elif [ "$j" -eq "$idx" ]; then
       lines+=("$UI_SEL> ${UI_MENU_LABELS[$j]}  $UI_RESET")
     elif [ "${UI_MENU_SKIP[$j]:-0}" = 1 ]; then
-      lines+=("  $UI_BOLD${UI_MENU_LABELS[$j]}$UI_RESET")
+      if [ -z "${UI_MENU_LABELS[$j]}" ]; then
+        lines+=("")
+      else
+        lines+=("$UI_CAT${UI_MENU_LABELS[$j]}$UI_RESET")
+      fi
     elif [ "${UI_MENU_DIM[$j]:-0}" = 1 ]; then
       lines+=("$UI_DIM  ${UI_MENU_LABELS[$j]}$UI_RESET")
     else
@@ -492,9 +499,12 @@ ui_key_read() {
 # 视口顶部压在分类标题的下一行时，把标题拉进来，避免分组失去上下文。
 ui_offset_with_header() {  # $1=offset -> 调整后的 offset
   local o="$1"
-  if [ "$o" -gt 0 ] && [ "${UI_MENU_SKIP[$((o - 1))]:-0}" = 1 ]; then
+  # 光标在视口顶部时，把紧邻的分类标题一起带进来；标题上面可能有空行，
+  # 连续跳过空行，直到遇到标题（非空 skip 行）或普通行。
+  while [ "$o" -gt 0 ] && [ "${UI_MENU_SKIP[$((o - 1))]:-0}" = 1 ]; do
     o=$((o - 1))
-  fi
+    [ -n "${UI_MENU_LABELS[$o]}" ] && break
+  done
   printf '%s' "$o"
 }
 
@@ -629,6 +639,13 @@ ui_main_menu() {  # 输入 UI_MAIN_CURSOR；输出 UI_MENU_ACTION + UI_MENU_KEY
   for name in "${UI_EXT_LIST[@]}"; do
     cat="${UI_CATEGORY[$name]:-Other}"
     if [ "$cat" != "$last_cat" ]; then
+      # 分类之间空一行（第一组除外），层级更清楚
+      if [ "$last_cat" != "__none__" ]; then
+        UI_MENU_LABELS+=("")
+        UI_MENU_VALUES+=("__blank__")
+        UI_MENU_DIM+=(0)
+        UI_MENU_SKIP+=(1)
+      fi
       UI_MENU_LABELS+=("$(ext_category_label "$cat")")
       UI_MENU_VALUES+=("__header__")
       UI_MENU_DIM+=(0)
@@ -656,6 +673,11 @@ ui_main_menu() {  # 输入 UI_MAIN_CURSOR；输出 UI_MENU_ACTION + UI_MENU_KEY
       UI_MENU_SKIP+=(0)
     done <<< "$UI_META_TEXT"
   done
+  # 确认行和上面的列表留一个空行
+  UI_MENU_LABELS+=("")
+  UI_MENU_VALUES+=("__blank__")
+  UI_MENU_DIM+=(0)
+  UI_MENU_SKIP+=(1)
   UI_MENU_LABELS+=("✔ 确认并继续（$(ui_count_selected) 个扩展）")
   UI_MENU_VALUES+=("__confirm__")
   UI_MENU_DIM+=(0)
