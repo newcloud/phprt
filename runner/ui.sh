@@ -489,6 +489,15 @@ ui_key_read() {
   return 0
 }
 
+# 视口顶部压在分类标题的下一行时，把标题拉进来，避免分组失去上下文。
+ui_offset_with_header() {  # $1=offset -> 调整后的 offset
+  local o="$1"
+  if [ "$o" -gt 0 ] && [ "${UI_MENU_SKIP[$((o - 1))]:-0}" = 1 ]; then
+    o=$((o - 1))
+  fi
+  printf '%s' "$o"
+}
+
 ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引；结果放 UI_MENU_RESULT + UI_MENU_KEY
   local header="$1" footer="$2" idx="${3:-0}"
   local n=${#UI_MENU_LABELS[@]}
@@ -593,7 +602,7 @@ ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引；结果放 UI_MENU_RESUL
     esac
 
     if [ "$idx" -lt "$offset" ]; then
-      offset=$idx
+      offset="$(ui_offset_with_header "$idx")"
     fi
     if [ "$idx" -ge $((offset + view)) ]; then
       offset=$((idx - view + 1))

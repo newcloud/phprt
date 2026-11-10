@@ -34,8 +34,8 @@ build() {
   fi
 
   cd "$SRC"
-  log "configure + make -j$JOBS（termcap 用 deps/ncurses）"
-  ./configure --prefix="$D" --with-curses \
+  log "configure + make -j$JOBS（termcap 用 deps/ncurses，并把它写进 .so 的 NEEDED）"
+  ./configure --prefix="$D" --with-curses --with-shared-termcap-library \
     > "$LOGS/readline-configure.log" 2>&1 \
     || { tail -30 "$LOGS/readline-configure.log"; die "readline configure 失败"; }
   make -j"$JOBS" > "$LOGS/readline-make.log" 2>&1 \
