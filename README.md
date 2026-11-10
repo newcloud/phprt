@@ -20,6 +20,10 @@ cd ~/blog
 菜单是纯 ANSI 自绘的：分类标题、树形子项、三态勾选，`Space` 切换、
 `Enter` 展开子项或确认。脚本/CI 里加 `--yes`（或不是终端）时跳过菜单，用默认集。
 
+`phprt install 8.5` 不加 `--ext` 进入扩展配置 UI：
+
+![phprt install 8.5 不加 --ext 进入扩展配置 UI](docs/ui.png)
+
 装好后项目里会多一个 `./myphp`，后面都用它跑 PHP：
 
 ```bash
@@ -281,10 +285,6 @@ phprt install 8.5 --yes            # 不询问，直接用默认集（脚本/CI�
 打开时停在最后的确认行，按 `Home` 回到第一个扩展。菜单画在当前命令行下面，
 不清屏：`$ phprt select 8.5` 那行和上面的历史输出一直看得见，退出后只清掉
 菜单这一块。想要全屏菜单可以设 `PHPRT_ALT_SCREEN=1`。
-
-`phprt install 8.5` 的实际界面（图中展开了 gd 的子项）：
-
-![phprt install 8.5 的 ANSI 扩展选择界面](docs/ui.png)
 
 有子项的扩展展开后直接排在下面：
 
