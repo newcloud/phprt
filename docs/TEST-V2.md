@@ -824,7 +824,7 @@ rootfs 可见性和清理逻辑：
 | `add ext pdo_pgsql --static` | `pdo_pgsql` 可用；`pg_config --configure` 含 `--with-ssl=openssl`，libpq 链树内 libssl/libcrypto |
 | 老树识别 | v2ext 的 `phprt show` 自动列出 `pdo_mysql pdo_pgsql sqlite3`（按模块名反推） |
 | 菜单（pty） | 分组顺序 Database / Cache & Storage / Compression / …；`Home` 落在 `mysqli` 且上方 `Database` 标题可见，`End` 回确认行，标题行不可选中 |
-| 菜单层级（pty） | 分类标题顶格、`\033[2;36m`（NO_COLOR 时 `\033[2m`）；扩展行缩进 2、子项缩进 6；分类之间和确认前各一个空行（54 → 63 行） |
+| 菜单层级（pty） | 分类标题顶格、`\033[1;36m`（NO_COLOR 时 `\033[1m`）；扩展行缩进 2、子项缩进 6；分类之间、确认行上下各一个空行（条目 54 → 63，帧多一行） |
 | 分类内顺序 | Database 为 mysqli、pdo_mysql、pdo_pgsql、pgsql、sqlite3、mongodb（`menu_order`） |
 | `--ext sqlite` | 报错：`未知扩展: sqlite；SQLite 已合并到 sqlite3（同时产出 pdo_sqlite）` |
 | `scripts/recipe-check.sh` | 67 个 recipe 通过（含 category 必填校验） |

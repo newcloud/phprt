@@ -348,10 +348,10 @@ ui_ext_row_label() {  # $1=扩展名 -> 主菜单一行（兼容函数形式）
 ui_init_colors() {
   if [ -n "${NO_COLOR:-}" ] || [ "${TERM:-dumb}" = dumb ]; then
     UI_SEL=$'\033[1;7m'          # 无法确定颜色支持时用反显
-    UI_CAT=$'\033[2m'            # 分类标题只靠暗色区分
+    UI_CAT=$'\033[1m'            # 无颜色支持时用加粗区分分类
   else
     UI_SEL=$'\033[1;97;44m'      # 加粗、亮白字、蓝底
-    UI_CAT=$'\033[2;36m'         # 分类标题：暗青色，比扩展行更弱
+    UI_CAT=$'\033[1;36m'         # 分类标题：亮青色，和普通白字拉开、但不用暗色
   fi
 }
 
@@ -419,6 +419,8 @@ ui_menu_draw() {
       lines+=("  ${UI_MENU_LABELS[$j]}")
     fi
   done
+  # 确认行下面留一行空隙，别让底栏贴着确认行
+  lines+=("")
   lines+=("$UI_DIM$((idx + 1))/$total · $UI_DRAW_FOOTER$UI_RESET")
 
   local frame=$'\r' n=${#lines[@]} k
