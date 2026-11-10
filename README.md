@@ -96,8 +96,12 @@ phprt update openssl --dry-run
 
 ```bash
 phprt download 8.5 --ext "swoole openssl curl"
+
+# install 也能只下载：只写 .phprt/downloads，不创建版本树、不编译
+phprt install 8.5 --ext "swoole openssl curl" --downloads
 ```
 
+`--downloads` 也接受 `--download` / `--predownload` 两个简写。
 下载目录固定为项目里的 `.phprt/downloads`。`install`、`add ext`、`update`
 也会复用这个目录，文件存在就跳过，不会重复下载。
 

@@ -32,6 +32,7 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
       其他:
       --plan               只打印构建计划（依赖、PHP、static/shared 分组），不构建
       --downloads          只把源码下载到 .phprt/downloads，不构建
+                           （--download / --predownload 同义）
       --downloads-print-urls
                            只打印源码 URL，不下载、不构建
       --download-jobs N    全局下载并发数（默认 10）
@@ -71,6 +72,7 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
       省略版本时查询上游最新安全版本；--dry-run 只打印计划。
       只更新一个依赖；受影响的 PHP/扩展按签名重建。
       --downloads          只下载目标版本的源码，不修改配置、不构建
+                           （--download / --predownload 同义）
       --downloads-print-urls
                            只打印目标源码 URL
       --download-jobs N / --download-host-jobs N / --timeout N / --proxy URL
