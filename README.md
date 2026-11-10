@@ -344,21 +344,15 @@ phprt add ext redis --shared --opt redis=lzf
 | pdo_mysql | PDO 的 MySQL 驱动（mysqlnd） | 静态 ★ | 仅静态 |
 | pdo_pgsql | PDO 的 PostgreSQL 驱动（libpq） | 静态 | 仅静态 |
 | pgsql | PostgreSQL 专用扩展（libpq） | 静态 | 仅静态 |
-| pcntl | 进程控制 | 静态 ★ | 静态 / shared |
-| posix | POSIX 接口 | 静态 ★ | 静态 / shared |
-| readline | 交互式 CLI 行编辑 | 静态 | 静态 / shared |
-| shmop | 共享内存 | 静态 ★ | 静态 / shared |
+| posix | POSIX 接口（用户 / 进程信息） | 静态 ★ | 静态 / shared |
+| readline | 交互式 CLI 行编辑（`php -a`） | 关 | 仅静态 |
+| shmop | 共享内存段 | 静态 ★ | 静态 / shared |
 | sockets | Socket 接口 | 静态 ★ | 静态 / shared |
+| sodium | 现代加密 | 静态 ★ | 静态 / shared |
+| sqlite3 | SQLite（含 pdo_sqlite 模块） | 静态 ★ | 仅静态 |
 | sysvmsg | System V 消息队列 | 静态 ★ | 静态 / shared |
 | sysvsem | System V 信号量 | 静态 ★ | 静态 / shared |
 | sysvshm | System V 共享内存 | 静态 ★ | 静态 / shared |
-| posix | POSIX 接口（用户 / 进程信息） | 静态 ★ | 静态 / shared |
-| readline | 交互式 CLI 行编辑（`php -a`） | 关 | 静态 / shared |
-| shmop | 共享内存段 | 静态 ★ | 静态 / shared |
-| sockets | 底层 socket | 静态 ★ | 静态 / shared |
-| sodium | 现代加密 | 静态 ★ | 静态 / shared |
-| sqlite3 | SQLite（含 pdo_sqlite 模块） | 静态 ★ | 仅静态 |
-| sysvmsg / sysvsem / sysvshm | System V IPC（消息 / 信号量 / 共享内存） | 静态 ★ | 静态 / shared |
 | tidy | HTML 清理 | 静态 | 静态 / shared |
 | xsl | XSLT | 静态 | 静态 / shared |
 | zip | ZIP 压缩包 | 静态 ★ | 静态 / shared |

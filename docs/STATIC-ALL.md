@@ -110,8 +110,8 @@ PHP 签名包含链接方式：`static` ↔ `shared` 切换会重编 PHP。
 v0 选择 `openssl zlib curl sqlite3 mbstring` 的原因：这些依赖当前已经产出 `.a`，
 可以先验证 CLI、链接和验收流程，不需要改任何 `deps/` recipe。
 
-默认集 `openssl zlib libxml2 curl sqlite3 mysqli pdo_mysql mbstring zip sodium gettext`
-在 v1 完成后才能全部使用 `--static-all`。
+默认集 `openssl zlib libxml2 curl sqlite3 mysqli pdo_mysql mbstring zip sodium gettext
+pcntl posix sockets shmop sysvmsg sysvsem sysvshm` 在 v1 完成后才能全部使用 `--static-all`。
 
 ## 6. 验收
 

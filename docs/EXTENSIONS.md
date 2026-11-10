@@ -146,21 +146,13 @@ sysvshm / readline。
 | openssl | openssl | openssl | - | 无（builtin） | ✅ |
 | pcntl | — | pcntl | - | 无（builtin） | ✅ |
 | pdo_mysql | zlib（mysqlnd 压缩协议） | pdo_mysql | - | 无（builtin） | ✅ |
-| pcntl | — | pcntl | - | 无（builtin） | ✅ |
+| pdo_pgsql | libpq | pdo_pgsql | - | 无（builtin） | ✅ |
+| pgsql | libpq | pgsql | - | 无（builtin） | ✅ |
 | posix | — | posix | - | 无（builtin） | ✅ |
 | readline | readline（ncurses） | readline | - | 无（builtin） | ✅ |
 | shmop | — | shmop | - | 无（builtin） | ✅ |
 | sockets | — | sockets | - | 无（builtin） | ✅ |
-| sysvmsg | — | sysvmsg | - | 无（builtin） | ✅ |
-| sysvsem | — | sysvsem | - | 无（builtin） | ✅ |
-| sysvshm | — | sysvshm | - | 无（builtin） | ✅ |
-| pdo_pgsql | libpq | pdo_pgsql | - | 无（builtin） | ✅ |
-| pgsql | libpq | pgsql | - | 无（builtin） | ✅ |
-| posix | — | posix | - | 无（builtin） | ✅ |
-| readline | ncurses, readline | readline | - | 无（builtin） | ✅ |
 | sodium | libsodium | sodium | - | 无（builtin） | ✅ |
-| shmop | — | shmop | - | 无（builtin） | ✅ |
-| sockets | — | sockets | - | 无（builtin） | ✅ |
 | sqlite3 | sqlite | sqlite3,pdo_sqlite | - | 无（builtin） | ✅ |
 | sysvmsg | — | sysvmsg | - | 无（builtin） | ✅ |
 | sysvsem | — | sysvsem | - | 无（builtin） | ✅ |
@@ -234,9 +226,9 @@ Runtime、Other。`menu_order` 只影响分类内顺序。
 
 | 类别 | recipe | type | default |
 | --- | --- | --- | --- |
-| builtin 单模块 | curl ffi ftp gd gettext gmp intl ldap mbstring sodium tidy xsl zip | `static,shared` | `static` |
+| builtin 单模块 | curl ffi ftp gd gettext gmp intl ldap mbstring sodium tidy xsl zip pcntl posix sockets shmop sysvmsg sysvsem sysvshm | `static,shared` | `static` |
 | builtin 核心耦合 | bz2 openssl zlib | `static` | `static` |
-| builtin 多模块 | libxml2 sqlite3 | `static` | `static` |
+| builtin 多模块 / 只 static | libxml2 sqlite3 readline | `static` | `static` |
 | PECL 普通 | amqp apcu igbinary imagick memcached mongodb msgpack protobuf rdkafka redis ssh2 yaml | `static,shared` | `shared` |
 | PECL 只 shared | swoole xdebug | `shared` | `shared` |
 
@@ -244,6 +236,8 @@ Runtime、Other。`menu_order` 只影响分类内顺序。
   改成 shared 会静默丢失这些能力。
 - libxml2 / mysqli / pgsql / sqlite 暂只 static：一个 recipe 对应多个 `.so`，
   当前构建器只产一个模块。
+- readline 只 static：ext/readline 用 `PHP_ARG_WITH`，phpize 会把 `libedit`
+  强制成 `shared` 并要求 pkg-config 的 libedit，单独编 `.so` 编不出来。
 - zlib / sqlite 原先默认 shared，现在默认 static；默认安装的产物从 `.so`
   改成编入 PHP。空项目默认安装已验证：11 个默认扩展全部 static，
   `lib/php/extensions/` 不存在，`Phar::canCompress(Phar::GZ)` 仍为 true，
@@ -422,6 +416,31 @@ Runtime、Other。`menu_order` 只影响分类内顺序。
 ## 11. 实测记录
 
 （按批次倒序追加。）
+
+### 2026-11-10 新增 builtin：pcntl / posix / readline / sockets / shmop / sysv*
+
+- 背景：7 个扩展写死在 `bundles/php8.5/php.sh` 的 configure 参数里，选择器看不到、
+  也关不掉；readline 完全没编。本轮全部改成 builtin recipe，`php.sh` 里删掉写死的
+  `--enable-*`，由 recipe 的 `flags()` 输出 `--enable-*` / `--disable-*`
+  （posix 在 PHP 里默认启用，不选时必须显式 `--disable-posix`）。
+- `DEFAULT_EXTS` 增加 7 个（pcntl posix sockets shmop sysvmsg sysvsem sysvshm），
+  默认安装的模块集合和改动前一致；readline 默认关。
+- 新增依赖：ncurses 6.5（readline 的 termcap 来源）和 GNU readline 8.3。
+- 契约：8 个 builtin 都是 `category=` 必填字段；7 个 `type=static,shared`，
+  readline `type=static`（ext/readline 用 `PHP_ARG_WITH`，phpize 会把 libedit
+  强制成 shared，单独编 `.so` 编不出来）。
+- 坑：
+  - ncurses 默认 widec，只产出 `libncursesw.so`；PHP 的 readline 检查只认
+    `libncurses`，需要 `--disable-widec`。
+  - ncurses 的 C++ 绑定在 GCC 15 下编不过，加 `--without-cxx --without-cxx-binding`。
+  - readline 的 `.so` 默认不链 termcap（`SHLIB_LIBS` 空）；必须
+    `--with-shared-termcap-library`，否则 `LD_LIBRARY_PATH` 里的 libreadline
+    会污染宿主 `awk`（`undefined symbol: UP`）。
+- 验证：空项目先只装 sockets（pcntl/posix 等确实不出现），再一次装入 8 个并做功能
+  调用；`--build sockets=shared` 切换正常；整树 `cp -a` 搬移后可用；
+  readline 的 NEEDED 为 `libreadline-rt8.so.8` / `libncurses-rt6.so.6`；
+  `recipe-check` 77 个通过，`phprt verify` 7 项全绿。细节见
+  [TEST-V2.md](TEST-V2.md#新增-builtinpcntl--posix--readline--sockets--shmop--sysv2026-11-10)。
 
 ### 2026-11-09 Phase 0 + 签名优化
 

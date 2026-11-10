@@ -813,7 +813,7 @@ rootfs 可见性和清理逻辑：
 | 检查 | 结果 |
 | --- | --- |
 | recipe 结构 | `mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql` 各自独立；`sqlite3` 一个 recipe 同时产出 `sqlite3` + `pdo_sqlite` |
-| 扩展总数 | `phprt ext list 8.5` 列出 36 个（builtin 22 + PECL 14） |
+| 扩展总数 | `phprt ext list 8.5` 列出 44 个（builtin 30 + PECL 14） |
 | `--plan --ext mysqli` / `pdo_mysql` | deps 只有 `zlib`（mysqlnd 压缩协议）；不出现 libpq/sqlite |
 | `--plan --ext pgsql` / `pdo_pgsql` | deps `perlshim openssl libpq` |
 | `--plan --ext "pgsql pdo_pgsql"` | libpq 只出现一次 |
@@ -830,3 +830,36 @@ rootfs 可见性和清理逻辑：
 | 全量 `install`（仅数据库扩展） | `/tmp` 新项目 `--ext "openssl mysqli pdo_mysql pgsql pdo_pgsql sqlite3"` 成功；`PDO::getAvailableDrivers()` 为 mysql/pgsql/sqlite |
 | install 树 `phprt verify` | 7 项全绿；mysqlnd 压缩协议链的是树内 `libz-rt1.so.1` |
 | 框架修复 | `enabled_dep_names` 在最后一个依赖未构建时返回 1，导致 `php.sh` 在 `set -e` 下静默退出；已加 `return 0` |
+
+## 新增 builtin：pcntl / posix / readline / sockets / shmop / sysv*（2026-11-10）
+
+原来 7 个扩展写死在 `bundles/php8.5/php.sh` 的 configure 参数里（选择器看不到、
+也关不掉），readline 完全没编。本轮改成 builtin recipe；readline 另外新增
+ncurses 6.5 + GNU readline 8.3 两个依赖。
+
+| 检查 | 结果 |
+| --- | --- |
+| `phprt ext list 8.5 --names` | 44 个（新增 8 个） |
+| `phprt ext list 8.5 --default --names` | 18 个（新增 7 个，readline 默认关） |
+| `install --yes --plan`（空项目） | static 18 个；deps 为 `perlshim openssl zlib libxml2 curl sqlite oniguruma libzip libsodium`，不含 ncurses/readline |
+| `install --ext "sockets"`（空项目） | `php -m` 只有 sockets；pcntl / posix / shmop / sysv* 都不出现（posix 在 PHP 里默认启用，靠 recipe 的 `--disable-posix` 关掉） |
+| `install --ext "<8 个>"` | 一次 PHP 重编，8 个模块都进 `php -m` |
+| 功能调用 | `pcntl_fork` + `pcntl_waitpid`（子进程 rc=7）、`posix_getpid`、`socket_create`、`shmop_open/write/read`、`msg_get_queue/msg_send/msg_receive`、`sem_get/acquire/release`、`shm_attach/put_var/get_var`、`readline_add_history/readline_list_history` |
+| readline 依赖 | `install --ext readline --plan` 的 deps 为 `ncurses readline`；`bin/php` 的 NEEDED 有 `libreadline-rt8.so.8` / `libncurses-rt6.so.6`（wheel 改名 + `$ORIGIN` rpath） |
+| `--build sockets=shared` | 静态 sockets 被清掉，生成 `sockets.so` + `20-sockets.ini`，`socket_create()` 正常，`verify` 全绿 |
+| `--build readline=shared` | 报错 `readline 不支持 shared（type=static）`：ext/readline 用 `PHP_ARG_WITH`，phpize 会把 libedit 强制成 shared |
+| 搬移测试 | 整棵树 `cp -a` 到别的目录后，`bin/php -m` 和功能调用都正常 |
+| 选择器（pty） | Runtime 分组出现 pcntl/posix/readline，Network 出现 sockets，Other 出现 shmop/sysvmsg/sysvsem/sysvshm；都没有展开箭头；Space 能开关 readline 并反映到输出 |
+| `scripts/recipe-check.sh` | 77 个 recipe 通过 |
+| `phprt verify` | 7 项全绿（含 shared sockets） |
+
+ncurses 6.5 / readline 8.3 的三个坑（recipe 里已固定）：
+
+- ncurses 默认开 widec，只产出 `libncursesw.so`；PHP 的 ext/readline 用
+  `AC_CHECK_LIB([ncurses], [tgetent])` 只认 `libncurses`，所以加 `--disable-widec`。
+- ncurses 的 C++ 绑定在 GCC 15 下编不过（`std::hash<unsigned char>` 重定义），
+  必须 `--without-cxx --without-cxx-binding`。
+- readline 的共享库默认不链 termcap（`SHLIB_LIBS` 为空），`UP` / `BC` / `tgetent`
+  留给调用方；加 `--with-shared-termcap-library` 才会把 `libncurses` 写进 NEEDED。
+  不加的话，编扩展时 `LD_LIBRARY_PATH` 里的 libreadline 会让宿主的 `awk`（gawk）
+  加载失败（`undefined symbol: UP`）。
