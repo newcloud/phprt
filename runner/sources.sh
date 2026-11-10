@@ -528,7 +528,7 @@ prefetch_sources() {
 
 prefetch_sources_plain() {
   local exts="$1" write_list="${2:-0}" jobs="${PHPRT_DOWNLOAD_JOBS:-10}"
-  local host_jobs="${PHPRT_DOWNLOAD_HOST_JOBS:-2}"
+  local host_jobs="${PHPRT_DOWNLOAD_HOST_JOBS:-${PHPRT_HOST_JOBS:-2}}"
   local total idx=0 running=0
   local line l kind name ver file url sha label src
   local plan_file failed_file rc=0
@@ -938,7 +938,7 @@ source_progress_final_row() {  # $1=idx
 
 prefetch_sources_progress() {
   local exts="$1" write_list="${2:-0}" jobs="${PHPRT_DOWNLOAD_JOBS:-10}"
-  local host_jobs="${PHPRT_DOWNLOAD_HOST_JOBS:-2}"
+  local host_jobs="${PHPRT_DOWNLOAD_HOST_JOBS:-${PHPRT_HOST_JOBS:-2}}"
   local total idx=0 running=0 rc=0
   local line l kind name ver file url sha label
   local plan_file failed_file

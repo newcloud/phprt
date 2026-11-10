@@ -84,6 +84,39 @@ scripts/recipe-check.sh           # 静态检查
 scripts/recipe-check.sh --deep    # 再联网确认上游版本
 ```
 
+### 2.4 契约层与机器可读 JSON
+
+`runner/contract.sh` 是 recipe 契约的唯一实现：
+
+- `PHPRT_CONTRACT_SPEC` 一张表描述字段 × kind 的允许/必填/校验器/默认值；
+- `recipe_meta_load` 一次解析头部，按文件缓存；`recipe_field` 保留为兼容 shim；
+- `recipe_switch` / `recipe_ini` / `recipe_upstream` / `recipe_version` /
+  `recipe_needs_of` / `recipe_tools_of` 等 accessor 是消费者入口；
+- L1 校验拒绝未知字段、重复字段、kind 不允许的字段和无法解析的头部；
+- `category` / `menu_order` / `note` 都有值域校验；`category` 的显示名来自
+  `PHPRT_CATEGORY_LABELS`，不再散落 case；
+- builtin 的 `needs=` 是“声明超集”，`needs()` 的实际输出必须落在里面；
+  `recipe-check.sh` 负责这个子集检查；
+- `note=` 的 slug 必须在 `bundles/<版本>/notes.conf` 定义；
+- ext 可实现 `configure_args()`，JSON 和 `--configure-args` 都能读到
+  `ext_pecl_build` 的参数。
+
+对外出口是：
+
+```bash
+phprt ext list <系列> --json --name <扩展>
+```
+
+JSON 除原有 `name/kind/version/modes/default/default_set/installed/category` 外，
+还包含 `switch/modules/ini/tools/needs/needs_detail/opts/flags_source/flags_on/flags_off/
+hooks/upstream/notes/category_label/menu_order/desc`。`needs_detail` 给出依赖闭包的
+版本、needs、tools 和 notes，解决“readline 依赖 ncurses 但看头看不出来”的问题。
+`flags_on/off` 里的依赖路径用 `${DEPS}` / `${TREE}` 占位符，不绑定具体项目。
+
+契约 fixture 在 `tests/contract/run.sh`，不依赖网络和已安装树；模板在
+`templates/`。新增或修改契约字段时先改 `PHPRT_CONTRACT_SPEC`、accessor 和文档，
+再跑 recipe-check。
+
 ## 3. 目录与生命周期
 
 ### 3.1 仓库
@@ -91,8 +124,10 @@ scripts/recipe-check.sh --deep    # 再联网确认上游版本
 ```text
 <repo>/
 ├── phprt                 # 入口
-├── runner/               # 驱动
+├── runner/               # 驱动（含 contract.sh、ui.sh、sources.sh）
 ├── bundles/php8.5/       # 数据
+├── templates/            # 可复制的 recipe 模板
+├── tests/contract/       # 契约 fixtures
 ├── scripts/              # recipe-check.sh、buildroot.sh
 ├── downloads/            # 源码包种子（本地缓存，不进 git）
 └── docs/
@@ -158,6 +193,23 @@ GitHub 主站、codeload 和常见镜像算同一个 host 桶。框内只放包�
 状态，URL 不放进框里，避免每帧宽度和行数变化。主进程轮询目标文件大小和状态
 文件，实时刷新。非终端、`NO_COLOR`、`--ui plain` 时走逐行输出。
 
+下载参数与失败处理：
+
+| 项 | 默认 | 说明 |
+| --- | --- | --- |
+| `PHPRT_DOWNLOAD_JOBS` / `--download-jobs` | 10 | 全局并发 |
+| `PHPRT_DOWNLOAD_HOST_JOBS` / `--download-host-jobs` | 2 | 单 host 桶并发；也接受 `PHPRT_HOST_JOBS` |
+| `PHPRT_DOWNLOAD_TIMEOUT` / `--timeout` | 900 秒 | 单文件总超时 |
+| 低速阈值 | 1KB/s × 60 秒 | 超过就放弃该文件，继续其它文件 |
+| `PHPRT_GITHUB_DIRECT_TIMEOUT` | 60 秒 | GitHub 直连等待，之后换镜像 |
+| `PHPRT_UI=plain` / `--ui plain` | auto | 关闭进度框，逐行输出 |
+| `PHPRT_NO_DOWNLOAD=1` | — | 构建阶段禁止联网；缺文件直接报错 |
+
+下载失败不会立刻中断整批：失败项记录到清单，最后统一汇总并以非 0 退出。
+已存在文件会跳过；有 SHA256 时用 SHA256 判断，没有时用远端 `Content-Length`；
+`curl -C -` / aria2c `--continue` 负责断点续传。`source_cached_ok` 和
+`source_verify_file` 是判断入口，删除缓存前会打印原因。
+
 ### 3.4 交互选择与子选项
 
 `runner/ui.sh` 负责菜单，`install` 不写 `--ext` 且 stdin/stdout 都是终端时调用：
@@ -196,6 +248,27 @@ GitHub 主站、codeload 和常见镜像算同一个 host 桶。框内只放包�
 分类标题行不参与导航（`UI_MENU_SKIP`），`↑↓ / Home / End / PgUp / PgDn` 都会跳过。
 数据库扩展按驱动拆分：`mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql`、`sqlite3`
 （含 `pdo_sqlite`）；`mysqlnd`、`libpq`、`sqlite` 是依赖，不进菜单。
+
+ANSI 渲染与环境变量：
+
+| 变量 / 参数 | 作用 |
+| --- | --- |
+| `PHPRT_ALT_SCREEN=1` | 切 alternate screen；默认同屏绘制，保留命令行历史 |
+| `NO_COLOR=1` / `TERM=dumb` | 不使用颜色，光标行改反显 |
+| `PHPRT_SELECT=0` | 不进入菜单，直接用默认集 |
+| `--yes` | 不询问，直接用默认集 |
+| `--opt "gd=jpeg,webp"` | 跳过菜单，直接指定子项 |
+
+渲染细节：
+
+- 每帧整块 `printf`，行尾 `\r\033[2K` 就地覆盖，不清屏；
+- 关闭 DECAWM，长行在右边界裁掉，避免把布局顶乱；
+- 分类标题是独立的不可选中行（`UI_MENU_SKIP`），`↑↓ / Home / End / PgUp / PgDn`
+  都会跳过；
+- 父行三态：`[x]` 全选、`[-]` 部分子项关闭、`[ ]` 未选；固定子项始终 `[x]`、
+  灰色显示、Space 无效，也不参与“全开”判断；
+- 扩展列表和 `opts()` 元数据只在会话开始时取一次，按键时只重算被改动的那一行，
+  单帧通常在 5–20ms。
 
 ### 3.5 构建基目录
 
@@ -380,11 +453,23 @@ chroot 内通过项目目录再次看到 rootfs。当前实现不额外叠 tmpfs
 
 ## 9. 新增扩展或依赖
 
-1. 在 `bundles/php8.5/{builtin,ext}/` 或 `deps/` 加 recipe；
+当前规模：30 个 builtin、14 个 PECL、30 个 dep、3 个 tool，共 77 个 recipe。
+最近一轮新增：
+
+| 类型 | 新增 |
+| --- | --- |
+| builtin | `pcntl` `posix` `readline` `sockets` `shmop` `sysvmsg` `sysvsem` `sysvshm` |
+| builtin 拆分 | `mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql`、`sqlite3` |
+| dep | `ncurses` `readline` `libpq` `sqlite` |
+| PECL | `amqp` `imagick` `memcached` `mongodb` `rdkafka` `ssh2` `tidy` 等 |
+
+1. 在 `bundles/php8.5/{builtin,ext}/` 或 `deps/` 加 recipe；可以从 `templates/` 复制；
 2. 版本、URL、SHA256 写进 `bundle.conf`；
-3. 跑 `scripts/recipe-check.sh`，通过后再跑 `--deep`；
-4. 在测试项目里按 [EXTENSIONS.md](EXTENSIONS.md) 的流程做两轮验证；
-5. 更新 [EXTENSIONS.md](EXTENSIONS.md) 的进度和台账。
+3. 头部补 `category=`（builtin/ext 必填）、需要时 `menu_order=` 和 `note=`；
+4. 跑 `scripts/recipe-check.sh`，通过后再跑 `--deep`；
+5. 用 `phprt ext list 8.5 --json --name <名字>` 确认 JSON 里的 needs/flags/opts/notes；
+6. 在测试项目里按 [EXTENSIONS.md](EXTENSIONS.md) 的流程做两轮验证；
+7. 更新 [EXTENSIONS.md](EXTENSIONS.md) 的进度和台账。
 
 driver 里不能出现具体包名。需要新能力时先改 recipe 字段或通用函数，再改
 `runner/`。
@@ -396,13 +481,14 @@ driver 里不能出现具体包名。需要新能力时先改 recipe 字段或�
 ```bash
 bash -n runner/*.sh scripts/*.sh
 scripts/recipe-check.sh
+tests/contract/run.sh
 phprt verify
 ```
 
 `phprt verify` 检查七项：
 
 1. PHP 能启动
-2. 扩展能加载
+2. 扩展能加载；recipe 声明的 `modules=` 与 `php -m` 一致
 3. 动态库只来自安装根
 4. RPATH 只有 `$ORIGIN` 相对路径
 5. php.ini 和 conf.d 在版本目录

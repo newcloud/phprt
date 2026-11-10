@@ -226,8 +226,8 @@ cmd_download() {
       --print-urls|--urls) print_urls=1; shift ;;
       --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
       --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
-      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
-      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_DOWNLOAD_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_DOWNLOAD_HOST_JOBS="${1#*=}"; shift ;;
       --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
       --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
       --ui) export PHPRT_UI="${2:-}"; shift 2 ;;
@@ -383,8 +383,8 @@ cmd_install() {
       --downloads-print-urls|--print-urls|--urls) print_urls=1; shift ;;
       --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
       --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
-      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
-      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_DOWNLOAD_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_DOWNLOAD_HOST_JOBS="${1#*=}"; shift ;;
       --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
       --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
       --ui) export PHPRT_UI="${2:-}"; shift 2 ;;
@@ -725,8 +725,8 @@ cmd_update() {
       --downloads-print-urls|--print-urls|--urls) print_urls=1; shift ;;
       --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
       --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
-      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
-      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_DOWNLOAD_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_DOWNLOAD_HOST_JOBS="${1#*=}"; shift ;;
       --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
       --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
       --ui) export PHPRT_UI="${2:-}"; shift 2 ;;
@@ -1868,8 +1868,8 @@ cmd_add() {
       --downloads-print-urls|--print-urls|--urls) print_urls=1; shift ;;
       --download-jobs) export PHPRT_DOWNLOAD_JOBS="${2:-}"; shift 2 ;;
       --download-jobs=*) export PHPRT_DOWNLOAD_JOBS="${1#*=}"; shift ;;
-      --download-host-jobs) export PHPRT_HOST_JOBS="${2:-}"; shift 2 ;;
-      --download-host-jobs=*) export PHPRT_HOST_JOBS="${1#*=}"; shift ;;
+      --download-host-jobs) export PHPRT_DOWNLOAD_HOST_JOBS="${2:-}"; shift 2 ;;
+      --download-host-jobs=*) export PHPRT_DOWNLOAD_HOST_JOBS="${1#*=}"; shift ;;
       --timeout) export PHPRT_DOWNLOAD_TIMEOUT="${2:-}"; shift 2 ;;
       --timeout=*) export PHPRT_DOWNLOAD_TIMEOUT="${1#*=}"; shift ;;
       --ui) export PHPRT_UI="${2:-}"; shift 2 ;;

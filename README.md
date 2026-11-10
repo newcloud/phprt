@@ -157,6 +157,23 @@ https://gh.llkk.cc/
 直连默认最多等 60 秒（`PHPRT_GITHUB_DIRECT_TIMEOUT`），之后换镜像并从断点续传。
 镜像列表可以用 `PHPRT_GITHUB_MIRRORS="镜像1 镜像2"` 覆盖；设为空字符串可关闭。
 
+下载相关参数和环境变量：
+
+| 参数 / 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `--download-jobs N` / `PHPRT_DOWNLOAD_JOBS` | 10 | 全局同时下载的文件数 |
+| `--download-host-jobs N` / `PHPRT_DOWNLOAD_HOST_JOBS` | 2 | 同一站点/host 桶的并发数 |
+| `--timeout N` / `PHPRT_DOWNLOAD_TIMEOUT` | 900 | 单个文件最长下载秒数 |
+| `--ui auto\|plain\|progress` / `PHPRT_UI` | auto | 进度框或逐行日志；非终端自动用 plain |
+| `--proxy URL` / `http_proxy` / `https_proxy` | 直连 | 下载和上游查询共用 |
+| `PHPRT_ARIA2=0` | 自动 | 禁用 aria2c，强制 curl |
+| `PHPRT_ARIA2_CONNECTIONS` | 4 | aria2c 每个文件的连接数 |
+| `PHPRT_GITHUB_DIRECT_TIMEOUT` | 60 | GitHub 直连等待秒数，超时换镜像 |
+| `PHPRT_GITHUB_MIRRORS` | 4 个内置镜像 | 覆盖 GitHub 镜像列表；空字符串关闭 |
+
+已经存在的文件会跳过；有 SHA256 时按 SHA256 判断，没有时按远端
+`Content-Length` 判断。中断后重跑会续传，失败的文件最后单独列出，不会中断其它下载。
+
 ## 需要安装的环境
 
 构建时需要系统里有 C/C++ 工具链：
@@ -200,6 +217,9 @@ github.com/charmbracelet/gum@latest`，或从 GitHub Releases 下载。只影响
 7. **可生成单个 php**：`--static-all` / `--static-all-lto` 生成一个 `bin/php`，方便分发（当前支持 openssl zlib curl sqlite3 mbstring）。
 8. **干净构建**：可选 chroot 构建环境，不混入宿主工具链。
 9. **离线构建**：用 `phprt download` 提前把源码放进 `.phprt/downloads`，断网时直接构建。
+10. **纯 ANSI 扩展选择器**：分类、树形子项、三态勾选、固定项和子选项都在终端里完成，不依赖 gum。
+11. **机器可读契约**：`phprt ext list --json --name <扩展>` 一次给出依赖、模块、ini、flags、opts、hooks 和语义坑。
+12. **下载队列**：全局/单站点并发限制、断点续传、aria2c 加速、GitHub 镜像回退、超时与低速放弃，失败的文件单独汇总。
 
 ## 支持的扩展
 
@@ -218,9 +238,15 @@ phprt ext list 8.5 --json --name readline
 `--json` 适合脚本和生成文档表格；加 `--name` 只输出一个扩展，并包含
 `switch/modules/ini/needs_detail/flags/opts/hooks/notes` 等完整契约字段。
 
+recipe 的契约仍在第二行 `# phprt:`：除了版本、依赖、编译方式，现在还可以写
+`category=`（选择器分组）、`menu_order=`（组内排序）和 `note=`（语义坑）。
+`notes.conf` 把 `note=` 的 slug 映射成人类可读说明，`ext list --json` 会一并输出；
+新增 recipe 不需要改 driver。
+
 ### 交互选择扩展
 
-`phprt install 8.5` 不写 `--ext` 时，需要构建的情况下会打开内置的选择器：
+`phprt install 8.5` 不写 `--ext` 时，需要构建的情况下会打开内置的选择器。
+它是纯 ANSI 自绘的，不依赖 gum；分类、树形子项、三态勾选和固定项都在同一个终端界面里完成：
 
 ```bash
 phprt install 8.5                  # 选完扩展再装
@@ -386,6 +412,18 @@ phprt add ext redis --shared --opt redis=lzf
 | xdebug | 调试 / 覆盖率 | shared | 仅 shared |
 | yaml | YAML | shared | 静态 / shared |
 
+### 最近一轮新增
+
+| 类型 | 新增 | 说明 |
+| --- | --- | --- |
+| builtin | `pcntl` `posix` `readline` `sockets` `shmop` `sysvmsg` `sysvsem` `sysvshm` | 进程/信号、POSIX、行编辑、socket、共享内存和 System V IPC |
+| builtin 拆分 | `mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql`、`sqlite3` | 每个驱动独立选择；`sqlite3` 同时产出 `pdo_sqlite` |
+| dep | `ncurses` `readline` `libpq` `sqlite` | readline 的 termcap、PostgreSQL 客户端库、SQLite 本体 |
+| PECL | `amqp` `imagick` `memcached` `mongodb` `rdkafka` `ssh2` `tidy` 等 | 按需选择，默认集不包含 |
+
+数据库扩展拆开后，`mysqlnd`、`libpq`、`sqlite` 由依赖解析自动构建和去重，
+不出现在扩展清单里；`readline` 目前只能静态编译。
+
 ## 用 chroot 构建（可选）
 
 宿主工具链太杂，或者想要干净可复现的构建环境时，可以在 chroot 里构建。
@@ -430,6 +468,11 @@ phprt buildroot remove
 ## 开发说明
 
 项目由 newcloud 与 DeepSeek V4.1 Flash 1017 持续开发。欢迎加入。
+
+新增扩展可以用 `templates/` 里的 5 个模板；契约改动先改
+`runner/contract.sh` 的字段表，再跑 `tests/contract/run.sh` 和
+`scripts/recipe-check.sh`。机器可读契约用
+`phprt ext list 8.5 --json --name <扩展>` 查看。
 
 ## 相关文档
 
