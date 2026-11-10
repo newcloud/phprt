@@ -879,3 +879,5 @@ ncurses 6.5 / readline 8.3 的三个坑（recipe 里已固定）：
 | `PHPRT_UI=progress` 非终端 | 提示“输出不是终端，改用逐行下载日志”并返回 1 |
 | `PHPRT_UI=plain` | 一直返回 1，走逐行日志 |
 | 桩下载（pty） | 3 个包并发下载，最终帧显示分隔线和 `✓ 完成`，退出码 0 |
+
+| `install --downloads`（pty） | 不写 `--ext` 时先进入 ANSI 选择界面；Esc 退出码 130，不创建 `.phprt`；确认后只下载，不构建 |

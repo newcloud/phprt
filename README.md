@@ -105,7 +105,8 @@ phprt download 8.5 --ext "swoole openssl curl"
 phprt install 8.5 --ext "swoole openssl curl" --downloads
 ```
 
-`--downloads` 也接受 `--download` / `--predownload` 两个简写。
+`--downloads` 也接受 `--download` / `--predownload` 两个简写。不写 `--ext` 时
+会先进入 ANSI 选择界面，选完再下载；加 `--yes`（或不是终端）直接用默认集。
 下载目录固定为项目里的 `.phprt/downloads`。`install`、`add ext`、`update`
 也会复用这个目录，文件存在就跳过，不会重复下载。
 

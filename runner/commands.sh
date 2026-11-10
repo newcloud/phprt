@@ -31,7 +31,8 @@ phprt —— 为项目安装一套隔离的 PHP 运行环境
 
       其他:
       --plan               只打印构建计划（依赖、PHP、static/shared 分组），不构建
-      --downloads          只把源码下载到 .phprt/downloads，不构建
+      --downloads          只把源码下载到 .phprt/downloads，不构建；
+                           不写 --ext 时先进入选择界面，选完再下载
                            （--download / --predownload 同义）
       --downloads-print-urls
                            只打印源码 URL，不下载、不构建
@@ -521,11 +522,11 @@ cmd_install() {
     [ -n "$exts" ] || exts="${DEFAULT_EXTS:-}"
   fi
 
-  # 没写 --ext 时用内置菜单交互选择；--yes / 非终端 / --print-urls 保持原来的
-  # 默认扩展行为，避免脚本和 CI 卡在菜单上。
+  # 没写 --ext 时用内置菜单交互选择（含 --downloads：先选扩展，再下载）；
+  # --yes / 非终端 / --print-urls 保持原来的默认扩展行为，避免脚本和 CI
+  # 卡在菜单上。
   if [ "$ext_given" != 1 ] && [ "$assume_yes" != 1 ] &&
-     [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ] &&
-     ui_select_available; then
+     [ "$print_urls" != 1 ] && ui_select_available; then
     local init_opts=""
     [ -f "$tree/.build-opts" ] && init_opts="$(tr '\n' ' ' < "$tree/.build-opts")"
     init_opts="${init_opts% }"
