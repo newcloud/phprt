@@ -864,3 +864,17 @@ ncurses 6.5 / readline 8.3 的三个坑（recipe 里已固定）：
   留给调用方；加 `--with-shared-termcap-library` 才会把 `libncurses` 写进 NEEDED。
   不加的话，编扩展时 `LD_LIBRARY_PATH` 里的 libreadline 会让宿主的 `awk`（gawk）
   加载失败（`undefined symbol: UP`）。
+
+## 下载进度 ANSI 重写（2026-11-10）
+
+| 检查 | 结果 |
+| --- | --- |
+| 去掉 gum | `source_ui_progress` 不再检查 `gum`；`source_progress_render_frame` 删除，系统没装 gum 也能画进度 |
+| 帧结构 | 头部两行 + `─` 分隔线 + 每包一行；无边框、无整屏 `\033[2J` |
+| 帧重绘 | 整帧一次写出；先上移上一帧行数，逐行 `\r\033[2K`，末尾 `\033[0J`；内容不变不重画 |
+| 缩短场景（pty） | 先画 5 行再画 2 行，最终只剩 `alpha`/`beta`，没有 `three`/`five` 残留 |
+| 50 列终端（pty） | 走 compact 行，标签截到 18 字符，行宽不超过 50，没有换行错位 |
+| `PHPRT_UI=auto` 非终端 | 返回 1，走逐行日志 |
+| `PHPRT_UI=progress` 非终端 | 提示“输出不是终端，改用逐行下载日志”并返回 1 |
+| `PHPRT_UI=plain` | 一直返回 1，走逐行日志 |
+| 桩下载（pty） | 3 个包并发下载，最终帧显示分隔线和 `✓ 完成`，退出码 0 |

@@ -184,8 +184,7 @@ tar xz unzip binutils m4 perl curl
 ```
 
 可选：`aria2`（提供 `aria2c`）。装了会用它多连接下载，没装用 curl。
-可选：`gum`。只用于下载进度框；没装就用逐行日志。选择扩展的菜单由
-`runner/ui.sh` 自己绘制，不依赖 gum。
+下载进度和扩展选择菜单都由 phprt 用 ANSI 自绘，不需要 `gum` 之类的额外命令。
 
 Fedora：
 
@@ -200,10 +199,6 @@ Debian / Ubuntu 可以额外安装：
 sudo apt install aria2
 ```
 
-`gum` 不在所有发行版的默认仓库里；可以用发行版包、`go install
-github.com/charmbracelet/gum@latest`，或从 GitHub Releases 下载。只影响下载
-进度框的外观，不影响扩展选择。
-
 缺命令时 phprt 会在用到的那一步报 `缺少命令: xxx`。
 
 ## 特点
@@ -217,7 +212,7 @@ github.com/charmbracelet/gum@latest`，或从 GitHub Releases 下载。只影响
 7. **可生成单个 php**：`--static-all` / `--static-all-lto` 生成一个 `bin/php`，方便分发（当前支持 openssl zlib curl sqlite3 mbstring）。
 8. **干净构建**：可选 chroot 构建环境，不混入宿主工具链。
 9. **离线构建**：用 `phprt download` 提前把源码放进 `.phprt/downloads`，断网时直接构建。
-10. **纯 ANSI 扩展选择器**：分类、树形子项、三态勾选、固定项和子选项都在终端里完成，不依赖 gum。
+10. **纯 ANSI 终端界面**：扩展选择（分类、树形子项、三态勾选、固定项）和下载进度都在终端里自绘，不依赖 gum。
 11. **机器可读契约**：`phprt ext list --json --name <扩展>` 一次给出依赖、模块、ini、flags、opts、hooks 和语义坑。
 12. **下载队列**：全局/单站点并发限制、断点续传、aria2c 加速、GitHub 镜像回退、超时与低速放弃，失败的文件单独汇总。
 

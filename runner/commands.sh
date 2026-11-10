@@ -519,7 +519,7 @@ cmd_install() {
     [ -n "$exts" ] || exts="${DEFAULT_EXTS:-}"
   fi
 
-  # 没写 --ext 时用 gum 交互选择；--yes / 非终端 / --print-urls 保持原来的
+  # 没写 --ext 时用内置菜单交互选择；--yes / 非终端 / --print-urls 保持原来的
   # 默认扩展行为，避免脚本和 CI 卡在菜单上。
   if [ "$ext_given" != 1 ] && [ "$assume_yes" != 1 ] &&
      [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ] &&

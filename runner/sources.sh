@@ -678,24 +678,24 @@ prefetch_sources_plain() {
 }
 
 # ---------------------------------------------------------------------------
-# 终端进度框：gum 画外框，多行进度由这里轮询文件大小维护。
-# 只在 stdout 是终端、能找到 gum 且没有设置 PHPRT_UI=plain 时启用。
+# 终端进度：纯 ANSI 自绘，多行进度由这里轮询文件大小维护。
+# 只在 stdout 是终端且没有设置 PHPRT_UI=plain 时启用；不依赖 gum。
 # ---------------------------------------------------------------------------
 source_ui_progress() {
   case "${PHPRT_UI:-auto}" in
     plain) return 1 ;;
     progress)
-      if command -v gum >/dev/null 2>&1; then
+      if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
         return 0
       fi
-      warn "找不到 gum，改用逐行下载日志"
+      warn "输出不是终端，改用逐行下载日志"
       return 1
       ;;
     auto)
       [ -t 1 ] || return 1
       [ "${TERM:-dumb}" != dumb ] || return 1
       [ -z "${NO_COLOR:-}" ] || return 1
-      command -v gum >/dev/null 2>&1
+      return 0
       ;;
     *) return 1 ;;
   esac
@@ -844,33 +844,44 @@ source_human_size_bytes() {  # $1=字节数（不读文件）
   }'
 }
 
-source_progress_render_frame() {  # $1=正文
-  printf '%s\n' "$1" | gum style \
-    --width "${SOURCE_UI_FRAME_WIDTH:-78}" \
-    --border rounded --border-foreground 240 --padding '0 1' --no-strip-ansi
+# 分隔线：单宽的 ─，宽度跟着终端走（最多 100 列）
+source_progress_rule() {  # $1=宽度
+  local w="${1:-80}" out="" i
+  [ "$w" -lt 10 ] && w=10
+  [ "$w" -gt 100 ] && w=100
+  for ((i = 0; i < w; i++)); do out+="─"; done
+  printf '%s' "$out"
 }
 
-source_progress_erase() {  # 擦掉上一帧
-  local n="${SOURCE_UI_PREV_LINES:-0}" i
-  [ "$n" -gt 0 ] || return 0
-  printf '\033[%dA' "$n"
-  for ((i = 0; i < n; i++)); do printf '\033[2K\n'; done
-  printf '\033[%dA' "$n"
+# 进入/退出进度界面：隐藏光标、关自动换行（长中文行宁可裁掉，也不打乱帧）。
+source_progress_begin() {
+  printf '\033[?25l\033[?7l'
   SOURCE_UI_PREV_LINES=0
+  SOURCE_UI_LAST_BODY=""
+  trap 'printf "\033[?7h\033[?25h"' EXIT INT TERM
 }
 
-source_progress_draw() {  # $1=正文
-  local frame lines n=0
-  frame="$(source_progress_render_frame "$1")"
-  lines="$(printf '%s\n' "$frame" | wc -l)"
+source_progress_end() {
+  printf '\033[?7h\033[?25h'
+  trap - EXIT INT TERM
+}
+
+# 整帧一次写出：上移上一帧行数，逐行 \033[2K 覆盖，末尾 \033[0J 清掉变短后的残留。
+source_progress_draw() {  # $1=正文（多行，不带末尾换行）
+  local body="$1" line n=0 frame=$'\r'
+  [ "$body" = "${SOURCE_UI_LAST_BODY:-}" ] && return 0
+  SOURCE_UI_LAST_BODY="$body"
+
   if [ "${SOURCE_UI_PREV_LINES:-0}" -gt 0 ]; then
-    printf '\033[%dA' "$SOURCE_UI_PREV_LINES"
+    frame+=$'\033['"${SOURCE_UI_PREV_LINES}"'A'
   fi
   while IFS= read -r line; do
-    printf '\033[2K%s\n' "$line"
+    frame+=$'\033[2K'"$line"$'\n'
     n=$((n + 1))
-  done <<< "$frame"
-  SOURCE_UI_PREV_LINES="$n"
+  done <<< "$body"
+  frame+=$'\033[0J'
+  printf '%s' "$frame"
+  SOURCE_UI_PREV_LINES=$n
 }
 
 source_progress_error_reason() {  # $1=err 文件
@@ -942,12 +953,13 @@ prefetch_sources_progress() {
   local total idx=0 running=0 rc=0
   local line l kind name ver file url sha label
   local plan_file failed_file
-  local cols="${COLUMNS:-80}"
+  local cols
   local SPIN_CHARS="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-  SOURCE_UI_FRAME_WIDTH=$((cols - 2))
-  [ "$SOURCE_UI_FRAME_WIDTH" -lt 40 ] && SOURCE_UI_FRAME_WIDTH=40
-  [ "$SOURCE_UI_FRAME_WIDTH" -gt 160 ] && SOURCE_UI_FRAME_WIDTH=160
-  cols="$SOURCE_UI_FRAME_WIDTH"
+  cols="$(tput cols 2>/dev/null || true)"
+  case "$cols" in ''|*[!0-9]*) cols="${COLUMNS:-80}" ;; esac
+  case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+  [ "$cols" -lt 40 ] && cols=40
+  [ "$cols" -gt 160 ] && cols=160
 
   case "$jobs" in
     ''|*[!0-9]*|0) die "--download-jobs 需要正整数: $jobs" ;;
@@ -974,8 +986,7 @@ prefetch_sources_progress() {
   printf '下载地址:\n'
   source_plan_print_urls
   printf '\n'
-  printf '\033[?25l'
-  trap 'printf "\033[?25h"' EXIT INT TERM
+  source_progress_begin
 
   if [ "$write_list" = 1 ]; then
     local list="$DOWNLOADS/download-urls-php${PHP_VERSION}-$(date +%Y%m%d).txt"
@@ -1057,21 +1068,28 @@ prefetch_sources_progress() {
     done
   }
 
+  # 组装一帧正文；结果放 SOURCE_UI_BODY（不带末尾换行）。
+  source_progress_body() {
+    local shown_ids=() i out
+    mapfile -t shown_ids < <(source_progress_visible_ids)
+    out="源码目录: $(source_progress_fit "$DOWNLOADS" $((cols - 8)))"
+    out+=$'\n'"$(source_progress_fit "共 ${#all_idx[@]} 个包，并发 $jobs（每站点 $host_jobs）；已存在会自动跳过" $((cols - 2)))"
+    out+=$'\n'"$(source_progress_rule "$cols")"
+    for i in "${shown_ids[@]}"; do
+      source_progress_row "$i" "$cols"
+      out+=$'\n'"$SOURCE_UI_ROW"
+    done
+    if [ "${#shown_ids[@]}" -lt "${#all_idx[@]}" ]; then
+      out+=$'\n'"    … 还有 $(( ${#all_idx[@]} - ${#shown_ids[@]} )) 个包"
+    fi
+    SOURCE_UI_BODY="$out"
+  }
+
   while [ "$qpending" -gt 0 ] || [ "$running" -gt 0 ]; do
     source_progress_start_more
 
-    local body="" shown_ids=() i url_line
-    mapfile -t shown_ids < <(source_progress_visible_ids)
-    body="源码目录: $(source_progress_fit "$DOWNLOADS" $((cols - 8)))"$'\n'
-    body+="$(source_progress_fit "共 ${#all_idx[@]} 个包，并发 $jobs（每站点 $host_jobs）；已存在会自动跳过" $((cols - 2)))"$'\n\n'
-    for i in "${shown_ids[@]}"; do
-      source_progress_row "$i" "$cols"
-      body+="$SOURCE_UI_ROW"$'\n'
-    done
-    if [ "${#shown_ids[@]}" -lt "${#all_idx[@]}" ]; then
-      body+="    … 还有 $(( ${#all_idx[@]} - ${#shown_ids[@]} )) 个包"$'\n'
-    fi
-    source_progress_draw "$body"
+    source_progress_body
+    source_progress_draw "$SOURCE_UI_BODY"
 
     # 回收已结束的 worker
     local -a keys=("${!pid_of[@]}")
@@ -1088,18 +1106,9 @@ prefetch_sources_progress() {
   done
 
   # 最后再画一帧，把 done/fail 状态留在屏幕上。
-  local body="" shown_ids=() i
-  mapfile -t shown_ids < <(source_progress_visible_ids)
-  body="源码目录: $(source_progress_fit "$DOWNLOADS" $((cols - 8)))"$'\n'
-  body+="共 ${#all_idx[@]} 个包，并发 $jobs（每站点 $host_jobs）；已存在会自动跳过"$'\n\n'
-  for i in "${shown_ids[@]}"; do
-    source_progress_row "$i" "$cols"
-    body+="$SOURCE_UI_ROW"$'\n'
-  done
-  if [ "${#shown_ids[@]}" -lt "${#all_idx[@]}" ]; then
-    body+="    … 还有 $(( ${#all_idx[@]} - ${#shown_ids[@]} )) 个包"$'\n'
-  fi
-  source_progress_draw "$body"
+  source_progress_body
+  source_progress_draw "$SOURCE_UI_BODY"
+  source_progress_end
 
   if [ -s "$failed_file" ]; then
     rc=1
