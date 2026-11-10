@@ -10,9 +10,15 @@ phprt 是一个给 PHP 项目准备运行环境的构建脚本，用法类似 Py
 
 ```bash
 cd ~/blog
+# 不写 --ext：进入 ANSI 菜单，按分类选择扩展和子选项
+/path/to/phprt/phprt install 8.5
+# 也可以直接在命令行指定扩展
 /path/to/phprt/phprt install 8.5 --ext "openssl curl zip mbstring intl redis"
 ./myphp -r "phpinfo();"
 ```
+
+菜单是纯 ANSI 自绘的：分类标题、树形子项、三态勾选，`Space` 切换、
+`Enter` 展开子项或确认。脚本/CI 里加 `--yes`（或不是终端）时跳过菜单，用默认集。
 
 装好后项目里会多一个 `./myphp`，后面都用它跑 PHP：
 
@@ -95,6 +101,17 @@ phprt download 8.5 --ext "swoole openssl curl"
 下载目录固定为项目里的 `.phprt/downloads`。`install`、`add ext`、`update`
 也会复用这个目录，文件存在就跳过，不会重复下载。
 
+网络不好时可以配置代理，下载和上游查询都会走它（大小写都认，优先
+`https_proxy`）：
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY="$HTTP_PROXY"
+phprt download 8.5 --ext "swoole openssl curl"
+```
+
+也可以只对一次命令生效：`phprt download 8.5 --proxy http://127.0.0.1:7890`。
+
 只查看下载链接，不下载：
 
 ```bash
@@ -124,13 +141,12 @@ phprt update openssl 3.5.10 --downloads
 
 下载默认全局 10 路并发，但同一站点最多 2 个；可以用 `--download-jobs N` 和
 `--download-host-jobs N` 调整。终端里会先列出所有要下载的包和完整地址，然后按这两个限制
-启动；进度框宽度固定，不会随进度数字或 URL 长度变化。框内只显示包名、进度、
+启动；进度区宽度固定，不会随进度数字或 URL 长度变化。进度区只显示包名、进度、
 速度和状态，其余显示“等待”，完成一个自动补上下一个。单个文件默认最多下载
 900 秒，可以用 `--timeout N` 调整；超时或连续 60 秒低于 1KB/s 就放弃该文件，
-继续下载其它文件。管道或 CI 里
-自动改成逐行日志，也可以用 `--ui plain` 强制关闭进度框。代理只使用用户配置的
-`http_proxy`、`https_proxy` 或 `--proxy URL`；都没有就直连。中断后再次运行会
-从断点继续。
+继续下载其它文件。管道或 CI 里自动改成逐行日志，也可以用 `--ui plain` 强制
+关闭进度。代理只使用用户配置的 `http_proxy`、`https_proxy`（大写也认）或
+`--proxy URL`；都没有就直连。中断后再次运行会从断点继续。
 
 如果系统里装了 `aria2c`，phprt 会用它替代 curl 下载，每个文件默认 4 个连接，
 大文件通常会快一些。没有 `aria2c` 时自动退回 curl。
@@ -164,8 +180,8 @@ https://gh.llkk.cc/
 | `--download-jobs N` / `PHPRT_DOWNLOAD_JOBS` | 10 | 全局同时下载的文件数 |
 | `--download-host-jobs N` / `PHPRT_DOWNLOAD_HOST_JOBS` | 2 | 同一站点/host 桶的并发数 |
 | `--timeout N` / `PHPRT_DOWNLOAD_TIMEOUT` | 900 | 单个文件最长下载秒数 |
-| `--ui auto\|plain\|progress` / `PHPRT_UI` | auto | 进度框或逐行日志；非终端自动用 plain |
-| `--proxy URL` / `http_proxy` / `https_proxy` | 直连 | 下载和上游查询共用 |
+| `--ui auto\|plain\|progress` / `PHPRT_UI` | auto | 进度区或逐行日志；非终端自动用 plain |
+| `--proxy URL` / `HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` / `https_proxy` | 直连 | 下载和上游查询共用 |
 | `PHPRT_ARIA2=0` | 自动 | 禁用 aria2c，强制 curl |
 | `PHPRT_ARIA2_CONNECTIONS` | 4 | aria2c 每个文件的连接数 |
 | `PHPRT_GITHUB_DIRECT_TIMEOUT` | 60 | GitHub 直连等待秒数，超时换镜像 |
@@ -183,14 +199,15 @@ gcc gcc-c++ make cmake pkgconf-pkg-config patchelf
 tar xz unzip binutils m4 perl curl
 ```
 
-可选：`aria2`（提供 `aria2c`）。装了会用它多连接下载，没装用 curl。
+推荐安装 `aria2`（提供 `aria2c`）：多个连接下载，大文件通常会快一些；没装自动用 curl。
 下载进度和扩展选择菜单都由 phprt 用 ANSI 自绘，不需要额外的终端 UI 命令。
 
 Fedora：
 
 ```bash
 sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config patchelf \
-    tar xz unzip binutils m4 perl curl aria2
+    tar xz unzip binutils m4 perl curl \
+    aria2   # 可选，推荐：aria2c 下载加速
 ```
 
 Debian / Ubuntu 可以额外安装：
@@ -214,7 +231,7 @@ sudo apt install aria2
 9. **离线构建**：用 `phprt download` 提前把源码放进 `.phprt/downloads`，断网时直接构建。
 10. **纯 ANSI 终端界面**：扩展选择（分类、树形子项、三态勾选、固定项）和下载进度都在终端里自绘，不依赖外部 UI 工具。
 11. **机器可读契约**：`phprt ext list --json --name <扩展>` 一次给出依赖、模块、ini、flags、opts、hooks 和语义坑。
-12. **下载队列**：全局/单站点并发限制、断点续传、aria2c 加速、GitHub 镜像回退、超时与低速放弃，失败的文件单独汇总。
+12. **下载支持**：`phprt download` 可以先把源码下好；队列有全局/单站点并发限制、断点续传、aria2c 加速、GitHub 镜像回退、超时与低速放弃，失败文件单独汇总，进度用 ANSI 自绘。
 
 ## 支持的扩展
 
