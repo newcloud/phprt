@@ -282,6 +282,10 @@ phprt install 8.5 --yes            # 不询问，直接用默认集（脚本/CI�
 不清屏：`$ phprt select 8.5` 那行和上面的历史输出一直看得见，退出后只清掉
 菜单这一块。想要全屏菜单可以设 `PHPRT_ALT_SCREEN=1`。
 
+`phprt install 8.5` 的实际界面（图中展开了 gd 的子项）：
+
+![phprt install 8.5 的 ANSI 扩展选择界面](docs/ui.png)
+
 有子项的扩展展开后直接排在下面：
 
 ```text
