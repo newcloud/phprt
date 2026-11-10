@@ -45,14 +45,14 @@ source_host_bucket() {
 # 源码 URL 变量名：version=LIBCURL_VERSION -> LIBCURL_URL
 source_url_var_of() {  # $1=recipe 文件
   local v
-  v="$(recipe_field "$1" version)"
+  v="$(recipe_version_var "$1")"
   [ -n "$v" ] || return 1
   printf '%s_URL\n' "${v%_VERSION}"
 }
 
 source_sha_var_of() {  # $1=recipe 文件
   local v
-  v="$(recipe_field "$1" version)"
+  v="$(recipe_version_var "$1")"
   [ -n "$v" ] || return 1
   printf '%s_SHA256\n' "${v%_VERSION}"
 }
@@ -87,11 +87,11 @@ source_add_php() {
 source_add_module() {  # $1=recipe 文件 $2=layer
   local sh="$1" layer="$2" kind name var ver uvar svar url sha
   kind="$(recipe_kind_of "$sh")"
-  name="$(recipe_field "$sh" name)"
-  [ -n "$name" ] || name="$(recipe_name_of "$sh")"
-  var="$(recipe_field "$sh" version)"
+  name="$(recipe_name_of "$sh")"
+  var="$(recipe_version_var "$sh")"
   [ -n "$var" ] || die "$kind/$name 的 recipe 没有 version="
-  ver="${!var:-}"
+  ver="$(recipe_version "$sh")"
+  [ -n "$ver" ] || die "$kind/$name 的版本变量 $var 没有值"
   uvar="$(source_url_var_of "$sh")" || die "$kind/$name 推导不出 URL 变量"
   svar="$(source_sha_var_of "$sh")" || die "$kind/$name 推导不出 SHA256 变量"
   url="${!uvar:-}"
@@ -139,7 +139,7 @@ source_root_needs() {
   if [ -f "$BUNDLE/builtin/$e.sh" ]; then
     out="$(needs_with_switch "$e" || true)"
     sh="$BUNDLE/builtin/$e.sh"
-    t="$(recipe_field "$sh" tools | tr ',' ' ')"
+    t="$(recipe_tools_of "$sh")"
     printf '%s\n' $out $t | awk 'NF && !seen[$0]++'
   else
     module_needs "$e"

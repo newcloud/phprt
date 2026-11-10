@@ -245,7 +245,7 @@ upstream_versions_by_field() {
 # 最后按头部 upstream= 走公共实现。失败返回非 0。
 module_versions() {
   local sh="$1" up
-  up="$(recipe_field "$sh" upstream)"
+  up="$(recipe_upstream "$sh")"
   if recipe_has_func "$sh" versions; then
     bash "$sh" versions 2>/dev/null || return 1
   elif recipe_has_func "$sh" latest_version; then

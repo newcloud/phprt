@@ -200,13 +200,151 @@ recipe_has_func() {
   grep -qE "^[[:space:]]*$2[[:space:]]*\\(\\)[[:space:]]*\\{" "$1"
 }
 
+recipe_version_var() {  # $1=文件 -> 头部 version= 的变量名
+  recipe_field "$1" version
+}
+
 recipe_version() {  # $1=文件 -> 头部 version= 指向的变量的值
   local var v
-  var="$(recipe_field "$1" version)"
+  var="$(recipe_version_var "$1")"
   [ -n "$var" ] || return 0
   v="${!var:-}"
   [ -n "$v" ] && printf '%s\n' "$v"
   return 0
+}
+
+recipe_switch()     { recipe_field "$1" switch; }
+recipe_ini()        { recipe_field "$1" ini; }
+recipe_upstream()   { recipe_field "$1" upstream; }
+recipe_category()   { recipe_field "$1" category; }
+recipe_menu_order() { recipe_field "$1" menu_order; }
+recipe_wheel()      { recipe_field "$1" wheel; }
+recipe_desc()       { recipe_field "$1" desc; }
+recipe_notes() {  # $1=文件 -> 一行一个 note slug
+  local v
+  v="$(recipe_field "$1" note)"
+  [ -n "$v" ] || return 0
+  printf '%s\n' "${v//+/ }"
+}
+
+recipe_needs_of() {  # $1=文件 -> 空格分隔的头部 needs
+  recipe_field "$1" needs | tr ',' ' '
+}
+
+recipe_tools_of() {  # $1=文件 -> 空格分隔的头部 tools
+  recipe_field "$1" tools | tr ',' ' '
+}
+
+recipe_modules_list() {  # $1=文件 -> 空格分隔的 modules；ext 省略时用 name
+  local m
+  m="$(recipe_field "$1" modules)"
+  [ -n "$m" ] || m="$(recipe_name_of "$1")"
+  printf '%s\n' "${m//,/ }"
+}
+
+recipe_hooks() {  # $1=文件 -> 一行一个已实现的可选钩子
+  local f="$1" h
+  for h in flags configure_args needs opts build enable verify stage_static \
+           versions latest_version download_url checksum; do
+    recipe_has_func "$f" "$h" && printf '%s\n' "$h"
+  done
+}
+
+# 临时把 switch 置成指定值再查询，查询完恢复。用于 --flags / --needs 的 0/1 对比。
+recipe_query_with_switch() {  # $1=recipe $2=0|1 $3=动词
+  local sh="$1" val="$2" verb="$3" sw old out rc=0
+  sw="$(recipe_switch "$sh")"
+  if [ -z "$sw" ]; then
+    out="$(bash "$sh" "$verb")" || rc=$?
+    printf '%s\n' "$out"
+    return "$rc"
+  fi
+  old="${!sw:-0}"
+  printf -v "$sw" '%s' "$val"
+  export "${sw?}"
+  out="$(bash "$sh" "$verb")" || rc=$?
+  printf -v "$sw" '%s' "$old"
+  export "${sw?}"
+  printf '%s\n' "$out"
+  return "$rc"
+}
+
+_recipe_needs_only_sh() {  # $1=recipe -> 硬依赖，不含 tools
+  local sh="$1"
+  if recipe_has_func "$sh" needs; then
+    bash "$sh" --needs 2>/dev/null || true
+  else
+    recipe_needs_of "$sh"
+  fi
+}
+
+# 从给定依赖名出发，递归收集 dep/tool 的版本、needs、tools、notes。
+# 输出：name|kind|version|needs|tools|notes（用 | 避免空字段被 read 折叠）
+recipe_needs_closure() {
+  local -a q=("$@")
+  local -A seen=()
+  local n sh kind ver needs tools notes x
+  while [ ${#q[@]} -gt 0 ]; do
+    n="${q[0]}"
+    q=("${q[@]:1}")
+    [ -n "$n" ] || continue
+    [ -n "${seen[$n]+x}" ] && continue
+    seen[$n]=1
+    sh="$(module_sh "$n" 2>/dev/null)" || continue
+    kind="$(recipe_kind_of "$sh")"
+    ver="$(recipe_version "$sh")"
+    needs="$(_recipe_needs_only_sh "$sh" | awk 'NF && !seen[$0]++' | tr '\n' ' ' || true)"
+    needs="${needs% }"
+    tools="$(recipe_tools_of "$sh")"
+    notes="$(recipe_notes "$sh" | tr '\n' ' ' || true)"
+    notes="${notes% }"
+    printf '%s|%s|%s|%s|%s|%s\n' \
+      "$n" "$kind" "$ver" "$needs" "$tools" "$notes"
+    for x in $needs $tools; do
+      [ -n "$x" ] && q+=("$x")
+    done
+  done
+}
+
+# JSON 输出辅助。值都是单行；换行转成 \n 兜底。
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r//g'
+}
+
+json_words() {  # 空格分隔 -> JSON 字符串数组
+  local first=1 w out=""
+  for w in $*; do
+    [ -n "$w" ] || continue
+    [ "$first" = 1 ] || out+=","
+    first=0
+    out+="\"$(json_escape "$w")\""
+  done
+  printf '[%s]' "$out"
+}
+
+json_lines() {  # 一行一个 -> JSON 字符串数组
+  local first=1 line out=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$first" = 1 ] || out+=","
+    first=0
+    out+="\"$(json_escape "$line")\""
+  done
+  printf '[%s]' "$out"
+}
+
+json_notes() {  # $1=recipe -> [{slug,text}]；文本来自 notes.conf，缺省用 slug
+  local f="$1" slug text first=1 out="" nf="${BUNDLE:-}/notes.conf"
+  while IFS= read -r slug; do
+    [ -n "$slug" ] || continue
+    text=""
+    [ -f "$nf" ] && text="$(sed -n "s/^$slug=//p" "$nf" | head -1)"
+    [ -n "$text" ] || text="$slug"
+    [ "$first" = 1 ] || out+=","
+    first=0
+    out+="{\"slug\":\"$(json_escape "$slug")\",\"text\":\"$(json_escape "$text")\"}"
+  done < <(recipe_notes "$f")
+  printf '[%s]' "$out"
 }
 
 # 模块（扩展/依赖/工具）的 recipe 路径。搜索顺序 deps -> ext -> tools -> builtin，
@@ -229,11 +367,19 @@ ext_recipe_sh() {
   return 1
 }
 
-# 扩展改过名字时给一句提示（只用于“未知扩展”报错）
+# 扩展改过名字时给一句提示（只用于“未知扩展”报错）。
+# 映射放在 bundle 数据里，driver 不认识具体包名。
 ext_name_hint() {
-  case "$1" in
-    sqlite) printf '；SQLite 已合并到 sqlite3（同时产出 pdo_sqlite）' ;;
-  esac
+  local f="${BUNDLE:-}/aliases.conf" old new
+  [ -n "${BUNDLE:-}" ] && [ -f "$f" ] || return 0
+  while IFS='=' read -r old new; do
+    case "$old" in ''|\#*) continue ;; esac
+    if [ "$old" = "$1" ] && [ -n "$new" ]; then
+      printf '；%s 已改名为 %s' "$old" "$new"
+      return 0
+    fi
+  done < "$f"
+  return 0
 }
 
 # 安装位置：dep -> deps/<名字>-<版本>；tool -> tools/<名字>-<版本>；
@@ -243,9 +389,8 @@ recipe_dir_of() {
   load_config
   sh="$(module_sh "$name")"
   kind="$(recipe_kind_of "$sh")"
-  var="$(recipe_field "$sh" version)"
-  ver=""
-  [ -n "$var" ] && ver="${!var:-}"
+  var="$(recipe_version_var "$sh")"
+  ver="$(recipe_version "$sh")"
   case "$kind" in
     dep)  [ -n "$ver" ] || die "dep/$name 的版本变量 ${var:-<空>} 没有值"
           printf '%s/%s-%s\n' "$DEPS" "$name" "$ver" ;;
@@ -282,7 +427,7 @@ builtin_apply_switches() {
   for f in "$BUNDLE"/builtin/*.sh "$BUNDLE"/ext/*.sh; do
     [ -f "$f" ] || continue
     e="$(recipe_name_of "$f")"
-    sw="$(recipe_field "$f" switch)"
+    sw="$(recipe_switch "$f")"
     [ -n "$sw" ] || continue
     case " ${SELECTED_EXTS//,/ } " in
       *" $e "*) v=1 ;;
@@ -318,8 +463,14 @@ ext_opt_var() {  # $1=switch $2=key -> 环境变量名
   printf '%s_%s\n' "$sw" "$(printf '%s' "$key" | tr '[:lower:]-' '[:upper:]_')"
 }
 
+declare -gA PR_OPTS_META_CACHE=()
+
 recipe_opts_meta() {  # $1=recipe 文件 -> key<TAB>state<TAB>label
   local sh="$1" out
+  if [ -n "${PR_OPTS_META_CACHE[$sh]+x}" ]; then
+    printf '%s\n' "${PR_OPTS_META_CACHE[$sh]}"
+    return 0
+  fi
   recipe_has_func "$sh" opts || return 0
   out="$(BUNDLE="${BUNDLE:-$(cd "$(dirname "$sh")/.." && pwd)}" bash "$sh" --opts)" ||
     { warn "读取子选项失败: $sh"; return 1; }
@@ -329,6 +480,7 @@ recipe_opts_meta() {  # $1=recipe 文件 -> key<TAB>state<TAB>label
       exit 1
     }
   ' || { warn "opts() 输出格式错误（需要 key<TAB>state<TAB>label）: $sh"; return 1; }
+  PR_OPTS_META_CACHE[$sh]="$out"
   printf '%s\n' "$out"
 }
 
@@ -348,6 +500,17 @@ ext_opts_get() {  # $1="gd=..." $2=扩展名 -> 子选项列表；没写返回 2
 # 值不能带空格（头部字段用空格分隔）；显示名可以带空格。
 # ---------------------------------------------------------------------------
 PHPRT_EXT_CATEGORIES=(Database CacheStorage Compression Cryptography Image Internationalization Network Runtime Other)
+declare -gA PHPRT_CATEGORY_LABELS=(
+  [Database]=Database
+  [CacheStorage]='Cache & Storage'
+  [Compression]=Compression
+  [Cryptography]=Cryptography
+  [Image]='Image Processing'
+  [Internationalization]=Internationalization
+  [Network]=Network
+  [Runtime]=Runtime
+  [Other]=Other
+)
 
 ext_category_rank() {  # $1=分类名 -> 1..N；未知按 Other
   local c i=0
@@ -359,17 +522,13 @@ ext_category_rank() {  # $1=分类名 -> 1..N；未知按 Other
 }
 
 ext_category_label() {  # $1=分类名 -> 界面显示名
-  case "$1" in
-    CacheStorage) printf 'Cache & Storage' ;;
-    Image)        printf 'Image Processing' ;;
-    '')           printf 'Other' ;;
-    *)            printf '%s' "$1" ;;
-  esac
+  local l="${PHPRT_CATEGORY_LABELS[$1]:-}"
+  printf '%s' "${l:-${1:-Other}}"
 }
 
 ext_category_of() {  # $1=recipe 文件 -> 分类名（缺省 Other）
   local c
-  c="$(recipe_field "$1" category)"
+  c="$(recipe_category "$1")"
   case " ${PHPRT_EXT_CATEGORIES[*]} " in
     *" $c "*) printf '%s' "$c" ;;
     *)        printf 'Other' ;;
@@ -378,7 +537,7 @@ ext_category_of() {  # $1=recipe 文件 -> 分类名（缺省 Other）
 
 ext_menu_order() {  # $1=recipe 文件 -> 分类内的排序号（缺省 1000）
   local o
-  o="$(recipe_field "$1" menu_order)"
+  o="$(recipe_menu_order "$1")"
   case "$o" in ''|*[!0-9]*) printf '1000' ;; *) printf '%s' "$o" ;; esac
 }
 
@@ -411,7 +570,7 @@ apply_ext_opts() {
   for e in ${SELECTED_EXTS:-}; do
     sh="$(ext_recipe_sh "$e")" || continue
     recipe_has_func "$sh" opts || continue
-    sw="$(recipe_field "$sh" switch)"
+    sw="$(recipe_switch "$sh")"
     [ -n "$sw" ] || continue
     meta="$(recipe_opts_meta "$sh")" || continue
     if [ -n "${want[$e]+x}" ]; then
@@ -439,7 +598,7 @@ ext_opts_effective() {  # $1=扩展列表 -> "gd=jpeg,png,..."（只列有 opts 
   for e in $1; do
     sh="$(ext_recipe_sh "$e")" || continue
     recipe_has_func "$sh" opts || continue
-    sw="$(recipe_field "$sh" switch)"
+    sw="$(recipe_switch "$sh")"
     meta="$(recipe_opts_meta "$sh")" || continue
     list=""
     while IFS=$'\t' read -r key state label; do
@@ -651,49 +810,23 @@ ext_current_mode() {
 # 临时把 switch 置 1 取 flags：shared builtin 的 phpize 参数和 PHP
 # configure 参数是同一套，但 PHP 侧开关已经被置 0。
 flags_with_switch() {
-  local n="$1" sh sw old out
+  local n="$1" sh
   sh="$(ext_recipe_sh "$n")" || return 1
-  sw="$(recipe_field "$sh" switch)"
-  old=""
-  if [ -n "$sw" ]; then
-    old="${!sw:-0}"
-    printf -v "$sw" '%s' 1
-    export "${sw?}"
-  fi
-  out="$(bash "$sh" --flags)"
-  if [ -n "$sw" ]; then
-    printf -v "$sw" '%s' "$old"
-    export "${sw?}"
-  fi
-  printf '%s\n' "$out"
+  recipe_query_with_switch "$sh" 1 --flags
 }
 
 # 临时把 switch 置 1 取 needs：shared builtin 在 PHP 里是关的，
 # 但独立编 .so 仍然需要它的依赖。
 needs_with_switch() {
-  local n="$1" sh sw old out
+  local n="$1" sh
   sh="$(ext_recipe_sh "$n")" || return 1
-  sw="$(recipe_field "$sh" switch)"
-  old=""
-  if [ -n "$sw" ]; then
-    old="${!sw:-0}"
-    printf -v "$sw" '%s' 1
-    export "${sw?}"
-  fi
-  out="$(bash "$sh" --needs)"
-  if [ -n "$sw" ]; then
-    printf -v "$sw" '%s' "$old"
-    export "${sw?}"
-  fi
-  printf '%s\n' "$out"
+  recipe_query_with_switch "$sh" 1 --needs
 }
 
 ext_modules() {  # $1=扩展名 -> 产出的 PHP 模块名（空格分隔）
-  local sh m
+  local sh
   sh="$(ext_recipe_sh "$1")" || sh="$(module_sh "$1")"
-  m="$(recipe_field "$sh" modules)"
-  [ -n "$m" ] || m="$1"
-  printf '%s\n' "${m//,/ }"
+  recipe_modules_list "$sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -713,188 +846,11 @@ recipe_toplevel_offenses() {
   ' "$1"
 }
 
-recipe_validate() {
-  local sh="$1" kind name hdr contract k n req f missing="" ini sw var
-
-  kind="$(recipe_kind_of "$sh")"
-  name="$(recipe_name_of "$sh")"
-  hdr="$(recipe_header "$sh")"
-  [ -n "$hdr" ] || die "recipe 缺少 phprt 头: $sh
-规范: docs/RECIPE.md#3-头部字段"
-
-  contract="$(recipe_field "$sh" contract)"
-  [ "$contract" = v2 ] || die "recipe 不是 contract=v2: $sh（当前: ${contract:-无}）"
-
-  k="$(recipe_field "$sh" kind)"
-  [ -z "$k" ] || [ "$k" = "$kind" ] ||
-    die "recipe kind 与目录不一致: $sh（kind=$k，目录=$kind）"
-  n="$(recipe_field "$sh" name)"
-  [ -z "$n" ] || [ "$n" = "$name" ] ||
-    die "recipe name 与文件名不一致: $sh（name=$n）"
-
-  case "$kind" in
-    builtin) req="switch modules ini" ;;
-    ext)     req="switch version ini tools needs" ;;
-    dep)     req="version needs optional tools" ;;
-    tool)    req="version tools" ;;
-    *)       die "未知 recipe 类型: $sh" ;;
-  esac
-  for f in $req; do
-    printf '%s\n' "$hdr" | tr ' ' '\n' | grep -q "^$f=" || missing="$missing $f"
-  done
-  [ -z "$missing" ] || die "recipe 缺少必填字段:$missing
-文件: $sh
-规范: docs/RECIPE.md#31-字段矩阵"
-
-  # category：builtin/ext 必填，值必须是已知分类（选择器按它分组）
-  local cat
-  cat="$(recipe_field "$sh" category)"
-  if [ "$kind" = builtin ] || [ "$kind" = ext ]; then
-    [ -n "$cat" ] || die "recipe 缺少 category: $sh（可选: ${PHPRT_EXT_CATEGORIES[*]}）"
-    case " ${PHPRT_EXT_CATEGORIES[*]} " in
-      *" $cat "*) ;;
-      *) die "category 不合法: $cat（$sh）
-可选: ${PHPRT_EXT_CATEGORIES[*]}" ;;
-    esac
-  fi
-
-  # switch：builtin/ext 必填且必须是 ENABLE_*，dep/tool 禁止
-  sw="$(recipe_field "$sh" switch)"
-  case "$kind" in
-    builtin|ext)
-      [ -n "$sw" ] || die "recipe 缺少 switch: $sh"
-      printf '%s' "$sw" | grep -qE '^ENABLE_[A-Z0-9_]+$' ||
-        die "switch 必须是 ENABLE_[A-Z0-9_]+: $sw（$sh）"
-      grep -q "$sw" "$sh" || die "switch $sw 没有在 recipe 里使用: $sh" ;;
-    *)
-      [ -z "$sw" ] || die "$kind recipe 不允许 switch: $sh" ;;
-  esac
-
-  # version：ext/dep/tool 必填，变量必须在 recipe 或 bundle.conf 里定义
-  var="$(recipe_field "$sh" version)"
-  if [ "$kind" != builtin ]; then
-    [ -n "$var" ] || die "recipe 缺少 version: $sh"
-    grep -qE "^[[:space:]]*$var=" "$sh" || grep -qE "^$var=" "$BUNDLE/bundle.conf" ||
-      die "version 变量 $var 既不在 recipe 也不在 bundle.conf: $sh"
-  else
-    [ -z "$var" ] || die "builtin recipe 不允许 version: $sh"
-  fi
-
-  # upstream：格式必须合法；有版本的模块必须能查到上游（或显式 none）
-  local up desc
-  up="$(recipe_field "$sh" upstream)"
-  if [ -n "$up" ]; then
-    case "$up" in
-      none) ;;
-      github:*) printf '%s' "${up#github:}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ||
-        die "upstream=github: 后面必须是 owner/repo: $up（$sh）" ;;
-      pecl:*)   printf '%s' "${up#pecl:}" | grep -qE '^[A-Za-z0-9_.-]+$' ||
-        die "upstream=pecl: 后面必须是包名: $up（$sh）" ;;
-      phpnet:*) printf '%s' "${up#phpnet:}" | grep -qE '^[0-9]+\.[0-9]+$' ||
-        die "upstream=phpnet: 后面必须是 大版本.小版本: $up（$sh）" ;;
-      *) die "未知的 upstream 类型: $up（$sh）
-可选: github:owner/repo、pecl:包名、phpnet:x.y、none" ;;
-    esac
-  fi
-  if [ "$kind" != builtin ]; then
-    [ -n "$up" ] || recipe_has_func "$sh" versions || recipe_has_func "$sh" latest_version ||
-      die "$kind/$name 没有版本来源：加 upstream=（或 upstream=none），或实现 versions()
-文件: $sh
-规范: docs/RECIPE.md 的「版本查询」一节"
-  fi
-  desc="$(recipe_field "$sh" desc)"
-  if [ -n "$desc" ] && printf '%s' "$desc" | grep -q '[[:space:]]'; then
-    die "desc 不能包含空格（头部字段用空格分隔）: $sh"
-  fi
-
-  # ini：- 或 NN-<name>.ini；ext 共享模块必须实现 enable()
-  if [ "$kind" = builtin ] || [ "$kind" = ext ]; then
-    ini="$(recipe_field "$sh" ini)"
-    case "$ini" in
-      -) ;;
-      [0-9][0-9]-*.ini) ;;
-      *) die "recipe 的 ini 字段不合法: ${ini:-空}（应为 - 或 20-<name>.ini）
-文件: $sh" ;;
-    esac
-    if [ "$kind" = ext ] && [ "$ini" != - ]; then
-      recipe_has_func "$sh" enable || die "ext/$name 声明了 ini=$ini 但没有 enable()
-文件: $sh"
-    fi
-  fi
-
-  # 编译方式：builtin/ext 必须声明支持范围与默认方式
-  if [ "$kind" = builtin ] || [ "$kind" = ext ]; then
-    local types dflt
-    types="$(recipe_field "$sh" type)"
-    [ -n "$types" ] || die "recipe 缺少 type: $sh
-规范: docs/RECIPE.md#31-字段矩阵（type=static|shared|static,shared）"
-    case "$types" in
-      static|shared|static,shared|shared,static) ;;
-      *) die "recipe 的 type 不合法: $types（应为 static、shared 或 static,shared）
-文件: $sh" ;;
-    esac
-    dflt="$(recipe_field "$sh" default)"
-    [ -n "$dflt" ] || die "recipe 缺少 default: $sh（static 或 shared）"
-    case " $(printf '%s' "$types" | tr ',' ' ') " in
-      *" $dflt "*) ;;
-      *) die "recipe 的 default=$dflt 不在 type=$types 里: $sh" ;;
-    esac
-  fi
-
-  # wheel 例外只对 dep 开放（见 docs/RECIPE.md 第 6 节）
-  local wl item names
-  wl="$(recipe_field "$sh" wheel)"
-  if [ "$kind" != dep ]; then
-    [ -z "$wl" ] || die "$kind recipe 不允许 wheel: $sh"
-  else
-    [ -n "$wl" ] || wl=auto
-    while IFS= read -r item; do
-      [ -n "$item" ] || continue
-      case "$item" in
-        auto|none) ;;
-        exclude:*|singleton:*)
-          names="${item#*:}"
-          printf '%s' "$names" | grep -qE '^[A-Za-z0-9_.+-]+(\+[A-Za-z0-9_.+-]+)*$' ||
-            die "wheel $item 不合法（不能带路径，名字用 + 分隔）: $sh" ;;
-        alias:*)
-          printf '%s' "${item#alias:}" | grep -qE '^[A-Za-z0-9_.+-]+\.so(\.[0-9]+)+$' ||
-            die "wheel alias 必须是 *.so.N 形式: $item（$sh）" ;;
-        *) die "wheel 指令不认识: $item（$sh）" ;;
-      esac
-    done < <(printf '%s\n' "$wl" | tr ';' '\n')
-  fi
-
-  # 函数
-  case "$kind" in
-    builtin)
-      recipe_has_func "$sh" flags || die "builtin/$name 缺少 flags()
-文件: $sh"
-      recipe_has_func "$sh" needs || die "builtin/$name 缺少 needs()
-文件: $sh" ;;
-    ext|dep|tool)
-      recipe_has_func "$sh" build || die "$kind/$name 缺少 build()
-文件: $sh" ;;
-  esac
-
-  # needs/tools/optional 里的每个名字都必须能解析到 recipe
-  local dep fld
-  for fld in needs optional tools; do
-    for dep in $(recipe_field "$sh" "$fld" | tr ',' ' '); do
-      module_sh "$dep" >/dev/null || die "$fld 里的 $dep 找不到 recipe: $sh"
-    done
-  done
-
-  grep -qE '^recipe_main[[:space:]]+"\$@"' "$sh" ||
-    die "recipe 最后一行必须是 recipe_main \"\$@\"
-文件: $sh
-模板: docs/RECIPE.md#8-模板"
-
-  local bad
-  bad="$(recipe_toplevel_offenses "$sh")"
-  [ -z "$bad" ] || die "recipe 顶层出现构建代码（必须放进 build()/flags()/needs()）:
-$bad
-文件: $sh"
-}
+# ---------------------------------------------------------------------------
+# L1 静态校验与头部解析在 contract.sh：字段表、必填/禁止、值域、重复/未知键。
+# 这里保留 recipe_toplevel_offenses（contract.sh 会调用），下面 source 契约层。
+# ---------------------------------------------------------------------------
+. "$PHPRT_RUNNER/contract.sh"
 
 recipe_meta() {
   recipe_header "$1" | tr ' ' '\n' | grep '=' | sort
@@ -919,6 +875,8 @@ recipe_main() {
     --meta)    recipe_meta "$sh" ;;
     --opts)    recipe_has_func "$sh" opts && opts || true ;;
     --version) recipe_version "$sh" ;;
+    --configure-args)
+      recipe_has_func "$sh" configure_args && configure_args || true ;;
     --flags)
       recipe_has_func "$sh" flags || die "$kind/$name 没有 flags()"
       flags ;;
@@ -926,8 +884,7 @@ recipe_main() {
       if recipe_has_func "$sh" needs; then
         needs
       else
-        v="$(recipe_field "$sh" needs)"
-        printf '%s\n' "${v//,/ }"
+        recipe_needs_of "$sh"
       fi ;;
     --check)   ok "recipe $kind/$name 校验通过" ;;
     versions)  recipe_has_func "$sh" versions && versions || true ;;
@@ -941,7 +898,7 @@ recipe_main() {
     enable)    recipe_has_func "$sh" enable && enable || true ;;
     verify)    recipe_has_func "$sh" verify && verify || true ;;
     ""|-h|--help)
-      printf '用法: %s {--meta|--opts|--version|--flags|--needs|--check|build|stage-static|enable|verify}\n' "$name" ;;
+      printf '用法: %s {--meta|--opts|--version|--configure-args|--flags|--needs|--check|build|stage-static|enable|verify}\n' "$name" ;;
     *) die "未知动词: $verb（$kind/$name）" ;;
   esac
 }
@@ -1141,7 +1098,7 @@ enable_ext() {
   local sh kind ini
   sh="$(ext_recipe_sh "$name")" || sh="$(module_sh "$name")"
   kind="$(recipe_kind_of "$sh")"
-  ini="$(recipe_field "$sh" ini)"
+  ini="$(recipe_ini "$sh")"
   if [ "$any_shared" = 1 ] && [ "$kind" = ext ] && [ -n "$ini" ] && [ "$ini" != - ]; then
     bash "$sh" enable || die "扩展 $name 的 enable() 失败"
     ok "启用扩展 $name（$ini）"
@@ -1415,9 +1372,9 @@ module_needs() {
   if recipe_has_func "$sh" needs; then
     out="$(bash "$sh" --needs || true)"
   else
-    out="$(recipe_field "$sh" needs | tr ',' ' ')"
+    out="$(recipe_needs_of "$sh")"
   fi
-  out="$out $(recipe_field "$sh" tools | tr ',' ' ')"
+  out="$out $(recipe_tools_of "$sh")"
   printf '%s\n' $out | awk 'NF && !seen[$0]++'
 }
 
@@ -1628,7 +1585,7 @@ recipe_id() {
 recipe_switch_state() {
   local sh sw v
   sh="$(module_sh "$1")" || return 0
-  sw="$(recipe_field "$sh" switch)"
+  sw="$(recipe_switch "$sh")"
   [ -n "$sw" ] || return 0
   v="${!sw:-0}"
   printf 'switch=%s:%s\n' "$sw" "$v"
@@ -1711,13 +1668,9 @@ php_abi_sig() {
 }
 
 ext_version() {
-  local sh var v
+  local sh
   sh="$(module_sh "$1")"
-  var="$(recipe_field "$sh" version)"
-  [ -n "$var" ] || return 0
-  v="${!var:-}"
-  [ -n "$v" ] && printf '%s\n' "$v"
-  return 0
+  recipe_version "$sh"
 }
 
 ext_sig() {
@@ -1765,7 +1718,7 @@ wheel_spec() {  # $1=dep 名字 -> 规范字符串（缺省 auto）
   local sh v
   sh="$(module_sh "$1" 2>/dev/null || true)"
   if [ -z "$sh" ]; then printf 'auto\n'; return 0; fi
-  v="$(recipe_field "$sh" wheel)"
+  v="$(recipe_wheel "$sh")"
   printf '%s\n' "${v:-auto}"
 }
 

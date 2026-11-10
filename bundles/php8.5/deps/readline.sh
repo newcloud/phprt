@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=dep name=readline version=READLINE_VERSION needs=ncurses optional= tools= upstream=none
+# phprt: contract=v2 kind=dep name=readline version=READLINE_VERSION needs=ncurses optional= tools= upstream=none note=readline-termcap
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

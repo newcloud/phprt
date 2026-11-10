@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=dep name=ncurses version=NCURSES_VERSION needs= optional= tools= upstream=none
+# phprt: contract=v2 kind=dep name=ncurses version=NCURSES_VERSION needs= optional= tools= upstream=none note=ncurses-widec+ncurses-cxx
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

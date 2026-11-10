@@ -211,10 +211,12 @@ phprt ext list 8.5 --default
 phprt ext list --php 8.5 --names
 phprt ext list --installed
 phprt ext list 8.5 --json
+phprt ext list 8.5 --json --name readline
 ```
 
 不写系列时用当前版本；没有 current 且仓库只有一个 bundle 时自动用它。
-`--json` 适合脚本和生成文档表格。
+`--json` 适合脚本和生成文档表格；加 `--name` 只输出一个扩展，并包含
+`switch/modules/ini/needs_detail/flags/opts/hooks/notes` 等完整契约字段。
 
 ### 交互选择扩展
 
@@ -267,10 +269,11 @@ Image Processing
       [x] freetype
 
   ✔ 确认并继续（18 个扩展）
+
 63/63 · Esc 取消 · Home/End 跳转
 ```
 
-分类标题顶格、用暗色显示；扩展行缩进 2 格，子选项缩进 6 格；分类之间和确认行前各留一个空行。
+分类标题顶格、用亮青色显示；扩展行缩进 2 格，子选项缩进 6 格；分类之间、确认行上下各留一个空行。
 
 菜单按 recipe 头部的 `category=` 分组，顺序固定为：Database、Cache & Storage、
 Compression、Cryptography、Image Processing、Internationalization、Network、

@@ -23,6 +23,8 @@ phprt 分成两层：
 ```text
 bundles/php8.5/
 ├── bundle.conf          # PHP 版本、全局策略、所有依赖的版本和下载地址
+├── notes.conf           # note= slug -> 人类可读说明
+├── aliases.conf         # 旧扩展名 -> 新扩展名（未知扩展提示）
 ├── php.sh               # PHP 本体的 configure / build
 ├── builtin/<名>.sh      # PHP 内置扩展（编进 PHP 或独立 .so）
 ├── deps/<库>.sh         # 第三方库
@@ -53,16 +55,21 @@ bundles/php8.5/
 | `tools` | 构建工具 |
 | `wheel` | 运行时库例外声明 |
 | `upstream` | 上游版本来源 |
+| `category` | 选择器分组 |
+| `menu_order` | 分类内排序号 |
+| `note` | 语义坑 slug（`notes.conf`） |
 
 函数：
 
 - `build()`：构建并安装
 - `flags()`：给 PHP configure 的参数（builtin）
+- `configure_args()`：给 `ext_pecl_build` 的 configure 参数（ext，可选）
 - `needs()`：动态依赖
 - `enable()`：写 ini（ext）
 - `versions()` / `latest_version()`：特殊上游来源
 
-完整规范见 [RECIPE.md](RECIPE.md)。
+完整规范见 [RECIPE.md](RECIPE.md)。契约的机器可读出口和重构计划见
+[RECIPE-CONTRACT-REFACTOR.md](RECIPE-CONTRACT-REFACTOR.md)。
 
 ### 2.3 解耦的边界
 

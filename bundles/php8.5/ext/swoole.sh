@@ -7,16 +7,23 @@
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 
+configure_args() {
+  printf '%s\n' \
+    --enable-swoole \
+    "--with-openssl-dir=$(dep_dir_of openssl)" \
+    --enable-sockets \
+    --disable-brotli
+}
+
 build() {
   need_cmds gcc g++ make tar
 
-  local PHP AC_DIR PERL_DIR D_OPENSSL SIG TAR SRC LIB_DIRS EXT_DIR
+  local PHP AC_DIR PERL_DIR SIG TAR SRC LIB_DIRS EXT_DIR a
   PHP="$PREFIX/bin/php"
   [ -x "$PHP" ] || die "还没有 PHP：先编译 PHP 本体"
 
   AC_DIR="$(dep_dir_of autoconf)"
   PERL_DIR="$(dep_dir_of perlshim)"
-  D_OPENSSL="$(dep_dir_of openssl)"
   SIG="swoole=$SWOOLE_VERSION;$(php_sig);openssl=${OPENSSL_VERSION:-none};zlib=${ZLIB_VERSION:-none};rpath=1"
 
   if [ "$FORCE" != 1 ] && stamp_ok swoole "$SIG"; then
@@ -61,9 +68,9 @@ build() {
   log "configure（--enable-swoole --with-openssl-dir）"
   # 不传 --enable-mysqlnd：phprtv2 没有 mysqli/mysqlnd，swoole 的协程 MySQL
   # 客户端因此不可用，其余功能不受影响。
-  ./configure --with-php-config="$PREFIX/bin/php-config" \
-    --enable-swoole --with-openssl-dir="$D_OPENSSL" \
-    --enable-sockets --disable-brotli \
+  local -a _args=()
+  while IFS= read -r a; do [ -n "$a" ] && _args+=("$a"); done < <(configure_args)
+  ./configure --with-php-config="$PREFIX/bin/php-config" "${_args[@]}" \
     > "$LOGS/swoole-configure.log" 2>&1 \
     || { tail -40 "$LOGS/swoole-configure.log"; die "swoole configure 失败"; }
 

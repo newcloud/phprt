@@ -44,3 +44,15 @@
 
 20. 开发是发现驱动的：遇到框架/流程问题、新的优化方向、需要改 driver 才能通过
     的情况，停下报告等决定，不擅自实施；扩展内部问题自行处理并记台账。
+
+## 契约读取顺序（AI）
+
+1. 先跑 `phprt ext list <系列> --json --name <扩展>`，拿完整契约；
+   不要先读 `runner/common.sh` 或逐个 `bash recipe.sh --flags`。
+2. 读 JSON 里的 `hooks`、`needs_detail`、`opts`、`flags_on/off`、`notes`；
+   需要背景时再读目标 recipe 的头部。
+3. 实跑 `--check`、`--flags`（builtin 的 switch=0/1 各一次）、`--needs`、`--opts`。
+4. 只把 `docs/RECIPE.md` 的 normative 段当契约；历史/审计段和
+   `docs/EXTENSIONS.md` 的台账只作背景。
+5. 改完跑 `scripts/recipe-check.sh`；构建后跑 `phprt verify`；数字类文档由
+   `scripts/doc-check.sh` 兜底（Phase 5 引入）。

@@ -774,7 +774,7 @@ cmd_update() {
   sh="$bundle/deps/$dep.sh"
   [ -f "$sh" ] || die "未知依赖: $dep（$bundle/deps/ 里没有）"
   [ "$(recipe_kind_of "$sh")" = dep ] || die "$dep 不是依赖库"
-  vvar="$(recipe_field "$sh" version)"
+  vvar="$(recipe_version_var "$sh")"
   [ -n "$vvar" ] || die "$dep 的 recipe 没有 version="
   uvar="${vvar%_VERSION}_URL"
   svar="${vvar%_VERSION}_SHA256"
@@ -994,14 +994,9 @@ ext_so_file() {  # $1=tree $2=扩展名 -> 共享扩展的 .so
 
 # 扩展 recipe 的 needs（不能走 module_sh：curl/zlib 等会先命中同名 dep）
 ext_needs() {
-  local sh out
+  local sh
   sh="$(ext_recipe_sh "$1")" || return 0
-  if recipe_has_func "$sh" needs; then
-    out="$(bash "$sh" --needs 2>/dev/null || true)"
-  else
-    out="$(recipe_field "$sh" needs | tr ',' ' ')"
-  fi
-  printf '%s\n' $out | awk 'NF && !seen[$0]++'
+  _recipe_needs_only_sh "$sh" | awk 'NF && !seen[$0]++'
 }
 
 # dep 安装目录里的入口 .so -> 树内 lib/phprt 下的 rt 文件名
@@ -1427,19 +1422,100 @@ cmd_select() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# ext list --json 的契约字段。所有值都从 recipe/accessor 取，driver 不写包名。
+# ---------------------------------------------------------------------------
+ext_json_flag_array() {  # $1=recipe $2=0|1 -> JSON 数组；没有查询钩子时输出 null
+  local sh="$1" val="$2" out line first=1 arr="" verb=""
+  if recipe_has_func "$sh" flags; then
+    verb=--flags
+  elif [ "$(recipe_kind_of "$sh")" = builtin ]; then
+    verb=--flags
+  elif recipe_has_func "$sh" configure_args; then
+    verb=--configure-args
+  else
+    printf 'null'
+    return 0
+  fi
+  # ext 不选就不构建，off 侧没有负向 configure 参数。
+  if [ "$(recipe_kind_of "$sh")" != builtin ] && [ "$val" = 0 ]; then
+    printf '[]'
+    return 0
+  fi
+  out="$(recipe_query_with_switch "$sh" "$val" "$verb" || true)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ -n "${DEPS:-}" ] && line="${line//$DEPS/\$\{DEPS\}}"
+    [ -n "${TREE:-}" ] && line="${line//$TREE/\$\{TREE\}}"
+    [ -n "${BUILD_ROOT:-}" ] && line="${line//$BUILD_ROOT/\$\{BUILD_ROOT\}}"
+    [ "$first" = 1 ] || arr+=","
+    first=0
+    arr+="\"$(json_escape "$line")\""
+  done <<< "$out"
+  printf '[%s]' "$arr"
+}
+
+ext_json_needs() {  # $1=recipe $2=kind [$3=on] [$4=off]
+  local sh="$1" kind="$2" on="${3-}" off="${4-}" declared="null" by_opt="{}"
+  if [ $# -lt 3 ]; then
+    on="$(recipe_query_with_switch "$sh" 1 --needs || true)"
+    on="$(printf '%s\n' "$on" | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+    on="${on% }"
+    if [ "$kind" = builtin ]; then
+      off="$(recipe_query_with_switch "$sh" 0 --needs || true)"
+      off="$(printf '%s\n' "$off" | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+      off="${off% }"
+    fi
+  fi
+  if recipe_has_key "$sh" needs; then
+    declared="$(json_words "$(recipe_needs_of "$sh")")"
+  fi
+  printf '{"declared":%s,"on":%s,"off":%s,"by_opt":%s}' \
+    "$declared" "$(json_words $on)" "$(json_words $off)" "$by_opt"
+}
+
+ext_json_opts() {  # $1=recipe
+  local sh="$1" sw meta key state label env first=1 out=""
+  sw="$(recipe_switch "$sh")"
+  meta="$(recipe_opts_meta "$sh" 2>/dev/null || true)"
+  while IFS=$'\t' read -r key state label; do
+    [ -n "$key" ] || continue
+    env="$(ext_opt_var "$sw" "$key")"
+    [ "$first" = 1 ] || out+=","
+    first=0
+    out+="{\"key\":\"$(json_escape "$key")\",\"state\":\"$(json_escape "$state")\",\"label\":\"$(json_escape "$label")\",\"env\":\"$(json_escape "$env")\"}"
+  done <<< "$meta"
+  printf '[%s]' "$out"
+}
+
+ext_json_detail() {  # $1..=依赖名 -> {name:{kind,version,needs,tools,active,notes}}
+  local first=1 out="" name kind ver needs tools notes
+  while IFS='|' read -r name kind ver needs tools notes; do
+    [ -n "$name" ] || continue
+    [ "$first" = 1 ] || out+=","
+    first=0
+    out+="\"$(json_escape "$name")\":{\"kind\":\"$(json_escape "$kind")\",\"version\":\"$(json_escape "$ver")\",\"needs\":$(json_words $needs),\"tools\":$(json_words $tools),\"active\":true,\"notes\":$(json_words $notes)}"
+  done < <(recipe_needs_closure "$@")
+  printf '{%s}' "$out"
+}
+
+ext_json_nullable() {  # $1=值 -> JSON 字符串或 null
+  [ -n "$1" ] && printf '"%s"' "$(json_escape "$1")" || printf 'null'
+}
+
 # phprt ext list [系列] [--php 系列] [--default] [--installed]
-#                [--builtin|--pecl] [--names|--json]
+#                [--builtin|--pecl] [--names|--json] [--name 扩展]
 cmd_ext() {
   local sub="${1:-list}"
   case "$sub" in
     list) shift ;;
     -h|--help)
-      printf '用法: phprt ext list [系列] [--php 系列] [--default] [--installed] [--builtin|--pecl] [--names|--json]\n'
+      printf '用法: phprt ext list [系列] [--php 系列] [--default] [--installed] [--builtin|--pecl] [--names|--json] [--name 扩展]\n'
       return 0 ;;
     *) die "未知子命令: ext $sub（当前只有 ext list）" ;;
   esac
 
-  local arg="" php_arg="" only_default=0 only_installed=0 only_kind=""
+  local arg="" php_arg="" only_default=0 only_installed=0 only_kind="" only_name=""
   local names=0 json=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1450,10 +1526,12 @@ cmd_ext() {
       --installed) only_installed=1; shift ;;
       --builtin)   only_kind=builtin; shift ;;
       --pecl)      only_kind=pecl; shift ;;
+      --name)      only_name="${2:-}"; shift 2 ;;
+      --name=*)    only_name="${1#*=}"; shift ;;
       --names)     names=1; shift ;;
       --json)      json=1; shift ;;
       -h|--help)
-        printf '用法: phprt ext list [系列] [--php 系列] [--default] [--installed] [--builtin|--pecl] [--names|--json]\n'
+        printf '用法: phprt ext list [系列] [--php 系列] [--default] [--installed] [--builtin|--pecl] [--names|--json] [--name 扩展]\n'
         return 0 ;;
       -*) die "未知参数: $1" ;;
       *)
@@ -1511,6 +1589,7 @@ cmd_ext() {
   while IFS= read -r e; do
     [ -n "$e" ] || continue
     sh="$(ext_recipe_sh "$e")" || continue
+    [ -n "$only_name" ] && [ "$e" != "$only_name" ] && continue
     kind="$(recipe_kind_of "$sh")"
     [ "$kind" = builtin ] && kind=builtin || kind=pecl
     [ -n "$only_kind" ] && [ "$kind" != "$only_kind" ] && continue
@@ -1531,6 +1610,10 @@ cmd_ext() {
     rows+=("$e|$kind|$ver|$modes|$dflt|$dflt_set|$inst|$cat")
   done < <(all_ext_names)
 
+  if [ -n "$only_name" ] && [ ${#rows[@]} -eq 0 ]; then
+    die "未知扩展: $only_name$(ext_name_hint "$only_name")"
+  fi
+
   if [ "$names" = 1 ]; then
     local row
     for row in "${rows[@]}"; do printf '%s\n' "${row%%|*}"; done
@@ -1538,16 +1621,71 @@ cmd_ext() {
   fi
 
   if [ "$json" = 1 ]; then
-    local first=1 name
+    local first=1 name sh contract_kind catlabel needs_on needs_off old_sel
+    local flags_on flags_off flags_source
+    # 查询 flags/needs 不要求已安装树；给 recipe 一个稳定的目标路径。
+    export DEPS="${DEPS:-$PHPRT_HOME/php-${PHP_VERSION}/deps}"
+    export BUILD_ROOT="${BUILD_ROOT:-$PHPRT_HOME/build-php-${PHP_VERSION}}"
+    export TREE="${TREE:-$PHPRT_HOME/php-${PHP_VERSION}}"
+    export PREFIX="${PREFIX:-$TREE}"
     printf '[\n'
     for row in "${rows[@]}"; do
       IFS='|' read -r name kind ver modes dflt dflt_set inst cat <<< "$row"
+      sh="$(ext_recipe_sh "$name")" || continue
+      contract_kind="$(recipe_kind_of "$sh")"
+      catlabel="$(ext_category_label "$cat")"
+
+      old_sel="${SELECTED_EXTS:-}"
+      export SELECTED_EXTS="$name"
+      apply_ext_opts 2>/dev/null || true
+
+      needs_on="$(recipe_query_with_switch "$sh" 1 --needs 2>/dev/null || true)"
+      needs_on="$(printf '%s\n' "$needs_on" |
+        awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+      needs_on="${needs_on% }"
+      needs_off=""
+      if [ "$contract_kind" = builtin ]; then
+        needs_off="$(recipe_query_with_switch "$sh" 0 --needs 2>/dev/null || true)"
+        needs_off="$(printf '%s\n' "$needs_off" |
+          awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+        needs_off="${needs_off% }"
+      fi
+
+      if recipe_has_func "$sh" flags; then
+        flags_source="flags()"
+      elif [ "$contract_kind" = builtin ]; then
+        flags_source="flags()"
+      elif recipe_has_func "$sh" configure_args; then
+        flags_source="configure_args()"
+      else
+        flags_source="build()"
+      fi
+      flags_on="$(ext_json_flag_array "$sh" 1)"
+      flags_off="$(ext_json_flag_array "$sh" 0)"
+
       [ "$first" = 1 ] || printf ',\n'
       first=0
-      printf '  {"name":"%s","kind":"%s","version":"%s","modes":"%s","default":"%s","default_set":%s,"installed":%s,"category":"%s"}' \
-        "$name" "$kind" "$ver" "$modes" "$dflt" \
+      printf '  {"contract_schema":1,"name":"%s","kind":"%s","version":"%s","switch":%s,"modules":%s,"ini":%s,"modes":"%s","default":"%s","default_set":%s,"installed":%s,"category":"%s","category_label":"%s","menu_order":%s,"desc":%s,"tools":%s,"needs":%s,"needs_detail":%s,"opts":%s,"flags_source":"%s","flags_on":%s,"flags_off":%s,"hooks":%s,"upstream":%s,"notes":%s}' \
+        "$(json_escape "$name")" "$(json_escape "$kind")" \
+        "$(json_escape "$ver")" "$(ext_json_nullable "$(recipe_switch "$sh")")" \
+        "$(json_words $(recipe_modules_list "$sh"))" \
+        "$(ext_json_nullable "$(recipe_ini "$sh")")" \
+        "$(json_escape "$modes")" "$(json_escape "$dflt")" \
         "$([ -n "$dflt_set" ] && printf true || printf false)" \
-        "$([ -n "$inst" ] && printf true || printf false)" "$cat"
+        "$([ -n "$inst" ] && printf true || printf false)" \
+        "$(json_escape "$cat")" "$(json_escape "$catlabel")" \
+        "$(ext_menu_order "$sh")" \
+        "$(ext_json_nullable "$(recipe_desc "$sh")")" \
+        "$(json_words $(recipe_tools_of "$sh"))" \
+        "$(ext_json_needs "$sh" "$contract_kind" "$needs_on" "$needs_off")" \
+        "$(ext_json_detail $needs_on $(recipe_tools_of "$sh"))" \
+        "$(ext_json_opts "$sh")" \
+        "$(json_escape "$flags_source")" "$flags_on" "$flags_off" \
+        "$(json_lines < <(recipe_hooks "$sh"))" \
+        "$(ext_json_nullable "$(recipe_upstream "$sh")")" \
+        "$(json_notes "$sh")"
+
+      export SELECTED_EXTS="$old_sel"
     done
     printf '\n]\n'
     return 0
@@ -1570,7 +1708,7 @@ cmd_ext() {
 # 查不到上游时输出 -，返回 1，让调用方统计“结果不完整”。
 outdated_module_row() {
   local name="$1" kind="$2" sh="$3" cur="$4" vers latest safe
-  if [ "$(recipe_field "$sh" upstream)" = none ] &&
+  if [ "$(recipe_upstream "$sh")" = none ] &&
      ! recipe_has_func "$sh" versions && ! recipe_has_func "$sh" latest_version; then
     # 显式声明不检查上游，不算“结果不完整”
     printf '%s\t%s\t%s\t-\t-\n' "$name" "$kind" "$cur"
@@ -1643,15 +1781,13 @@ cmd_outdated() {
   printf 'php\tcore\t%s\t%s\t%s\n' "$php_cur" "$php_any" "$php_safe" >> "$rows"
 
   # ---- 依赖 / 扩展 / 工具 ----
-  local kind sh name var cur x
+  local kind sh name cur x
   if [ "$all" = 1 ]; then
     for kind in deps ext tools; do
       for sh in "$bundle/$kind"/*.sh; do
         [ -f "$sh" ] || continue
-        var="$(recipe_field "$sh" version)"
-        [ -n "$var" ] || continue
-        name="$(recipe_field "$sh" name)"
-        cur="${!var:-}"
+        name="$(recipe_name_of "$sh")"
+        cur="$(recipe_version "$sh")"
         [ -n "$cur" ] || continue
         outdated_module_row "$name" "$(recipe_kind_of "$sh")" "$sh" "$cur" >> "$rows" || unknown=1
       done
@@ -1672,10 +1808,9 @@ cmd_outdated() {
       seen+="$name "
       sh="$(module_sh "$name")"
       kind="$(recipe_kind_of "$sh")"
-      var="$(recipe_field "$sh" version)"
-      if [ -n "$var" ]; then
-        cur="${!var:-}"
-        [ -n "$cur" ] && { outdated_module_row "$name" "$kind" "$sh" "$cur" >> "$rows" || unknown=1; }
+      cur="$(recipe_version "$sh")"
+      if [ -n "$cur" ]; then
+        outdated_module_row "$name" "$kind" "$sh" "$cur" >> "$rows" || unknown=1
       fi
       for x in $(module_needs "$name"); do queue+=("$x"); done
     done
@@ -1897,11 +2032,15 @@ cmd_verify() {
   ( cd "$PHPRT_PROJECT" && ./myphp -v | head -1 | sed 's/^/    /' )
 
   log "2) 已启用的扩展（以 php -m 的实际加载为准）"
-  local e m mods ini loaded err bad_ini=""
+  local e m mods ini loaded err bad_ini="" bad_mods=""
   loaded="$(tree_php "$ver" -m 2>/dev/null | tr '[:upper:]' '[:lower:]')"
   for e in $(tree_exts "$ver"); do
     for m in $(ext_modules "$e"); do
-      printf '    ✓ %s\n' "$m"
+      if printf '%s\n' "$loaded" | grep -cix "$m" >/dev/null; then
+        printf '    ✓ %s\n' "$m"
+      else
+        bad_mods+="$e: 声明的模块 $m 没有出现在 php -m"$'\n'
+      fi
     done
   done
   # conf.d 声明了但没加载的（.so 缺失、路径错、依赖缺）直接报出来
@@ -1913,7 +2052,8 @@ cmd_verify() {
     done
   done
   err="$(tree_php "$ver" -m 2>&1 >/dev/null || true)"
-  if [ -n "$bad_ini" ] || [ -n "$err" ]; then
+  if [ -n "$bad_mods" ] || [ -n "$bad_ini" ] || [ -n "$err" ]; then
+    [ -n "$bad_mods" ] && printf '    ✗ recipe 声明与 php -m 不一致:\n%s' "$bad_mods"
     [ -n "$bad_ini" ] && printf '    ✗ 扩展声明了但没有加载:\n%s' "$bad_ini"
     [ -n "$err" ] && printf '    ✗ PHP 加载扩展时报错:\n%s\n' "$err"
     return 1

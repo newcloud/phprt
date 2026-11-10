@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=readline switch=ENABLE_READLINE modules=readline ini=- type=static default=static category=Runtime
+# phprt: contract=v2 kind=builtin name=readline switch=ENABLE_READLINE modules=readline ini=- type=static default=static category=Runtime needs=readline note=phpize-libedit
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

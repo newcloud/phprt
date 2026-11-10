@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=posix switch=ENABLE_POSIX modules=posix ini=- type=static,shared default=static category=Runtime
+# phprt: contract=v2 kind=builtin name=posix switch=ENABLE_POSIX modules=posix ini=- type=static,shared default=static category=Runtime note=posix-default-on
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

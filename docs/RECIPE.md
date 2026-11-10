@@ -9,7 +9,8 @@
 存在、依赖是否正确，由构建日志、`phprt verify` 和开发用的 `scripts/recipe-check.sh --deep`
 负责，不在本文范围内。
 
-本文第 11 节是对现有 110 个 recipe 的审计结果；第 12 节记录审计后对规范做的修订。
+本文第 11-12 节是 2026-11-08 的审计历史，只作背景；当前契约以第 3-8 节和
+`runner/contract.sh` 的 `PHPRT_CONTRACT_SPEC` 为准。
 
 ## 1. 类型与目录
 
@@ -48,12 +49,13 @@ recipe_main "$@"
 
 规则：
 
-1. **最后一行必须是 `recipe_main "$@"`**。没有它，脚本只能是 legacy。
+1. **最后一行必须是 `recipe_main "$@"`**。没有它，recipe 直接执行时只是普通脚本，
+   不进入契约校验和动词分发。
 2. **不允许顶层构建代码**。`need_cmds`、下载、`phpize`、`make`、写 ini 都必须在函数里。
    顶层只允许：shebang、头注释、`set`、`source`、变量赋值、函数定义。
 3. 直接执行脚本时也必须先校验：`bash ext/redis.sh --version` 只输出版本，不触发构建。
-4. `contract=legacy` 的文件可以暂时保持顶层写法，但必须登记在
-   `bundles/<版本>/legacy-recipe.list` 里；新文件不允许 legacy。
+4. **当前只接受 `contract=v2`**。没有 `contract=v2` 的文件直接报错；不再支持
+   `legacy` 或 allowlist。
 
 ## 3. 头部字段
 
@@ -67,7 +69,7 @@ recipe_main "$@"
 
 | 字段 | builtin | ext | dep | tool | 含义 |
 | --- | --- | --- | --- | --- | --- |
-| `contract` | 必填 | 必填 | 必填 | 必填 | `v2` 或 `legacy` |
+| `contract` | 必填 | 必填 | 必填 | 必填 | 当前只接受 `v2` |
 | `kind` | 可选 | 可选 | 可选 | 可选 | 路径推断，写则必须一致 |
 | `name` | 可选 | 可选 | 可选 | 可选 | 路径推断，写则必须一致 |
 | `switch` | 必填 | 必填 | 禁止 | 禁止 | 选择开关变量名 |
@@ -77,13 +79,14 @@ recipe_main "$@"
 | `default` | 必填 | 必填 | 禁止 | 禁止 | `install` 的默认方式，必须是 `type` 的子集 |
 | `ini` | 必填 | 必填 | 禁止 | 禁止 | `-` 或 `20-<name>.ini`；`-` 表示不需要 ini |
 | `tools` | 禁止 | 必填 | 必填 | 必填 | 构建工具，可以为空 |
-| `needs` | 禁止 | 必填 | 必填 | 禁止 | 硬依赖，可以为空 |
+| `needs` | 可选 | 必填 | 必填 | 禁止 | builtin 是声明超集；ext/dep 是硬依赖，可以为空 |
 | `optional` | 禁止 | 可选 | 必填 | 禁止 | 条件依赖，可以为空 |
 | `wheel` | 禁止 | 禁止 | 可选 | 禁止 | wheel 化例外，默认 `auto`；见第 6 节 |
-| `upstream` | 如需检查更新 | 如需检查更新 | 必填（可为 `none`） | 必填（可为 `none`） | 上游来源：`github:owner/repo`、`pecl:包名`、`phpnet:x.y`、`none`（不检查）；也可改用 `versions()` |
+| `upstream` | 可选 | 必填 | 必填 | 必填 | 上游来源：`github:owner/repo`、`pecl:包名`、`phpnet:x.y`、`none`（不检查）；也可改用 `versions()` / `latest_version()` |
 | `desc` | 可选 | 可选 | 可选 | 可选 | 一行说明，选择器显示，不参与构建 |
 | `category` | 必填 | 必填 | 禁止 | 禁止 | 选择器分组：`Database`、`CacheStorage`、`Compression`、`Cryptography`、`Image`、`Internationalization`、`Network`、`Runtime`、`Other`（不能带空格） |
 | `menu_order` | 可选 | 可选 | 禁止 | 禁止 | 分类内排序号，缺省 1000；只影响选择器顺序 |
+| `note` | 可选 | 可选 | 可选 | 可选 | `slug1+slug2`，slug 必须在 `bundles/<版本>/notes.conf` 定义；只用于展示/JSON |
 
 说明：
 
@@ -188,17 +191,23 @@ needs() {
 
 - `flags`：输出 PHP `./configure` 参数，一行一个；关闭时必须输出负向参数（`--without-*` 或
   `--disable-*`），除非该参数在当前 PHP 版本已不存在。
-- `needs`：输出这个扩展启用的依赖名；关闭时输出空。builtin 的依赖是**动态**的，所以不写
-  头字段 `needs`。
+- `needs`：输出这个扩展在当前开关/子项下启用的依赖名；关闭时输出空。
+  头部可以写 `needs=` 作为“可能依赖的声明超集”，供静态阅读和 JSON 使用；
+  `needs()` 的实际输出必须落在声明里。没有写 `needs=` 时，JSON 的
+  `needs.declared` 为 `null`。
 - 两个函数都必须是纯查询：不下载、不建目录、不写文件。
 
 ### ext
 
 ```bash
+configure_args() { ... }  # 可选：输出 ext_pecl_build 的 configure 参数
 build()  { ... }   # 下载、phpize、configure、make、make install
 enable() { ... }   # 只写 ini；ini != - 时必填
 verify() { ... }   # 可选
 ```
+
+`configure_args()` 让 `phprt ext list --json` 和 `--configure-args` 能读到 ext 的
+configure 参数，AI 不用读 `build()`。新 ext recipe 建议实现；旧 recipe 可以逐步迁移。
 
 `build()` 只负责编译和安装 `.so`，**不写 ini**。`enable()` 由 driver 在启用阶段调用，只写
 `$PREFIX/etc/conf.d/<ini>`。带自定义配置的扩展必须实现 `enable()`：
@@ -404,18 +413,28 @@ L2 的「消费方」指 `bin/*`、`lib/php/extensions/*/*.so` 和 `lib/phprt/*.
 
 | 层 | 内容 | 触发点 | 成本 |
 | --- | --- | --- | --- |
-| L1 静态 | 头存在且唯一、字段矩阵、name/kind 一致、switch 被引用、version 变量存在、ini 格式、函数存在、最后一行 `recipe_main`、顶层无构建代码 | `module_sh`、`recipe_main` | 毫秒级，按文件 sha 缓存 |
+| L1 静态 | 头存在且唯一、字段矩阵、name/kind 一致、未知/重复字段、switch/version/ini 规则、函数存在、最后一行 `recipe_main`、顶层无构建代码 | `recipe_main`、`scripts/recipe-check.sh` | 毫秒级，进程内按文件缓存 |
 | L2 动态 | `--version` 非空、`--meta` 2 秒内返回且 stdout 纯 `key=value`、enabled 时 `--flags` 非空、`--needs` 可解析、`enable()` 写出的 ini 与声明一致 | `--plan`、签名计算、`verify` | 每 recipe 一次进程，按构建会话缓存 |
 | L3 显式 | 遍历所有 recipe 跑 L1+L2；`--deep` 用 `configure --help` 检查参数 | `scripts/recipe-check.sh`、CI | 秒级 |
 
 L1 必须检查的字段规则：
 
-- `contract` 必须存在；`legacy` 必须在 allowlist 里。
-- `switch`：builtin/ext 必填，dep/tool 禁止；必须匹配 `^ENABLE_[A-Z0-9_]+$`，且在脚本中出现。
-- `version`：ext/dep/tool 必填；变量必须在 recipe 或 `bundle.conf` 中定义。
+- 头部字段必须在 `PHPRT_CONTRACT_SPEC` 的允许列表里；未知字段、重复字段、无法解析的
+  字段（例如带空格的值）直接报错。
+- `contract` 必须是 `v2`。
+- `kind` / `name` 可省略；写了必须和目录/文件名一致。
+- `switch`：builtin/ext 必填，dep/tool 禁止；必须匹配 `^ENABLE_[A-Z0-9_]+$`。
+  builtin 的体内必须引用；ext 由 driver 设置环境变量，允许 recipe 体内不引用。
+- `version`：ext/dep/tool 必填；变量必须在 recipe 或 `bundle.conf` 中定义。builtin 禁止。
 - `modules`：builtin 必填且非空；ext 可省略，省略时等于 name。
+- `type` / `default`：builtin/ext 必填；`default` 必须在 `type` 里。
 - `ini`：builtin/ext 必填；值必须是 `-` 或 `^[0-9]{2}-[a-z0-9_-]+\.ini$`。
-- `tools` / `needs` / `optional`：键必须存在；每个值必须能解析到对应的 dep/tool。
+- `tools` / `needs` / `optional`：按 kind 的矩阵检查；每个值必须能解析到对应的 dep/tool。
+- `needs`：builtin 是声明超集，`needs()` 的实际输出必须落在里面（由 recipe-check 检查）；
+  ext/dep 是硬依赖。
+- `category`：builtin/ext 必填，值必须在 `PHPRT_CATEGORY_LABELS` 里。
+- `menu_order`：只允许 builtin/ext，非负整数，缺省 1000。
+- `note`：可选，`slug1+slug2`；每个 slug 必须在 `bundles/<版本>/notes.conf` 定义。
 - 函数：builtin 需要 `flags`/`needs`；ext/dep/tool 需要 `build`；ext 在 `ini != -` 时需要
   `enable`。
 - 最后一行必须是 `recipe_main "$@"`；顶层不允许出现 `need_cmds`/`fetch`/`phpize`/`make`/
@@ -428,15 +447,10 @@ L1 必须检查的字段规则：
 规范: docs/RECIPE.md#3-头部字段
 ```
 
-### legacy 兼容
+### 当前状态
 
-现有 110 个 recipe 全部是 legacy（没有 `contract`，没有 `recipe_main`）。迁移期：
-
-- 新文件必须是 `contract=v2`；没有 `contract=v2` 且不在
-  `bundles/<版本>/legacy-recipe.list` 里的文件直接报错。
-- legacy 文件跑 L1 头检查 + L2 查询检查，不强制函数结构；构建时打印一次
-  `warn "legacy recipe: ... 请迁移到 v2"`。
-- allowlist 只减不增；迁移一个删一个。
+`bundles/php8.5` 的 77 个 recipe 全部是 `contract=v2`；仓库里没有
+`legacy-recipe.list`，也不接受 `legacy`。新增文件必须是 `v2`，否则 L1 直接失败。
 
 ## 8. 模板
 

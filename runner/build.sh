@@ -340,7 +340,7 @@ cleanup_static_exts() {
   for e in $STATIC_PECL; do
     local sh ini
     sh="$(ext_recipe_sh "$e")"
-    ini="$(recipe_field "$sh" ini)"
+    ini="$(recipe_ini "$sh")"
     [ "$ini" != - ] || continue
     if recipe_has_func "$sh" enable; then
       bash "$sh" enable >/dev/null 2>&1 || true
@@ -392,7 +392,7 @@ for e in $SHARED_PECL; do
     continue
   fi
   log "执行 ext/$e"
-  ini="$(recipe_field "$BUNDLE/ext/$e.sh" ini)"
+  ini="$(recipe_ini "$BUNDLE/ext/$e.sh")"
   # 外层 ext_sig 已判定要重编；强制绕过配方内部的 stamp
   FORCE=1 bash "$BUNDLE/ext/$e.sh" build 2>&1 | tee -a "$LOGS/build.log"
   # 构建成功后再重写 ini。不要在这里提前删 ini：构建失败会把这个扩展

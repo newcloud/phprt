@@ -79,25 +79,28 @@ for s in "${series[@]}"; do
         fail=1
         continue
       fi
+      # builtin 的头部 needs= 是声明超集；needs() 在当前开关下必须落在里面。
+      if [ "$(recipe_kind_of "$f")" = builtin ] && recipe_has_key "$f" needs; then
+        declared=" $(recipe_needs_of "$f") "
+        actual="$(recipe_query_with_switch "$f" 1 --needs 2>/dev/null || true)"
+        for d in $actual; do
+          case "$declared" in
+            *" $d "*) ;;
+            *) printf '  ✗ %s/%s needs() 返回 %s，但头部 needs= 没有声明\n' \
+                 "$kind" "$name" "$d"
+               fail=1 ;;
+          esac
+        done
+      fi
       if recipe_has_func "$f" opts; then
-        if ! out="$(bash "$f" --opts 2>&1)"; then
-          printf '  ✗ %s/%s opts() 执行失败\n' "$kind" "$name"
-          printf '%s\n' "$out" | sed 's/^/      /'
+        if ! out="$(recipe_opts_meta "$f")"; then
+          printf '  ✗ %s/%s opts() 格式错误（需要 key<TAB>state<TAB>label）\n' \
+            "$kind" "$name"
           fail=1
           continue
         fi
-        if ! printf '%s\n' "$out" | awk -F'\t' '
-          NF == 0 { next }
-          NF < 3 || $1 !~ /^[a-z][a-z0-9_]*$/ || $2 !~ /^(on|off|fixed)$/ || seen[$1]++ {
-            exit 1
-          }
-        '; then
-          printf '  ✗ %s/%s opts() 输出格式错误（需要 key<TAB>state<TAB>label）\n' "$kind" "$name"
-          fail=1
-          continue
-        fi
-        osw okey ostate olabel ovar obad=0
-        osw="$(recipe_field "$f" switch)"
+        osw="" okey="" ostate="" olabel="" ovar="" obad=0
+        osw="$(recipe_switch "$f")"
         while IFS=$'\t' read -r okey ostate olabel; do
           [ -n "$okey" ] || continue
           [ "$ostate" = fixed ] && continue
@@ -118,9 +121,8 @@ for s in "${series[@]}"; do
         continue
       fi
 
-      var="$(recipe_field "$f" version)"
-      cur="${!var:-}"
-      if [ "$(recipe_field "$f" upstream)" = none ] &&
+      cur="$(recipe_version "$f")"
+      if [ "$(recipe_upstream "$f")" = none ] &&
          ! recipe_has_func "$f" versions && ! recipe_has_func "$f" latest_version; then
         printf '  ok %s/%s（upstream=none，跳过版本检查）\n' "$kind" "$name"
         continue
@@ -128,7 +130,7 @@ for s in "${series[@]}"; do
       vers="$(module_versions "$f" || true)"
       if [ -z "$vers" ]; then
         printf '  ✗ %s/%s 上游查不到版本（%s）\n' "$kind" "$name" \
-          "$(recipe_field "$f" upstream)"
+          "$(recipe_upstream "$f")"
         net=1
       elif ! printf '%s\n' "$vers" | grep -qx "$cur"; then
         printf '  ✗ %s/%s pin %s 不在上游版本列表\n' "$kind" "$name" "$cur"
