@@ -24,6 +24,10 @@ cd ~/blog
 
 ![phprt install 8.5 不加 --ext 进入扩展配置 UI](docs/ui.png)
 
+`phprt install 8.5 --downloads`
+
+![phprt install 8.5 --downloads](docs/download.png)
+
 装好后项目里会多一个 `./myphp`，后面都用它跑 PHP：
 
 ```bash
