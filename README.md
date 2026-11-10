@@ -184,7 +184,7 @@ tar xz unzip binutils m4 perl curl
 ```
 
 可选：`aria2`（提供 `aria2c`）。装了会用它多连接下载，没装用 curl。
-下载进度和扩展选择菜单都由 phprt 用 ANSI 自绘，不需要 `gum` 之类的额外命令。
+下载进度和扩展选择菜单都由 phprt 用 ANSI 自绘，不需要额外的终端 UI 命令。
 
 Fedora：
 
@@ -212,7 +212,7 @@ sudo apt install aria2
 7. **可生成单个 php**：`--static-all` / `--static-all-lto` 生成一个 `bin/php`，方便分发（当前支持 openssl zlib curl sqlite3 mbstring）。
 8. **干净构建**：可选 chroot 构建环境，不混入宿主工具链。
 9. **离线构建**：用 `phprt download` 提前把源码放进 `.phprt/downloads`，断网时直接构建。
-10. **纯 ANSI 终端界面**：扩展选择（分类、树形子项、三态勾选、固定项）和下载进度都在终端里自绘，不依赖 gum。
+10. **纯 ANSI 终端界面**：扩展选择（分类、树形子项、三态勾选、固定项）和下载进度都在终端里自绘，不依赖外部 UI 工具。
 11. **机器可读契约**：`phprt ext list --json --name <扩展>` 一次给出依赖、模块、ini、flags、opts、hooks 和语义坑。
 12. **下载队列**：全局/单站点并发限制、断点续传、aria2c 加速、GitHub 镜像回退、超时与低速放弃，失败的文件单独汇总。
 
@@ -241,7 +241,7 @@ recipe 的契约仍在第二行 `# phprt:`：除了版本、依赖、编译方�
 ### 交互选择扩展
 
 `phprt install 8.5` 不写 `--ext` 时，需要构建的情况下会打开内置的选择器。
-它是纯 ANSI 自绘的，不依赖 gum；分类、树形子项、三态勾选和固定项都在同一个终端界面里完成：
+它是纯 ANSI 自绘的；分类、树形子项、三态勾选和固定项都在同一个终端界面里完成：
 
 ```bash
 phprt install 8.5                  # 选完扩展再装
