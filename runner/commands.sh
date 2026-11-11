@@ -459,6 +459,7 @@ cmd_install() {
        [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ]; then
       if [ "$imax" = "$concrete" ]; then
         ok "PHP $concrete 已安装，无需重复安装"
+        printf '    重新编译: phprt install %s --recompile\n' "$concrete"
       else
         ok "本地已装 PHP $imax（目标 $concrete 更旧），不降级"
       fi
@@ -488,6 +489,7 @@ cmd_install() {
      [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ] &&
      [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ]; then
     ok "PHP $concrete 已安装"
+    printf '    重新编译: phprt install %s --recompile\n' "$concrete"
     [ "$concrete" = "$(current_version 2>/dev/null || true)" ] ||
       printf '    切换: phprt use %s\n' "$concrete"
     return 0
@@ -672,6 +674,10 @@ cmd_install() {
   activate_tree "$concrete" "$exts"
   printf 'ok\n' > "$tree/BUILD-STATUS"
   ok "PHP $concrete 就绪 -> $tree"
+  printf '    使用示例: ./myphp -r '\''var_dump(phpinfo());'\''\n'
+  if [ "$PWD" != "$PHPRT_PROJECT" ]; then
+    printf '    项目目录: %s\n' "$PHPRT_PROJECT"
+  fi
 }
 
 # ---- phprt update：依赖库的同系列安全更新 --------------------------------

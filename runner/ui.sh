@@ -13,6 +13,8 @@
 # 交互：
 #   ↑↓ / Home / End / PgUp / PgDn 移动，Space 切换选中，Enter 展开/收起，
 #   Esc 取消（在子项上是回到父行并收起）。
+#   分类标题行可以停靠：跨组时先停在下一组的标题上，再按一次才进入组内；
+#   标题上 Space/Enter 不动作。
 #   主菜单是“树形列表”：
 #     - 扩展行：[x]/[-]/[ ] + 名字 + ▼/▶（有 opts() 才有箭头）
 #     - 展开后子项缩进排在下面，固定项始终 [x]、灰色、不可切换
@@ -57,7 +59,7 @@ UI_ROW_DIM=0
 UI_MENU_LABELS=()
 UI_MENU_VALUES=()
 UI_MENU_DIM=()
-UI_MENU_SKIP=()   # 1 = 不可选中的行（分类标题）
+UI_MENU_SKIP=()   # 1 = 非普通行（分类标题/空行）；非空标题可停靠，但不响应 Space/Enter
 
 UI_RESET=$'\033[0m'
 UI_DIM=$'\033[2m'
@@ -510,8 +512,8 @@ ui_offset_with_header() {  # $1=offset -> 调整后的 offset
   printf '%s' "$o"
 }
 
-ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引；结果放 UI_MENU_RESULT + UI_MENU_KEY
-  local header="$1" footer="$2" idx="${3:-0}"
+ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引 $4=上一帧 offset；结果放 UI_MENU_RESULT + UI_MENU_KEY
+  local header="$1" footer="$2" idx="${3:-0}" offset_hint="${4:-}"
   local n=${#UI_MENU_LABELS[@]}
   if [ "$n" -lt 1 ]; then
     return 1
@@ -536,14 +538,34 @@ ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引；结果放 UI_MENU_RESUL
   if [ "$view" -lt 3 ]; then view=3; fi
   if [ "$view" -gt "$n" ]; then view=$n; fi
 
-  local offset=$((idx - view + 1))
-  if [ "$offset" -lt 0 ]; then offset=0; fi
+  local max_offset=$((n - view))
+  if [ "$max_offset" -lt 0 ]; then max_offset=0; fi
 
-  # 可选中行（跳过分类标题）。光标只在 sel 里移动，标题行不参与导航。
+  # 优先复用上一帧的视口位置：每次按键都会退出再重进菜单，重新从
+  # “光标贴底”算会把画面拽到底部（按 Space/Enter 时尤其明显）。
+  local offset
+  case "$offset_hint" in
+    ''|*[!0-9]*) offset=$((idx - view + 1)) ;;
+    *)           offset=$offset_hint ;;
+  esac
+  if [ "$offset" -gt "$max_offset" ]; then offset=$max_offset; fi
+  if [ "$offset" -lt 0 ]; then offset=0; fi
+  if [ "$idx" -lt "$offset" ]; then
+    offset="$(ui_offset_with_header "$idx")"
+  fi
+  if [ "$idx" -ge $((offset + view)) ]; then
+    offset=$((idx - view + 1))
+  fi
+
+  # 可停靠行：普通可选行 + 分类标题；空行只做分隔，不参与导航。
+  # 分类标题只停靠，Space/Enter 在标题上不动作（见下面的按键分支）。
   local -a sel=()
   local i nsel pos=0
   for i in "${!UI_MENU_LABELS[@]}"; do
-    [ "${UI_MENU_SKIP[$i]:-0}" = 1 ] || sel+=("$i")
+    if [ "${UI_MENU_SKIP[$i]:-0}" = 1 ]; then
+      [ -n "${UI_MENU_LABELS[$i]}" ] || continue
+    fi
+    sel+=("$i")
   done
   nsel=${#sel[@]}
   if [ "$nsel" -lt 1 ]; then
@@ -562,6 +584,7 @@ ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引；结果放 UI_MENU_RESUL
     UI_DRAW_OFFSET=$offset
     UI_DRAW_VIEW=$view
     UI_DRAW_TOTAL=$n
+    UI_MENU_OFFSET_LAST=$offset
     ui_menu_draw
 
     ui_key_read
@@ -593,6 +616,10 @@ ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引；结果放 UI_MENU_RESUL
         idx="${sel[$pos]}"
         ;;
       enter|space)
+        # 分类标题只是停靠点：不切换、不展开，留在原地
+        if [ "${UI_MENU_SKIP[$idx]:-0}" = 1 ]; then
+          continue
+        fi
         UI_MENU_KEY="$UI_KEY"
         UI_MENU_RESULT="${UI_MENU_VALUES[$idx]}"
         break
@@ -649,7 +676,7 @@ ui_main_menu() {  # 输入 UI_MAIN_CURSOR；输出 UI_MENU_ACTION + UI_MENU_KEY
         UI_MENU_SKIP+=(1)
       fi
       UI_MENU_LABELS+=("$(ext_category_label "$cat")")
-      UI_MENU_VALUES+=("__header__")
+      UI_MENU_VALUES+=("header:$cat")
       UI_MENU_DIM+=(0)
       UI_MENU_SKIP+=(1)
       last_cat="$cat"
@@ -695,7 +722,7 @@ ui_main_menu() {  # 输入 UI_MAIN_CURSOR；输出 UI_MENU_ACTION + UI_MENU_KEY
 
   ui_menu_run \
     "选择要编译的扩展 · Space 切换 · Enter 展开/收起" \
-    "Esc 取消 · Home/End 跳转" "$idx" || return 1
+    "↑↓ 选择 · Esc 取消 · Home/End 跳转" "$idx" "${UI_MENU_OFFSET_LAST:-}" || return 1
   UI_MENU_ACTION="$UI_MENU_RESULT"
   UI_ACTION_KEY="$UI_MENU_KEY"
   return 0
@@ -722,6 +749,7 @@ ui_ext_select() {  # $1=系列 $2=具体版本 $3=tree $4=初始扩展 $5=初始
   UI_OPT_STATE=()
   UI_CATEGORY=()
   UI_EXT_LIST=()
+  UI_MENU_OFFSET_LAST=0
   ui_cache_build
 
   # 屏幕（光标 / 自动换行 / 可选 alternate screen）在整个选择过程只进出一次，
