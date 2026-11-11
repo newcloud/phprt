@@ -119,7 +119,8 @@ sudo apt install aria2
 
 推荐安装 `aria2`（提供 `aria2c`）：多个连接下载，大文件通常会快一些；
 没装自动用 curl。下载进度和扩展选择菜单都由 phprt 用 ANSI 自绘，不需要额外的
-终端 UI 命令。缺命令时 phprt 会在用到的那一步报 `缺少命令: xxx`。
+终端 UI 命令。`install` 会在选扩展之前一次性检查上面这些命令，缺什么报什么；
+只用 `--downloads` / `--print-urls` / `--plan` 时只检查 curl。
 
 想完全不碰宿主工具链时用 buildroot，见第 7 章。
 
@@ -133,6 +134,9 @@ phprt download 8.5 --ext "swoole openssl curl"
 # install 也能只下载：只写 .phprt/downloads，不创建版本树、不编译
 phprt install 8.5 --ext "swoole openssl curl" --downloads
 ```
+
+`install --downloads` 结束时会打印下次可直接使用的安装命令（带本次实际生效的
+`--ext` / `--opt` 和 `--offline`），存下来，断网时照跑即可。
 
 `--downloads` 也接受 `--download` / `--predownload` 两个简写。不写 `--ext` 时
 会先进入 ANSI 选择界面，选完再下载；加 `--yes`（或不是终端）直接用默认集。

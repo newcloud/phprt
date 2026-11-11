@@ -363,6 +363,38 @@ resolve_install_modes() {
   printf '%s\n' "$out"
 }
 
+# 树是否构建完成：有 ok 状态；老版本没有状态文件时按已有 bin/php 视为完成
+tree_build_complete() {  # $1=tree -> 0/1
+  local tree="$1" status=""
+  [ -d "$tree" ] || return 1
+  status="$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)"
+  if [ -x "$tree/bin/php" ] && {
+       [ "$status" = ok ] ||
+       { [ ! -f "$tree/BUILD-STATUS" ] && [ ! -f "$tree/.build-exts" ]; }
+     }; then
+    return 0
+  fi
+  return 1
+}
+
+# 工具链预检：缺什么一次性报完，别让用户选完扩展、下完源码才发现
+# $1=full（编译全套）| download（只下载）
+preflight_cmds() {
+  local c missing=""
+  if [ "${1:-full}" = download ]; then
+    for c in curl; do
+      command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+    done
+    [ -z "$missing" ] || die "缺少命令:${missing}（下载需要 curl；装 aria2 可加速）"
+    return 0
+  fi
+  for c in gcc g++ make cmake pkg-config patchelf tar xz unzip ar m4 perl curl; do
+    command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+  done
+  [ -z "$missing" ] ||
+    die "缺少命令:${missing}（安装: sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config patchelf tar xz unzip binutils m4 perl curl）"
+}
+
 cmd_install() {
   local arg="" exts="" recompile=0 assume_yes=0 plan=0 clean_src=0
   local build_spec="" global_mode="" static_all=0 lto=0 saw_shared=0
@@ -454,6 +486,7 @@ cmd_install() {
     imax="$(installed_series_max "$series")"
     if [ -n "$imax" ] &&
        [ "$(printf '%s\n%s\n' "$imax" "$concrete" | sort -V | tail -1)" = "$imax" ] &&
+       tree_build_complete "$(tree_of "$imax")" &&
        [ "$recompile" != 1 ] && [ "$plan" != 1 ] && [ -z "$exts" ] &&
        [ "$static_all" != 1 ] && [ -z "$build_spec" ] && [ -z "$global_mode" ] &&
        [ "$downloads_only" != 1 ] && [ "$print_urls" != 1 ]; then
@@ -469,18 +502,21 @@ cmd_install() {
     fi
   fi
 
-  local tree complete=0 status=""
+  local tree complete=0
   tree="$(tree_of "$concrete")"
 
-  if [ -d "$tree" ]; then
-    status="$(cat "$tree/BUILD-STATUS" 2>/dev/null || true)"
-    # 新树必须看到 ok；老版本没有状态文件时按已有 bin/php 视为完成
-    if [ -x "$tree/bin/php" ] && {
-         [ "$status" = ok ] ||
-         { [ ! -f "$tree/BUILD-STATUS" ] && [ ! -f "$tree/.build-exts" ]; }
-       }; then
-      complete=1
-    fi
+  # 工具链预检：选扩展 / 下载之前就把缺的命令一次性报出来
+  if [ "$plan" = 1 ] || [ "$print_urls" = 1 ]; then
+    :  # 只打印计划 / 链接，不碰工具链
+  elif [ "$downloads_only" = 1 ]; then
+    preflight_cmds download
+  else
+    preflight_cmds full
+  fi
+
+  # 新树必须看到 ok；老版本没有状态文件时按已有 bin/php 视为完成
+  if tree_build_complete "$tree"; then
+    complete=1
   fi
 
   # 精确版已装齐：停止（系列版走到这里说明目标高于已装最高版，不会重入）
@@ -603,6 +639,17 @@ cmd_install() {
   fi
   if [ "$downloads_only" = 1 ]; then
     prefetch_sources "$exts" 0 || return 1
+    # 离线安装是可闭环的：把这次实际生效的选择打印成可直接保存的命令
+    local hint="phprt install $concrete"
+    if [ -n "$exts" ]; then
+      hint="$hint --ext \"$exts\""
+    fi
+    if [ -n "${PHPRT_EXT_OPTS:-}" ]; then
+      hint="$hint --opt \"$PHPRT_EXT_OPTS\""
+    fi
+    hint="$hint --offline"
+    printf '    源码已下载到 .phprt/downloads\n'
+    printf '    下次安装（离线）: %s\n' "$hint"
     return 0
   fi
   if [ "$plan" != 1 ]; then
