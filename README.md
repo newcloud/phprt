@@ -52,7 +52,7 @@ cd ~/blog
 
 ## 扩展支持
 
-扩展支持：Database(mysqli pdo_mysql pdo_pgsql pgsql sqlite3 mongodb)、Cache & Storage(apcu memcached redis)、Messaging(amqp rdkafka)、Network(curl ftp ldap sockets ssh2)、Runtime(pcntl posix readline shmop swoole sysvmsg sysvsem sysvshm)、Serialization & Data Formats(igbinary msgpack protobuf yaml)、Compression(bz2 zip zlib)、Cryptography(openssl sodium)、Image Processing(gd imagick)、Internationalization(gettext intl mbstring)、XML & Documents(libxml2 xsl tidy)、Other(ffi gmp xdebug)。
+扩展支持：Database(mysqli pdo_mysql pdo_pgsql pgsql sqlite3 mongodb)、Cache & Storage(apcu memcached redis)、Messaging(amqp rdkafka swoole)、Network(curl ftp ldap sockets ssh2)、Runtime(pcntl posix readline shmop sysvmsg sysvsem sysvshm)、Serialization & Data Formats(igbinary msgpack protobuf yaml)、Compression(bz2 zip zlib)、Cryptography(openssl sodium)、Image Processing(gd imagick)、Internationalization(gettext intl mbstring)、XML & Documents(libxml2 xsl tidy)、Other(ffi gmp xdebug)。
 
 ## 项目特点
 

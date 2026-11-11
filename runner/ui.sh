@@ -13,8 +13,6 @@
 # 交互：
 #   ↑↓ / Home / End / PgUp / PgDn 移动，Space 切换选中，Enter 展开/收起，
 #   Esc 取消（在子项上是回到父行并收起）。
-#   分类标题行可以停靠：跨组时先停在下一组的标题上，再按一次才进入组内；
-#   标题上 Space/Enter 不动作。
 #   主菜单是“树形列表”：
 #     - 扩展行：[x]/[-]/[ ] + 名字 + ▼/▶（有 opts() 才有箭头）
 #     - 展开后子项缩进排在下面，固定项始终 [x]、灰色、不可切换
@@ -59,7 +57,7 @@ UI_ROW_DIM=0
 UI_MENU_LABELS=()
 UI_MENU_VALUES=()
 UI_MENU_DIM=()
-UI_MENU_SKIP=()   # 1 = 非普通行（分类标题/空行）；非空标题可停靠，但不响应 Space/Enter
+UI_MENU_SKIP=()   # 1 = 不可选中的行（分类标题）
 
 UI_RESET=$'\033[0m'
 UI_DIM=$'\033[2m'
@@ -557,15 +555,11 @@ ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引 $4=上一帧 offset；结
     offset=$((idx - view + 1))
   fi
 
-  # 可停靠行：普通可选行 + 分类标题；空行只做分隔，不参与导航。
-  # 分类标题只停靠，Space/Enter 在标题上不动作（见下面的按键分支）。
+  # 可选中行（跳过分类标题）。光标只在 sel 里移动，标题行不参与导航。
   local -a sel=()
   local i nsel pos=0
   for i in "${!UI_MENU_LABELS[@]}"; do
-    if [ "${UI_MENU_SKIP[$i]:-0}" = 1 ]; then
-      [ -n "${UI_MENU_LABELS[$i]}" ] || continue
-    fi
-    sel+=("$i")
+    [ "${UI_MENU_SKIP[$i]:-0}" = 1 ] || sel+=("$i")
   done
   nsel=${#sel[@]}
   if [ "$nsel" -lt 1 ]; then
@@ -616,10 +610,6 @@ ui_menu_run() {  # $1=标题 $2=底栏 $3=初始索引 $4=上一帧 offset；结
         idx="${sel[$pos]}"
         ;;
       enter|space)
-        # 分类标题只是停靠点：不切换、不展开，留在原地
-        if [ "${UI_MENU_SKIP[$idx]:-0}" = 1 ]; then
-          continue
-        fi
         UI_MENU_KEY="$UI_KEY"
         UI_MENU_RESULT="${UI_MENU_VALUES[$idx]}"
         break
@@ -676,7 +666,7 @@ ui_main_menu() {  # 输入 UI_MAIN_CURSOR；输出 UI_MENU_ACTION + UI_MENU_KEY
         UI_MENU_SKIP+=(1)
       fi
       UI_MENU_LABELS+=("$(ext_category_label "$cat")")
-      UI_MENU_VALUES+=("header:$cat")
+      UI_MENU_VALUES+=("__header__")
       UI_MENU_DIM+=(0)
       UI_MENU_SKIP+=(1)
       last_cat="$cat"
@@ -722,7 +712,7 @@ ui_main_menu() {  # 输入 UI_MAIN_CURSOR；输出 UI_MENU_ACTION + UI_MENU_KEY
 
   ui_menu_run \
     "选择要编译的扩展 · Space 切换 · Enter 展开/收起" \
-    "↑↓ 选择 · Esc 取消 · Home/End 跳转" "$idx" "${UI_MENU_OFFSET_LAST:-}" || return 1
+    "Esc 取消 · Home/End 跳转" "$idx" "${UI_MENU_OFFSET_LAST:-}" || return 1
   UI_MENU_ACTION="$UI_MENU_RESULT"
   UI_ACTION_KEY="$UI_MENU_KEY"
   return 0

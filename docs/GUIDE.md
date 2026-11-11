@@ -254,14 +254,12 @@ phprt install 8.5 --yes            # 不询问，直接用默认集（脚本/CI�
 
 ### 3.1 键位
 
-选择器里 `↑↓` 移动；跨分类时会先在下一组的分类标题上停住，再按一次才进入组内。
-`Home`/`End` 跳到首行/末行（首行是第一个分类标题），`Space` 切换选中，
+选择器里 `↑↓` 移动，`Home`/`End` 跳到首项/末项，`Space` 切换选中，
 `Enter` 展开或收起有子项的扩展（在最后一行「确认并继续」上回车就是完成），
-`Esc` 取消；在子项或已展开的父行上按 `Esc` 是先收起、再按一次才取消。分类标题
-只停靠，`Space`/`Enter` 在标题上不动作。不是终端、`--yes`、`--print-urls` 或
-`PHPRT_SELECT=0` 时自动退回默认集。
+`Esc` 取消；在子项或已展开的父行上按 `Esc` 是先收起、再按一次才取消。不是终端、
+`--yes`、`--print-urls` 或 `PHPRT_SELECT=0` 时自动退回默认集。
 
-打开时停在最后的确认行，按 `Home` 回到第一个分类标题。菜单画在当前命令行下面，
+打开时停在最后的确认行，按 `Home` 回到第一个扩展。菜单画在当前命令行下面，
 不清屏：`$ phprt select 8.5` 那行和上面的历史输出一直看得见，退出后只清掉
 菜单这一块。想要全屏菜单可以设 `PHPRT_ALT_SCREEN=1`。
 
@@ -294,7 +292,7 @@ Image Processing
 
   ✔ 确认并继续（18 个扩展）
 
-69/69 · ↑↓ 选择 · Esc 取消 · Home/End 跳转
+69/69 · Esc 取消 · Home/End 跳转
 ```
 
 分类标题顶格、用亮青色显示；扩展行缩进 2 格，子选项缩进 6 格；分类之间、
@@ -303,8 +301,7 @@ Image Processing
 菜单按 recipe 头部的 `category=` 分组，顺序固定为：Database、Cache & Storage、
 Messaging、Network、Runtime、Serialization & Data Formats、Compression、
 Cryptography、Image Processing、Internationalization、XML & Documents、Other。
-分类标题可以停靠：`↑↓` 跨组时先停在标题上，再按一次进入组内；标题行没有勾选
-或展开动作，`Space`/`Enter` 在标题上不动作。
+分类标题不是可选项，`↑↓`、`Home/End`、`PgUp/PgDn` 会跳过它们。
 
 ### 3.3 三态标记
 
@@ -416,7 +413,7 @@ pcntl posix sockets shmop sysvmsg sysvsem sysvshm`（下表中带 ★）。
 | rdkafka | Messaging | Kafka | shared | 静态 / shared |
 | redis | Cache & Storage | Redis | shared | 静态 / shared |
 | ssh2 | Network | SSH2 | shared | 静态 / shared |
-| swoole | Runtime | 协程 / 异步网络 | shared | 仅 shared |
+| swoole | Messaging | 协程 / 异步网络 | shared | 仅 shared |
 | xdebug | Other | 调试 / 覆盖率 | shared | 仅 shared |
 | yaml | Serialization & Data Formats | YAML | shared | 静态 / shared |
 
