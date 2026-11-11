@@ -84,7 +84,7 @@ recipe_main "$@"
 | `wheel` | 禁止 | 禁止 | 可选 | 禁止 | wheel 化例外，默认 `auto`；见第 6 节 |
 | `upstream` | 可选 | 必填 | 必填 | 必填 | 上游来源：`github:owner/repo`、`pecl:包名`、`phpnet:x.y`、`none`（不检查）；也可改用 `versions()` / `latest_version()` |
 | `desc` | 可选 | 可选 | 可选 | 可选 | 一行说明，选择器显示，不参与构建 |
-| `category` | 必填 | 必填 | 禁止 | 禁止 | 选择器分组：`Database`、`CacheStorage`、`Compression`、`Cryptography`、`Image`、`Internationalization`、`Network`、`Runtime`、`Other`（不能带空格） |
+| `category` | 必填 | 必填 | 禁止 | 禁止 | 选择器分组：`Database`、`CacheStorage`、`Messaging`、`Network`、`Runtime`、`Serialization`、`Compression`、`Cryptography`、`Image`、`Internationalization`、`XML`、`Other`（不能带空格） |
 | `menu_order` | 可选 | 可选 | 禁止 | 禁止 | 分类内排序号，缺省 1000；只影响选择器顺序 |
 | `note` | 可选 | 可选 | 可选 | 可选 | `slug1+slug2`，slug 必须在 `bundles/<版本>/notes.conf` 定义；只用于展示/JSON |
 

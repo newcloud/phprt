@@ -45,6 +45,27 @@
 20. 开发是发现驱动的：遇到框架/流程问题、新的优化方向、需要改 driver 才能通过
     的情况，停下报告等决定，不擅自实施；扩展内部问题自行处理并记台账。
 
+21. README 只给普通用户看，结构固定，不新增章节、全文控制在 80 行内：
+    简介 → 安装依赖 → 快速开始（`install` / `install --downloads` + 两张截图 +
+    `./myphp -r` 示例）→ 使用说明（只放 `docs/GUIDE.md` 目录）→ 扩展支持
+    （按分类一行列出）→ 项目特点（只列 5 条）→ 注意事项与说明 → 协议一行。
+    参数表、扩展表、目录树、下载/代理细节、菜单键位一律写 `docs/GUIDE.md`；
+    开发与契约细节写 `docs/DEVELOPMENT.md` / `docs/RECIPE.md`。
+    新增功能先改 GUIDE.md，README 只允许修正已有段落里的事实错误。
+
+22. 扩展分类的唯一定义在 `runner/common.sh` 的 `PHPRT_EXT_CATEGORIES` 和
+    `PHPRT_CATEGORY_LABELS`；分类键不能带空格，显示名可以。改分类必须同时改
+    recipe 的 `category=`、`docs/RECIPE.md` 的值域、`docs/DEVELOPMENT.md` 和
+    `docs/EXTENSIONS.md` 的顺序说明、`docs/GUIDE.md` 的菜单顺序、
+    `docs/TEST-V2.md` 的选择器预期和 `README.md` 的扩展支持行，然后跑
+    `scripts/recipe-check.sh`。分类顺序就是菜单顺序，不要另写一份顺序表。
+
+23. 改了命令相关的行为（子命令、参数、默认值、输出提示、退出码、示例命令），
+    必须同步更新 `docs/GUIDE.md` 对应章节：参数表、示例输出、「命令速查」都要
+    与实际一致。改完至少实跑一次该命令并核对输出；`--help` 文本在
+    `runner/commands.sh` 的 `usage()`，与 GUIDE 一起改。README 只在受影响的
+    事实描述属于第 21 条允许的范围内才动。
+
 ## 契约读取顺序（AI）
 
 1. 先跑 `phprt ext list <系列> --json --name <扩展>`，拿完整契约；

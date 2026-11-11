@@ -824,7 +824,7 @@ rootfs 可见性和清理逻辑：
 | `add ext sqlite3 --static` | 同时出现 `sqlite3` 与 `pdo_sqlite`，PDO 驱动新增 sqlite |
 | `add ext pdo_pgsql --static` | `pdo_pgsql` 可用；`pg_config --configure` 含 `--with-ssl=openssl`，libpq 链树内 libssl/libcrypto |
 | 老树识别 | v2ext 的 `phprt show` 自动列出 `pdo_mysql pdo_pgsql sqlite3`（按模块名反推） |
-| 菜单（pty） | 分组顺序 Database / Cache & Storage / Compression / …；`Home` 落在 `mysqli` 且上方 `Database` 标题可见，`End` 回确认行，标题行不可选中 |
+| 菜单（pty） | 分组顺序 Database / Cache & Storage / Compression / …；`Home` 落在 `Database` 标题，`End` 回确认行；从组内跨到下一组时先停在分类标题上，再按一次进入组内；标题上 `Space`/`Enter` 不动作 |
 | 菜单层级（pty） | 分类标题顶格、`\033[1;36m`（NO_COLOR 时 `\033[1m`）；扩展行缩进 2、子项缩进 6；分类之间、确认行上下各一个空行（条目 54 → 63，帧多一行） |
 | 分类内顺序 | Database 为 mysqli、pdo_mysql、pdo_pgsql、pgsql、sqlite3、mongodb（`menu_order`） |
 | `--ext sqlite` | 报错：`未知扩展: sqlite；SQLite 已合并到 sqlite3（同时产出 pdo_sqlite）` |
@@ -851,7 +851,7 @@ ncurses 6.5 + GNU readline 8.3 两个依赖。
 | `--build sockets=shared` | 静态 sockets 被清掉，生成 `sockets.so` + `20-sockets.ini`，`socket_create()` 正常，`verify` 全绿 |
 | `--build readline=shared` | 报错 `readline 不支持 shared（type=static）`：ext/readline 用 `PHP_ARG_WITH`，phpize 会把 libedit 强制成 shared |
 | 搬移测试 | 整棵树 `cp -a` 到别的目录后，`bin/php -m` 和功能调用都正常 |
-| 选择器（pty） | Runtime 分组出现 pcntl/posix/readline，Network 出现 sockets，Other 出现 shmop/sysvmsg/sysvsem/sysvshm；都没有展开箭头；Space 能开关 readline 并反映到输出 |
+| 选择器（pty） | Runtime 分组出现 pcntl/posix/readline/shmop/sysvmsg/sysvsem/sysvshm，Network 出现 sockets，Other 出现 ffi/gmp/xdebug；都没有展开箭头；Space 能开关 readline 并反映到输出 |
 | `scripts/recipe-check.sh` | 77 个 recipe 通过 |
 | `phprt verify` | 7 项全绿（含 shared sockets） |
 

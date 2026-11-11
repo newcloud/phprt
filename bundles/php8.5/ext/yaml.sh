@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=yaml switch=ENABLE_YAML version=YAML_EXT_VERSION modules=yaml ini=26-yaml.ini tools=autoconf,perlshim needs=libyaml optional= upstream=pecl:yaml type=static,shared default=shared category=Other
+# phprt: contract=v2 kind=ext name=yaml switch=ENABLE_YAML version=YAML_EXT_VERSION modules=yaml ini=26-yaml.ini tools=autoconf,perlshim needs=libyaml optional= upstream=pecl:yaml type=static,shared default=shared category=Serialization
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

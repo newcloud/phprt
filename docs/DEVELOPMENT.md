@@ -248,10 +248,12 @@ gh-proxy.com / ghfast.top / ghproxy.net / gh.llkk.cc）换镜像，前缀形式�
 - `install --opt` 是整棵树的完整指定；`add ext --opt` 只覆盖点名的扩展，其余扩展
   沿用 `.build-opts`（`ext_opts_merge`），且带了 `--opt` 就会重编，即使已经在同一种模式下。
 
-菜单分组来自 recipe 头部的 `category=`（`Database`、`CacheStorage`、`Compression`、
-`Cryptography`、`Image`、`Internationalization`、`Network`、`Runtime`、`Other`）。
+菜单分组来自 recipe 头部的 `category=`（`Database`、`CacheStorage`、`Messaging`、
+`Network`、`Runtime`、`Serialization`、`Compression`、`Cryptography`、`Image`、
+`Internationalization`、`XML`、`Other`）。
 顺序表在 `runner/common.sh` 的 `PHPRT_EXT_CATEGORIES`，分类内可按 `menu_order=` 排序。
-分类标题行不参与导航（`UI_MENU_SKIP`），`↑↓ / Home / End / PgUp / PgDn` 都会跳过。
+分类标题行可以停靠（`UI_MENU_SKIP=1` 但标签非空），`↑↓` 跨组时先停在标题上；
+空行只做分隔，不参与导航。标题上 `Space`/`Enter` 不动作。
 数据库扩展按驱动拆分：`mysqli` / `pdo_mysql`、`pgsql` / `pdo_pgsql`、`sqlite3`
 （含 `pdo_sqlite`）；`mysqlnd`、`libpq`、`sqlite` 是依赖，不进菜单。
 
@@ -269,8 +271,8 @@ ANSI 渲染与环境变量：
 
 - 每帧整块 `printf`，行尾 `\r\033[2K` 就地覆盖，不清屏；
 - 关闭 DECAWM，长行在右边界裁掉，避免把布局顶乱；
-- 分类标题是独立的不可选中行（`UI_MENU_SKIP`），`↑↓ / Home / End / PgUp / PgDn`
-  都会跳过；
+- 分类标题是独立的停靠行（`UI_MENU_SKIP=1` 且标签非空），空行不参与导航；标题上
+  `Space`/`Enter` 不动作；
 - 父行三态：`[x]` 全选、`[-]` 部分子项关闭、`[ ]` 未选；固定子项始终 `[x]`、
   灰色显示、Space 无效，也不参与“全开”判断；
 - 扩展列表和 `opts()` 元数据只在会话开始时取一次，按键时只重算被改动的那一行，
@@ -455,7 +457,7 @@ chroot 内通过项目目录再次看到 rootfs。当前实现不额外叠 tmpfs
 - `remove` 先卸载，确认 0 挂载，再 `rm -rf --one-file-system`
 - 有进程占用时默认拒绝，`--force` 才跳过
 
-用户用法见 [README](../README.md) 的“用 chroot 构建”。
+用户用法见 [使用说明](GUIDE.md) 的“7. buildroot 隔离构建”。
 
 ## 9. 新增扩展或依赖
 

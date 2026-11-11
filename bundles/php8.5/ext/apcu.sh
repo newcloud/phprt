@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=apcu switch=ENABLE_APCU version=APCU_VERSION modules=apcu ini=25-apcu.ini tools=autoconf,perlshim needs= optional= upstream=pecl:apcu type=static,shared default=shared category=Runtime
+# phprt: contract=v2 kind=ext name=apcu switch=ENABLE_APCU version=APCU_VERSION modules=apcu ini=25-apcu.ini tools=autoconf,perlshim needs= optional= upstream=pecl:apcu type=static,shared default=shared category=CacheStorage
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

@@ -499,16 +499,19 @@ ext_opts_get() {  # $1="gd=..." $2=扩展名 -> 子选项列表；没写返回 2
 # 扩展分类：选择器按这个顺序分组，recipe 头部用 category=<名字> 声明。
 # 值不能带空格（头部字段用空格分隔）；显示名可以带空格。
 # ---------------------------------------------------------------------------
-PHPRT_EXT_CATEGORIES=(Database CacheStorage Compression Cryptography Image Internationalization Network Runtime Other)
+PHPRT_EXT_CATEGORIES=(Database CacheStorage Messaging Network Runtime Serialization Compression Cryptography Image Internationalization XML Other)
 declare -gA PHPRT_CATEGORY_LABELS=(
   [Database]=Database
   [CacheStorage]='Cache & Storage'
+  [Messaging]=Messaging
+  [Network]=Network
+  [Runtime]=Runtime
+  [Serialization]='Serialization & Data Formats'
   [Compression]=Compression
   [Cryptography]=Cryptography
   [Image]='Image Processing'
   [Internationalization]=Internationalization
-  [Network]=Network
-  [Runtime]=Runtime
+  [XML]='XML & Documents'
   [Other]=Other
 )
 

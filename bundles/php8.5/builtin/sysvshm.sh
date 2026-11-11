@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=builtin name=sysvshm switch=ENABLE_SYSVSHM modules=sysvshm ini=- type=static,shared default=static category=Other
+# phprt: contract=v2 kind=builtin name=sysvshm switch=ENABLE_SYSVSHM modules=sysvshm ini=- type=static,shared default=static category=Runtime
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

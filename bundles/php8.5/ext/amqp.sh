@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=amqp switch=ENABLE_AMQP version=AMQP_VERSION modules=amqp ini=20-amqp.ini tools=autoconf,perlshim needs=rabbitmq-c optional= upstream=pecl:amqp type=static,shared default=shared category=Network
+# phprt: contract=v2 kind=ext name=amqp switch=ENABLE_AMQP version=AMQP_VERSION modules=amqp ini=20-amqp.ini tools=autoconf,perlshim needs=rabbitmq-c optional= upstream=pecl:amqp type=static,shared default=shared category=Messaging
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 

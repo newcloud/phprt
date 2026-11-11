@@ -189,9 +189,10 @@ zlib/ICU，也没有对应子项。
 `mysqlnd`、`libpq`、`sqlite` 是依赖，不是可选扩展：不选对应扩展时不会构建，
 多个扩展选中同一依赖时只构建一次；它们不会出现在 `phprt select` 菜单里。
 
-选择器按 recipe 头部 `category=` 分组，顺序：Database、Cache & Storage、
-Compression、Cryptography、Image Processing、Internationalization、Network、
-Runtime、Other。`menu_order` 只影响分类内顺序。
+选择器按 recipe 头部 `category=` 分组，顺序：Database、Cache & Storage、Messaging、
+Network、Runtime、Serialization & Data Formats、Compression、Cryptography、
+Image Processing、Internationalization、XML & Documents、Other。
+`menu_order` 只影响分类内顺序。
 
 > builtin 的版本跟 PHP 走，没有独立的“降级/升级”。等价验证是：关闭时 `php -m` 里没有，
 > 开启并重编后有；PHP 自身升级单独做一轮（8.5.11 → 8.5.12）。

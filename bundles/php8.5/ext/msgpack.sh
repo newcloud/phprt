@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phprt: contract=v2 kind=ext name=msgpack switch=ENABLE_MSGPACK version=MSGPACK_VERSION modules=msgpack ini=20-msgpack.ini tools=autoconf,perlshim needs= optional= upstream=pecl:msgpack type=static,shared default=shared category=Other
+# phprt: contract=v2 kind=ext name=msgpack switch=ENABLE_MSGPACK version=MSGPACK_VERSION modules=msgpack ini=20-msgpack.ini tools=autoconf,perlshim needs= optional= upstream=pecl:msgpack type=static,shared default=shared category=Serialization
 set -euo pipefail
 source "${PHPRT_RUNNER:?}/common.sh"
 
