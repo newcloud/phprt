@@ -24,6 +24,10 @@ fn children(
         }
         Kind::Ext => {
             out.extend(t.needs.iter().map(|n| format!("dep:{n}")));
+            // 只有 shared 扩展需要 phpize / autoconf。
+            if sel.mode_of(t)? == Mode::Shared {
+                out.extend(t.tools.iter().map(|n| format!("dep:{n}")));
+            }
         }
         Kind::Php => {
             // 只有 static 扩展进 PHP 本体的 configure；
@@ -128,6 +132,7 @@ mod tests {
         Feature {
             needs: needs.iter().map(|s| s.to_string()).collect(),
             configure: vec![],
+            disable: vec![],
         }
     }
 
@@ -141,6 +146,17 @@ mod tests {
             link: vec!["static".into(), "shared".into()],
             shared_from: format!("ext/{name}"),
             ini: format!("20-{name}.ini"),
+            ..blank()
+        }
+    }
+
+    fn tool(name: &str) -> Target {
+        Target {
+            kind: Kind::Dep,
+            name: name.into(),
+            version: "1".into(),
+            url: format!("https://example.com/{name}.tar.gz"),
+            artifacts: vec!["bin/x".into()],
             ..blank()
         }
     }
@@ -178,6 +194,9 @@ mod tests {
             url: String::new(),
             sha256: String::new(),
             needs: vec![],
+            tools: vec![],
+            builtin_exts: vec![],
+            builtin_disable: Default::default(),
             exts: vec![],
             modules: vec![],
             origin: "builtin".into(),
@@ -191,6 +210,8 @@ mod tests {
             make: vec![],
             artifacts: vec![],
             desc: String::new(),
+            line: String::new(),
+            series: String::new(),
         }
     }
 
@@ -202,6 +223,7 @@ mod tests {
             .insert("nghttp2".into(), feature(&["nghttp2"]));
 
         let mut curl = builtin("curl", &["libcurl"]);
+        curl.tools = vec!["autoconf".into()];
         curl.subs.insert(
             "curl".into(),
             SubDef {
@@ -223,6 +245,7 @@ mod tests {
         Registry::from_targets(vec![
             dep("openssl", &[]),
             dep("nghttp2", &[]),
+            tool("autoconf"),
             libcurl,
             builtin("openssl", &["openssl"]),
             curl,
@@ -277,6 +300,20 @@ mod tests {
             .to_string();
         assert!(err.contains("ext:xdebug"), "{err}");
         assert!(err.contains("契约不支持 static"), "{err}");
+    }
+
+    #[test]
+    fn tools_only_follow_shared_exts() {
+        let reg = fixture();
+        let sel = selection(&reg, &["curl=link:static"]);
+        let features = sel.features(&reg);
+        let order = ids(&resolve(&reg, "php:8.5.12", &sel, &features).unwrap());
+        assert!(!order.contains(&"dep:autoconf".to_owned()));
+
+        let sel = selection(&reg, &["curl=link:shared"]);
+        let features = sel.features(&reg);
+        let order = ids(&resolve(&reg, "php:8.5.12", &sel, &features).unwrap());
+        assert!(pos(&order, "dep:autoconf") < pos(&order, "ext:curl"));
     }
 
     #[test]

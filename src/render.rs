@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
 use serde::Serialize;
 
+use crate::layout;
 use crate::recipe::{Kind, Mode, Registry, Selection, Target};
 use crate::state::ProjectState;
 
@@ -19,6 +20,7 @@ pub struct Node {
     pub kind: String,
     pub name: String,
     pub version: String,
+    pub line: String,
     pub origin: String,
     pub mode: String,
     pub source: String,
@@ -26,6 +28,7 @@ pub struct Node {
     pub unpack: String,
     pub prefix: String,
     pub needs: Vec<String>,
+    pub tools: Vec<String>,
     pub modules: Vec<String>,
     pub subs: Vec<SubNode>,
     pub features: Vec<String>,
@@ -45,10 +48,10 @@ pub struct SubNode {
     pub features: Vec<String>,
 }
 
-struct Ctx<'a> {
-    tree: &'a str,
-    build: String,
-    prefix: String,
+pub(crate) struct Ctx<'a> {
+    pub(crate) tree: &'a str,
+    pub(crate) build: String,
+    pub(crate) prefix: String,
 }
 
 pub fn build(
@@ -60,12 +63,12 @@ pub fn build(
 ) -> Result<Sim> {
     let php = reg.php()?;
     let tree = format!(".phprt/php-{}", php.version);
-    let php_build = format!("build/php/{}", archive_stem(&archive_name(&php.url)));
+    let php_build = layout::build_dir(&php.name, Kind::Php, &php.url);
     let mut nodes = Vec::new();
 
     for t in order {
-        let archive = archive_name(&t.url);
-        let stem = archive_stem(&archive);
+        let archive = layout::archive_name(&t.url).unwrap_or_else(|| "source".to_owned());
+        let stem = layout::archive_stem(&archive);
         let mode = if t.kind == Kind::Ext {
             Some(sel.mode_of(t)?)
         } else {
@@ -98,41 +101,35 @@ pub fn build(
         };
 
         let mut needs: Vec<String> = t.needs.iter().map(|n| format!("dep:{n}")).collect();
+        let tools: Vec<String> = t.tools.iter().map(|n| format!("dep:{n}")).collect();
         let mut enabled_features: Vec<String> = Vec::new();
 
-        if t.kind == Kind::Dep
-            && let Some(enabled) = features.get(&t.name)
-        {
-            enabled_features = enabled.clone();
-            for name in enabled {
-                let Some(f) = t.features.get(name) else {
-                    continue;
-                };
-                for need in &f.needs {
-                    let id = format!("dep:{need}");
-                    if !needs.contains(&id) {
-                        needs.push(id);
+        if t.kind == Kind::Dep {
+            if let Some(enabled) = features.get(&t.name) {
+                enabled_features = enabled.clone();
+                for name in enabled {
+                    let Some(f) = t.features.get(name) else {
+                        continue;
+                    };
+                    for need in &f.needs {
+                        let id = format!("dep:{need}");
+                        if !needs.contains(&id) {
+                            needs.push(id);
+                        }
                     }
                 }
-                for arg in &f.configure {
-                    configure.push(expand(arg, &ctx, reg)?);
-                }
             }
+            configure = dep_configure(reg, t, features.get(&t.name), &ctx)?;
         }
 
-        // 编进 PHP 的扩展，把参数汇总到 PHP 的 configure 行。
+        // 每个内置扩展在 PHP configure 里只出现关闭参数或正向参数其中一组。
         if t.kind == Kind::Php {
-            for ext_name in &t.exts {
-                let ext = reg.ext(ext_name)?;
-                if sel.mode_of(ext)? == Mode::Static {
-                    let ext_ctx = Ctx {
-                        tree: &tree,
-                        build: build_dir.clone(),
-                        prefix: tree.clone(),
-                    };
-                    configure.extend(ext_configure(reg, ext, sel, &ext_ctx)?);
-                }
-            }
+            let php_ctx = Ctx {
+                tree: &tree,
+                build: build_dir.clone(),
+                prefix: tree.clone(),
+            };
+            configure.extend(php_configure_flags(reg, t, sel, &php_ctx)?);
         }
 
         let make = t
@@ -156,7 +153,7 @@ pub fn build(
                 // builtin 从 PHP 源码树里拷，PECL 用自己下载的源码包。
                 if t.origin == "builtin" {
                     source = format!("{php_build}/{}", t.shared_from);
-                    unpack = String::new();
+                    unpack = format!("build/{}/php-{}", t.name, php.version);
                 } else {
                     source = t.url.clone();
                     unpack = build_dir.clone();
@@ -202,6 +199,7 @@ pub fn build(
             kind: t.kind.as_str().to_owned(),
             name: t.name.clone(),
             version: t.version.clone(),
+            line: t.line.clone(),
             origin: if t.kind == Kind::Ext {
                 t.origin.clone()
             } else {
@@ -213,6 +211,7 @@ pub fn build(
             unpack,
             prefix,
             needs,
+            tools,
             modules: t.modules.clone(),
             subs,
             features: enabled_features,
@@ -233,7 +232,69 @@ pub fn build(
     })
 }
 
-fn ext_configure(
+/// dep 的 configure：基础参数 + 启用 feature 的参数 + 未启用 feature 的 disable 参数。
+pub(crate) fn dep_configure(
+    reg: &Registry,
+    dep: &Target,
+    enabled: Option<&Vec<String>>,
+    ctx: &Ctx<'_>,
+) -> Result<Vec<String>> {
+    let mut out = dep
+        .configure
+        .iter()
+        .map(|arg| expand(arg, ctx, reg))
+        .collect::<Result<Vec<_>>>()?;
+    let empty = Vec::new();
+    let enabled = enabled.unwrap_or(&empty);
+    for (name, feature) in &dep.features {
+        if enabled.contains(name) {
+            for arg in &feature.configure {
+                out.push(expand(arg, ctx, reg)?);
+            }
+        } else {
+            for arg in &feature.disable {
+                out.push(expand(arg, ctx, reg)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// PHP configure 里的内置扩展开关：
+/// `builtin_disable` 里的扩展没选 static 时用它的关闭参数，
+/// 选了 static 时用 ext recipe 的 configure。
+pub(crate) fn php_configure_flags(
+    reg: &Registry,
+    php: &Target,
+    sel: &Selection,
+    ctx: &Ctx<'_>,
+) -> Result<Vec<String>> {
+    let mut static_exts = BTreeSet::new();
+    for name in &php.exts {
+        let ext = reg.ext(name)?;
+        if sel.mode_of(ext)? == Mode::Static {
+            static_exts.insert(name.as_str());
+        }
+    }
+
+    let mut out = Vec::new();
+    for (name, flag) in &php.builtin_disable {
+        if static_exts.contains(name.as_str()) {
+            continue;
+        }
+        out.push(expand(flag, ctx, reg)?);
+    }
+    for name in &php.exts {
+        let ext = reg.ext(name)?;
+        if sel.mode_of(ext)? != Mode::Static {
+            continue;
+        }
+        out.extend(ext_configure(reg, ext, sel, ctx)?);
+    }
+    Ok(out)
+}
+
+pub(crate) fn ext_configure(
     reg: &Registry,
     ext: &Target,
     sel: &Selection,
@@ -260,14 +321,21 @@ pub fn to_json(sim: &Sim) -> Result<String> {
 
 pub fn to_text(sim: &Sim) -> String {
     let mut out = String::new();
-    out.push_str("phprt plan（仅模拟，不编译）\n");
+    out.push_str("phprt plan\n");
     out.push_str(&format!("  root   {}\n", sim.root));
     out.push_str(&format!("  tree   {}\n", sim.tree));
 
     out.push_str("\nbuild order\n");
     for (i, n) in sim.order.iter().enumerate() {
         let extra = match n.kind.as_str() {
-            "ext" => format!("  ({} {})", n.origin, n.mode),
+            "ext" => {
+                let line = if n.line.is_empty() {
+                    String::new()
+                } else {
+                    format!(", line {}", n.line)
+                };
+                format!("  ({} {}{})", n.origin, n.mode, line)
+            }
             "php" => String::new(),
             _ => format!("  {}", n.version),
         };
@@ -297,8 +365,14 @@ pub fn to_text(sim: &Sim) -> String {
             out.push_str(&format!("  unpack     {}\n", n.unpack));
         }
         out.push_str(&format!("  prefix     {}\n", n.prefix));
+        if !n.line.is_empty() {
+            out.push_str(&format!("  line       {}\n", n.line));
+        }
         if !n.needs.is_empty() {
             out.push_str(&format!("  needs      {}\n", n.needs.join(", ")));
+        }
+        if !n.tools.is_empty() {
+            out.push_str(&format!("  tools      {}\n", n.tools.join(", ")));
         }
         if !n.modules.is_empty() {
             out.push_str(&format!("  modules    {}\n", n.modules.join(", ")));
@@ -379,6 +453,9 @@ pub fn graph_text(
                 for dep in &t.needs {
                     out.push_str(&format!("{} -> dep:{}\n", t.id(), dep));
                 }
+                for tool in &t.tools {
+                    out.push_str(&format!("{} -> dep:{}  (tool)\n", t.id(), tool));
+                }
                 if sel.mode_of(t)? == Mode::Shared {
                     out.push_str(&format!("{} -> php:{}  (shared)\n", t.id(), php.version));
                 }
@@ -403,16 +480,11 @@ pub fn ext_list_text(
     pending_only: bool,
 ) -> String {
     let mut out = format!(
-        "{:<12} {:<9} {:<15} {}\n",
-        "name", "origin", "link", "status"
+        "{:<12} {:<9} {:<15} {:<10} {}\n",
+        "name", "origin", "link", "version", "status"
     );
-    let defaults = reg.php().map(|p| p.exts.clone()).unwrap_or_default();
     for ext in reg.of_kind(Kind::Ext) {
-        let status = if !state.active && defaults.contains(&ext.name) {
-            "pending"
-        } else {
-            state.ext_status(&ext.name)
-        };
+        let status = state.ext_status(&ext.name);
         if installed_only && status != "installed" {
             continue;
         }
@@ -420,10 +492,11 @@ pub fn ext_list_text(
             continue;
         }
         out.push_str(&format!(
-            "{:<12} {:<9} {:<15} {}\n",
+            "{:<12} {:<9} {:<15} {:<10} {}\n",
             ext.name,
             ext.origin,
             ext.link.join(","),
+            ext.version,
             status
         ));
     }
@@ -434,8 +507,14 @@ pub fn list_text(reg: &Registry) -> String {
     let mut out = String::new();
     for t in reg.targets.values() {
         let mut notes = Vec::new();
+        if !t.line.is_empty() {
+            notes.push(format!("line={}", t.line));
+        }
         if !t.needs.is_empty() {
             notes.push(format!("needs={}", t.needs.join(",")));
+        }
+        if !t.tools.is_empty() {
+            notes.push(format!("tools={}", t.tools.join(",")));
         }
         if !t.exts.is_empty() {
             notes.push(format!("exts={}", t.exts.join(",")));
@@ -477,20 +556,7 @@ pub fn list_text(reg: &Registry) -> String {
     out
 }
 
-fn archive_name(url: &str) -> String {
-    url.rsplit('/').next().unwrap_or("source.tar.gz").to_owned()
-}
-
-fn archive_stem(name: &str) -> String {
-    for suffix in [".tar.gz", ".tar.xz", ".tar.bz2", ".tgz", ".zip"] {
-        if let Some(stem) = name.strip_suffix(suffix) {
-            return stem.to_owned();
-        }
-    }
-    name.to_owned()
-}
-
-fn expand(input: &str, ctx: &Ctx<'_>, reg: &Registry) -> Result<String> {
+pub(crate) fn expand(input: &str, ctx: &Ctx<'_>, reg: &Registry) -> Result<String> {
     let mut out = String::new();
     let mut rest = input;
     while let Some(start) = rest.find('{') {
@@ -524,12 +590,136 @@ fn expand(input: &str, ctx: &Ctx<'_>, reg: &Registry) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::Feature;
+
+    fn libcurl() -> Target {
+        let mut target = Target {
+            kind: Kind::Dep,
+            name: "libcurl".into(),
+            version: "8.23.0".into(),
+            url: "https://example.com/curl.tar.xz".into(),
+            configure: vec!["./configure".into(), "--prefix={prefix}".into()],
+            ..blank()
+        };
+        target.features.insert(
+            "ssl".into(),
+            Feature {
+                needs: vec!["openssl".into()],
+                configure: vec!["--with-openssl={dep:openssl}".into()],
+                disable: vec!["--without-ssl".into()],
+            },
+        );
+        target
+    }
+
+    fn blank() -> Target {
+        Target {
+            kind: Kind::Dep,
+            name: String::new(),
+            version: String::new(),
+            url: String::new(),
+            sha256: String::new(),
+            needs: vec![],
+            tools: vec![],
+            builtin_exts: vec![],
+            builtin_disable: Default::default(),
+            exts: vec![],
+            modules: vec![],
+            origin: "builtin".into(),
+            link: vec![],
+            subs: Default::default(),
+            shared_from: String::new(),
+            ini: String::new(),
+            ini_lines: vec![],
+            features: Default::default(),
+            configure: vec![],
+            make: vec![],
+            artifacts: vec![],
+            desc: String::new(),
+            line: String::new(),
+            series: String::new(),
+        }
+    }
+
+    fn openssl() -> Target {
+        Target {
+            kind: Kind::Dep,
+            name: "openssl".into(),
+            version: "3.5.9".into(),
+            url: "https://example.com/openssl.tar.gz".into(),
+            ..blank()
+        }
+    }
+
+    fn openssl_ext() -> Target {
+        Target {
+            kind: Kind::Ext,
+            name: "openssl".into(),
+            version: "8.5.12".into(),
+            modules: vec!["openssl".into()],
+            origin: "builtin".into(),
+            link: vec!["static".into(), "shared".into()],
+            needs: vec!["openssl".into()],
+            configure: vec!["--with-openssl={dep:openssl}".into()],
+            ..blank()
+        }
+    }
+
+    fn php(exts: &[&str]) -> Target {
+        Target {
+            kind: Kind::Php,
+            name: "8.5.12".into(),
+            version: "8.5.12".into(),
+            url: "https://example.com/php.tar.xz".into(),
+            builtin_exts: vec!["openssl".into()],
+            builtin_disable: BTreeMap::from([(
+                "openssl".to_owned(),
+                "--without-openssl".to_owned(),
+            )]),
+            exts: exts.iter().map(|s| s.to_string()).collect(),
+            ..blank()
+        }
+    }
 
     #[test]
-    fn archive_stem_handles_common_suffixes() {
-        assert_eq!(archive_stem("openssl-3.5.4.tar.gz"), "openssl-3.5.4");
-        assert_eq!(archive_stem("php-8.5.12.tar.xz"), "php-8.5.12");
-        assert_eq!(archive_stem("curl-8.11.1.zip"), "curl-8.11.1");
-        assert_eq!(archive_stem("plain"), "plain");
+    fn php_gets_one_side_of_the_static_flags() {
+        let reg = Registry::from_targets(vec![openssl(), openssl_ext(), php(&[])]).unwrap();
+        let php_target = reg.php().unwrap();
+        let ctx = Ctx {
+            tree: "/t",
+            build: "/b".into(),
+            prefix: "/t".into(),
+        };
+        let sel = Selection::default();
+        let args = php_configure_flags(&reg, php_target, &sel, &ctx).unwrap();
+        assert!(args.contains(&"--without-openssl".to_owned()));
+        assert!(!args.iter().any(|arg| arg.starts_with("--with-openssl")));
+
+        let reg =
+            Registry::from_targets(vec![openssl(), openssl_ext(), php(&["openssl"])]).unwrap();
+        let php_target = reg.php().unwrap();
+        let sel = Selection::default();
+        let args = php_configure_flags(&reg, php_target, &sel, &ctx).unwrap();
+        assert!(args.contains(&"--with-openssl=/t/deps/openssl-3.5.9".to_owned()));
+        assert!(!args.contains(&"--without-openssl".to_owned()));
+    }
+
+    #[test]
+    fn disabled_feature_adds_its_disable_args() {
+        let reg = Registry::from_targets(vec![libcurl(), openssl()]).unwrap();
+        let dep = reg.get("dep:libcurl").unwrap();
+        let ctx = Ctx {
+            tree: "/t",
+            build: "/b".into(),
+            prefix: "/p".into(),
+        };
+
+        let args = dep_configure(&reg, dep, None, &ctx).unwrap();
+        assert!(args.contains(&"--without-ssl".to_owned()));
+
+        let enabled = vec!["ssl".to_owned()];
+        let args = dep_configure(&reg, dep, Some(&enabled), &ctx).unwrap();
+        assert!(args.contains(&"--with-openssl=/t/deps/openssl-3.5.9".to_owned()));
+        assert!(!args.contains(&"--without-ssl".to_owned()));
     }
 }

@@ -1,141 +1,123 @@
 # phprtv3
 
-phprt v3 的最小原型：**Starlark 写 recipe，Rust 做求解和模拟执行**。
+phprt v3 的最小原型：**Starlark 写 recipe，Rust 做版本解析、求解、下载和构建**。
 
-当前只验证架构，不下载、不编译。`plan` 算出依赖闭包、拓扑顺序和每个节点的参数；
-`install` / `update` / `ext add` / `ext remove` 是模拟命令，只写状态文件。
+`plan` 算出依赖闭包、拓扑顺序和每个节点的参数。`install` / `update` 默认把方案里的
+源码包下载到 `.phprt/downloads/`，按构建顺序解压到 `build/<组件>/<补丁>/`，编译安装到
+`.phprt/php-<php 版本>/`，最后写状态并生成项目入口 `./myphp`。`--downloads` 只下载
+源码，不解压、不编译、不写状态。
+
+构建环境、日志、跳过规则和运行时库整理见 [docs/BUILD.md](docs/BUILD.md)。
+
+版本和默认策略分成三层：
+
+```text
+bundle       php8.5 默认用 swoole 6.2、openssl 3.5；默认启用 openssl + curl
+catalog      6.2 → 6.2.5 + 下载地址；3.5 → 3.5.9 + 下载地址
+recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
+```
+
+补丁更新只改 `recipes/catalog.toml`，bundle 和 recipe 不会过期。
 
 设计细节见 [docs/DESIGN.md](docs/DESIGN.md)。
 
 ## 快速开始
 
 ```bash
-cargo run -- list        # 列出 recipe
-cargo run -- graph       # 打印依赖边
-cargo run -- plan        # 求解 php 的全部依赖并模拟构建
-cargo run -- plan php:8.5.12 --json
-cargo run -- install --ext curl=sub:curl[nghttp2]   # 写状态文件
-cargo run -- ext add xdebug
-cargo run -- update
+cargo run -- install 8.5                 # 默认 openssl + curl(ssl) + PHP 8.5.12
+./myphp -v                               # 用项目自己的 PHP
+cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl  # 只装 PHP
+cargo run -- install 8.5 --downloads     # 只下载源码包
+cargo run -- install 8.5 --ext swoole --downloads   # 只下载扩展和依赖
+cargo run -- install 8.5 --ext swoole --ext xdebug  # 再加两个 PECL 扩展
+cargo run -- install 8.5 --ext swoole    # swoole 6.2.5 + libcurl + openssl 3.5.9
+cargo run -- install 8.5 --ext curl=link:shared,sub:curl[ssl,nghttp2]
+cargo run -- install 7.4 --ext swoole    # swoole 4.8.13 + openssl 1.1.1w
+cargo run -- --php 8.5 ext list           # 查看扩展和版本
+cargo run -- --php 8.5 ext add xdebug     # 加入方案（待安装）
+cargo run -- --php 8.5 install 8.5        # 装方案里的扩展
+cargo run -- --php 8.5 update             # 在记录的线内更新补丁
 ```
 
-按扩展选择链接方式和子功能：
-
-```bash
-cargo run -- plan --ext swoole=sub:curl[ssl,nghttp2] --ext curl=link:shared,sub:curl[ssl]
-cargo run -- plan --ext openssl,curl=link:shared
-```
-
-目标是位置参数，写在 `--ext` 前面：
-
-```bash
-cargo run -- plan php:8.5.12 --ext openssl=link:shared
-```
-
-契约不允许的组合会在解析阶段直接失败，不输出计划：
-
-```bash
-cargo run -- plan --ext xdebug=link:static
-# error: ext:xdebug 契约不支持 static（支持：shared）
-```
-
-输出节选（`cargo run -- plan --ext swoole=sub:curl[ssl] --ext curl=link:shared,sub:curl[nghttp2]`）：
+`install` 必须指定 PHP；不带时报错并给出示例：
 
 ```text
-build order
-   1. dep:openssl     3.5.4
-   2. ext:openssl     (builtin static)
-   3. php:8.5.12
-   4. dep:nghttp2     1.64.0
-   5. dep:libcurl     8.11.1
-   6. ext:curl        (builtin shared)
-   7. ext:swoole      (pecl shared)
-   8. ext:xdebug      (pecl shared)
-
-[5/8] dep:libcurl 8.11.1
-  features   nghttp2, ssl
-  needs      dep:nghttp2, dep:openssl
-  configure  ./configure --prefix=...
-  configure  --with-nghttp2=.../deps/nghttp2-1.64.0
-  configure  --with-openssl=.../deps/openssl-3.5.4
+error: 请指定 PHP 版本，例如：phprt install 8.5（可用：7.4, 8.0, 8.2, 8.3, 8.4, 8.5, 8.6）
 ```
 
-## 契约
+## 版本线
 
-`recipes/defs.star` 提供 `dep` / `ext` / `php` / `feature` / `sub`，recipe 文件在顶层定义 `TARGET`：
+```bash
+# 不写 version：用 php8.5 bundle 的默认线（swoole 6.2）
+cargo run -- install 8.5 --ext swoole
+
+# 显式选线：6.0.x 的最新补丁从 catalog 取
+cargo run -- install 8.2 --ext swoole=version:6.0
+
+# 只改依赖库的线，不额外安装扩展
+cargo run -- install 8.5 --ext swoole --dep openssl=4.0
+
+# 不支持当前 PHP 的线直接失败
+cargo run -- install 8.5 --ext swoole=version:4.8
+# error: swoole 4.8 不支持 PHP 8.5（可用：6.2）
+```
+
+`version:` 只接受线（`6.2`），不接受补丁（`6.2.5`）；补丁由 catalog 决定。
+
+多个扩展约束同一个库时取交集。bundle 默认线冲突且只有一个候选时会自动切换并打印
+提示；显式 `--dep` 冲突则直接报错。
+
+## recipe
+
+recipe 只声明版本关系、依赖和构建参数；版本号、下载地址从 ctx 注入：
 
 ```python
-TARGET = dep(name, version, url, sha256="", needs=[], features={},
-             configure=[], make=["make"], artifacts=[])
-TARGET = ext(name, origin, modules, link, version="", needs=[], subs={},
-             configure=[], shared_from="", url="", sha256="", ini="", ini_lines=[])
-TARGET = php(version, url, exts=[], configure=[], make=[...], artifacts=["bin/php"])
+# recipes/ext/swoole.star
+LINES = {
+    "6.2": {
+        "php": ["8.4", "8.5", "8.6"],
+        "openssl": ["1.1.1", "3.0", "3.5", "4.0"],
+    },
+}
+
+def target(ctx):
+    self = ctx["self"]
+    return ext(
+        name="swoole",
+        version=ctx["php_version"] if ctx["is_builtin"] else self["version"],
+        url="" if ctx["is_builtin"] else self["url"],
+        sha256="" if ctx["is_builtin"] else self["sha256"],
+        modules=["swoole"],
+        link=["shared"],
+        needs=["libcurl", "openssl"],
+        subs={"curl": sub(dep="libcurl", configure=["--enable-swoole-curl"])},
+        configure=["--enable-swoole", "--with-openssl-dir={dep:openssl}"],
+        ini="27-swoole.ini",
+    )
+
+TARGET = target
 ```
 
-- `dep`：独立编译并安装到 `.phprt/php-<版本>/deps/<name>-<version>/`。
-- `ext`：`origin=builtin` 默认 static，`origin=pecl` 默认 shared；
-  `link` 是契约，只允许这里列出的链接方式。
-- `php`：PHP 本体，`exts` 里的扩展参与依赖求解。
-- `needs` 只能指向 `dep`，`exts` 只能指向 `ext`。同名不会混淆：
-  依赖是 `dep:openssl`，扩展是 `ext:openssl`。
-
-### 链接方式
-
-| link | 做什么 | ini |
-| --- | --- | --- |
-| `static` | `configure` 参数进 PHP 的 `./configure`，编进 `bin/php` | 不需要 |
-| `shared` | 编成 `.so`：builtin 从 PHP 源码的 `shared_from` 拷出来，PECL 用 `url` 下载源码；然后 `phpize` + `./configure --with-php-config=...` + `make install` | `etc/conf.d/<ini>` |
-
-求解顺序：static 扩展在 php 之前，shared 扩展在 php 之后（它要用 `phpize` 和
-PHP 源码/`php-config`）。
+- `LINES`：扩展自己的线支持哪些 PHP、允许哪些依赖线。
+- `PHP_LINES`：builtin 扩展的 PHP 系列 → 允许的依赖库线（如 ext:openssl）。
+- dep recipe 不声明 PHP 关系；库版本由 bundle/CLI/消费扩展决定。
+- `target(ctx)`：只负责构建参数，不再判断“能不能配”。
+- `ctx["is_builtin"]`：由 php recipe 的 `builtin_exts` 推导，不在 ext recipe 里写 `origin`。
+- `TARGET` 也可以是普通 dict。
 
 ### 子配置与 feature
 
-`sub:` 打开的是**扩展自己的子配置**，方括号里才是转给依赖的 feature：
+`sub:` 打开扩展自己的子配置，方括号里的 feature 转给依赖：
 
-```python
-# ext/swoole.star：sub:curl 才启用 --enable-swoole-curl
-subs = {
-    "curl": sub(dep="libcurl", configure=["--enable-swoole-curl"]),
-}
-
-# ext/curl.star：开关在顶层 configure，sub:curl 只负责转发
-subs = {"curl": sub(dep="libcurl")}
-
-# dep/libcurl.star：feature 怎么编由 dep 决定
-features = {
-    "ssl": feature(needs=["openssl"], configure=["--with-openssl={dep:openssl}"]),
-    "nghttp2": feature(needs=["nghttp2"], configure=["--with-nghttp2={dep:nghttp2}"]),
-}
+```bash
+cargo run -- install 8.2 --ext swoole=version:6.0,sub:curl[ssl,nghttp2]
 ```
 
-`--ext swoole=sub:curl[ssl,nghttp2]` 会给 swoole 加 `--enable-swoole-curl`，同时把
-`ssl`、`nghttp2` 转给 libcurl；不写 `sub:curl` 则两者都不发生。
+- `sub:curl` 给 swoole 加 `--enable-swoole-curl`。
+- `[ssl,nghttp2]` 转给 libcurl，具体编译参数由 libcurl 的 `features` 决定。
+- 不写 `sub:curl` → 开关和转发都不发生。
 
-### 命令行语法
-
-```
---ext <spec>[,<spec>...]        # 可重复，每次一个 spec
-spec := 名字 | 名字=link:模式 | 名字:link:模式
-      | 名字=link:模式,sub:子配置[feature,feature]
-      | 名字=sub:子配置[feature,feature]
-```
-
-- `--ext` 可以写多次，每次一个 spec。
-- 逗号既分隔扩展，也分隔同一个扩展的选项；`link:` / `sub:` 开头的片段并入前一个扩展。
-- 名字后面的 `=` 和 `:` 等价，例如 `curl=link:shared` 和 `swoole:link:shared`。
-- 裸名字用默认值：builtin → static，pecl → shared。
-- 只支持 `link:` / `sub:` 选项，不再有 `名字=shared` 这种简写。
-- `sub:名字` 打开扩展自己的子配置；方括号里的 feature 必须存在于该子配置绑定的 dep。
-- `[...]` 里的逗号不参与外层切分；不写方括号就只开开关、不转发 feature。
-
-### 状态文件
-
-`install` / `update` / `ext add` / `ext remove` 写 `.phprt/php-<系列>/state.json`
-（例如 `.phprt/php-8.5/state.json`），`plan` 只读。状态记录构建方案、installed 标记、
-每个扩展的子配置和 dep 的 feature。详见 [docs/STATE.md](docs/STATE.md)。
-
-字符串占位符：
+### 占位符
 
 | 占位符 | 含义 |
 | --- | --- |
@@ -145,42 +127,58 @@ spec := 名字 | 名字=link:模式 | 名字:link:模式
 | `{prefix}` | 当前节点的安装前缀 |
 | `{dep:名字}` | 指定依赖的安装前缀，如 `{dep:openssl}` |
 
-## 当前 recipe
+## 当前版本表
 
-```text
-php8.5 ──┬── ext:openssl ── dep:openssl
-         ├── ext:curl    ── dep:libcurl ── (feature nghttp2) dep:nghttp2
-         ├── ext:swoole  ── dep:libcurl  (pecl, shared only)
-         └── ext:xdebug  (pecl, shared only)
-```
+PHP：7.4 / 8.0 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
 
-| 文件 | 目标 |
-| --- | --- |
-| `recipes/php8.5.star` | `php:8.5.12` |
-| `recipes/ext/openssl.star` | `ext:openssl`，link=static,shared |
-| `recipes/ext/curl.star` | `ext:curl`，link=static,shared，subs 转给 libcurl |
-| `recipes/ext/swoole.star` | `ext:swoole` 6.0.2，link=shared |
-| `recipes/ext/xdebug.star` | `ext:xdebug` 3.4.7，link=shared，`zend_extension` |
-| `recipes/dep/openssl.star` | `dep:openssl` 3.5.4 |
-| `recipes/dep/libcurl.star` | `dep:libcurl` 8.11.1，features=ssl,nghttp2 |
-| `recipes/dep/nghttp2.star` | `dep:nghttp2` 1.64.0 |
+| 组件 | 线 | 默认使用 |
+| --- | --- | --- |
+| openssl | 1.1.1 / 3.0 / 3.5 / 4.0 | 8.5 用 3.5；4.0 允许但不默认 |
+| swoole | 4.8 / 5.1 / 6.0 / 6.2 | 7.4→4.8，8.0→5.1，8.2/8.3→6.0，8.4+→6.2 |
+| xdebug | 3.1 / 3.5 | 7.4→3.1，8.x→3.5 |
+| libcurl | 8.23 | 8.23.0 |
+| nghttp2 | 1.64 | 1.64.0 |
+
+## 状态文件
+
+`install` / `update` / `ext add` / `ext remove` 写
+`.phprt/php-<系列>/state.json`，`plan` / `list` / `ext list` 只读。
+
+状态记录：
+
+- 构建方案（哪些扩展、link、installed）
+- 显式指定的版本线 `bindings`
+- 每个扩展/依赖实际使用的线和小版本
+- dep 的 feature 并集
+
+bundle 默认线不写进 `bindings`；显式 `version:` 会写入并保留。默认扩展集合只在
+首次写 state 时 materialize；`update` 只在已记录的线内更新补丁。详见
+[docs/STATE.md](docs/STATE.md)。
 
 ## 已做的校验
 
-- ext 契约：`origin` 只能是 builtin/pecl；`link` 非空且默认值必须在 `link` 里；
-  shared 必须有 `ini`，builtin 还要 `shared_from`，PECL 还要 `url`+`version`。
+- `install` 必须指定 PHP；`--php` 与 install 参数冲突时报错。
+- 扩展声明 `LINES` 时，线集合必须和 catalog 一致；dep 不允许声明 `LINES`/`PHP_LINES`。
+- `PHP_LINES` 必须覆盖所有 PHP 系列，引用的线必须存在于 catalog。
+- 每条线必须支持当前 PHP；显式线不满足直接报错。
+- 依赖线取交集；显式 pin 冲突报错，bundle 软默认只在唯一候选时自动切换。
+- 版本线不存在、组件没有版本表、`version:` 写成补丁号都会报错。
+- ext 契约：`link` 非空且默认值必须在 `link` 里；shared 必须有 `ini`；
+  内置扩展还要 `shared_from`，非内置还要 `url`+`version`；origin 由 `builtin_exts` 推导。
+- php recipe 的 `builtin_exts` 非空无重复；`builtin_disable` 的 key 必须是内置扩展，
+  值必须是单个 `--without-*` / `--disable-*`。
+- bundle `default_exts` 是空格分隔的 spec；名字必须是内置扩展且有 recipe，不允许 `version:`。
 - `subs.*.dep` 必须出现在 `needs` 里；方括号里的 feature 必须在该 dep 的 `features` 里。
-- `state.json` 里的扩展和 feature 必须在 recipe 里存在，否则报错。
-- 请求契约不支持的 link 直接报错，例如 `xdebug=link:static`、`swoole=link:static`。
-- `needs` / `exts` / feature 的依赖必须存在。
+- 下载缓存命中跳过；有 sha256 的文件按哈希判断，没有 sha256 时按远端大小判断。
+- `--downloads` 只下载，不解压、不编译、不写状态；下载、解压或编译失败都不写状态。
+- 解压目标 `build/<组件>/<补丁>/` 已存在时跳过。
+- 编译按节点签名跳过已完成的部分；签名变化先 `make distclean`。
+- 编译结束写 `myphp`、`.phprt/current`，并校验 `php -v` 和 `php -m`。
 - 目标名重复、未知目标、裸名歧义、依赖成环都报错。
-- `cargo test` 覆盖默认模式、显式模式、PECL 拒绝 static、子配置与 feature 传播、
-  feature 并集不缩小、未知子配置、成环、缺依赖、歧义名和占位符展开。
 
 ## 还没做
 
-- 下载、解压、真编译，以及安装树落盘。
-- `--static-all`（把所有扩展和依赖静态链进一个二进制，不含 libc）。
-- shared 扩展真实构建后 `.so` 的路径发现（`php-config --extension-dir`）。
-- 构建锁、签名、增量构建、`verify`、可移动性检查。
-- 多版本 bundle、LTO。
+- 在线更新 catalog（目前是文件）。
+- 精确补丁 pin / lock 文件。
+- `--static-all`、多 PHP 同时构建、LTO。
+- 除 8.5 以外 PHP 系列的默认扩展集和真构建验收。

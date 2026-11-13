@@ -1,0 +1,9 @@
+# 只写默认版本线，不写补丁号。
+php = "8.5"
+openssl = "3.5"
+swoole = "6.2"
+xdebug = "3.5"
+
+# 空格分隔的扩展规格；有依赖的内置扩展要一起写，例如 "libxml xml"。
+# 不写代码做依赖推导，漏写时 PHP configure 会报错。
+default_exts = "openssl curl=sub:curl[ssl]"

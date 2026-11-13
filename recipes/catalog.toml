@@ -1,0 +1,45 @@
+# phprt 版本数据库（测试用）
+#
+# 只保存每条版本线的“当前最新小版本”和下载地址。
+# 兼容性（哪条线支持哪个 PHP）写在 recipe 的 LINES / PHP_LINES 里。
+#
+# 更新时只改对应线的 version / url / sha256，bundle 和 recipe 不动。
+
+[php]
+"7.4" = { version = "7.4.33", url = "https://www.php.net/distributions/php-7.4.33.tar.gz" }
+"8.0" = { version = "8.0.30", url = "https://www.php.net/distributions/php-8.0.30.tar.gz" }
+"8.2" = { version = "8.2.29", url = "https://www.php.net/distributions/php-8.2.29.tar.gz" }
+"8.3" = { version = "8.3.26", url = "https://www.php.net/distributions/php-8.3.26.tar.gz" }
+"8.4" = { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz" }
+"8.5" = { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209" }
+"8.6" = { version = "8.6.0", url = "https://www.php.net/distributions/php-8.6.0.tar.gz" }
+
+# OpenSSL 官方发布页只做跳转：https://www.openssl.org/source/openssl-<版本>.tar.gz
+# 会 301 到 GitHub Releases，所以这里直接写跳转后的最终地址。下载器按 catalog
+# 里的原始主机决定是否套用 GitHub 镜像、30s 短超时和站点并发桶。
+# 注意 1.1.1w 的 tag 是 OpenSSL_1_1_1w，3.0 及以后是 openssl-<版本>。
+[openssl]
+"1.1.1" = { version = "1.1.1w", url = "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz" }
+"3.0" = { version = "3.0.17", url = "https://github.com/openssl/openssl/releases/download/openssl-3.0.17/openssl-3.0.17.tar.gz" }
+"3.5" = { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a" }
+"4.0" = { version = "4.0.0", url = "https://github.com/openssl/openssl/releases/download/openssl-4.0.0/openssl-4.0.0.tar.gz" }
+
+[swoole]
+"4.8" = { version = "4.8.13", url = "https://pecl.php.net/get/swoole-4.8.13.tgz" }
+"5.1" = { version = "5.1.7", url = "https://pecl.php.net/get/swoole-5.1.7.tgz" }
+"6.0" = { version = "6.0.2", url = "https://pecl.php.net/get/swoole-6.0.2.tgz" }
+"6.2" = { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c" }
+
+[xdebug]
+"3.1" = { version = "3.1.6", url = "https://pecl.php.net/get/xdebug-3.1.6.tgz" }
+"3.5" = { version = "3.5.3", url = "https://pecl.php.net/get/xdebug-3.5.3.tgz", sha256 = "f073de91bea046106abf4d6071c963ea71e58571df6ce58948ceca89d121cb2d" }
+
+[libcurl]
+"8.23" = { version = "8.23.0", url = "https://curl.se/download/curl-8.23.0.tar.xz", sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5" }
+
+# 构建期工具：phpize 需要 autoconf。GNU FTP 直连，不套 GitHub 镜像。
+[autoconf]
+"2.72" = { version = "2.72", url = "https://ftp.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz", sha256 = "ba885c1319578d6c94d46e9b0dceb4014caafe2490e437a0dbca3f270a223f5a" }
+
+[nghttp2]
+"1.64" = { version = "1.64.0", url = "https://github.com/nghttp2/nghttp2/releases/download/v1.64.0/nghttp2-1.64.0.tar.gz" }

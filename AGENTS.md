@@ -17,11 +17,15 @@
 
 | 改动 | 要更新的文档 |
 | --- | --- |
-| recipe 字段、默认值、校验规则 | `docs/CONTRACT.md` |
-| 子命令、参数、`--ext` 语法、错误 | `docs/CLI.md` |
-| 依赖边、拓扑顺序、模式、子功能传播 | `docs/SOLVER.md` |
+| recipe 字段、ctx、LINES、catalog/bundle | `docs/CONTRACT.md` |
+| 新增/更新版本线、补丁号、catalog 下载地址、扩展默认规则 | `docs/ADD-RECIPE.md` |
+| 子命令、`--php`、`--ext`、`--dep`、错误 | `docs/CLI.md` |
+| 选线、依赖线交集、依赖边、子功能传播 | `docs/SOLVER.md` |
 | 文本/JSON 输出、路径、字段 | `docs/OUTPUT.md` |
-| state.json、ext 方案与 installed | `docs/STATE.md` |
+| state.json、bindings、line/version | `docs/STATE.md` |
+| 下载、缓存、镜像、分片续传、进度 UI | `docs/DOWNLOAD.md` |
+| 解压顺序、目录、格式、跳过与安全 | `docs/EXTRACT.md` |
+| 构建顺序、环境、签名跳过、日志、rpath、ini、入口 | `docs/BUILD.md` |
 | 模块职责、数据流、关键决策、目录 | `docs/DESIGN.md` |
 
 ## 2. 不开发没明确要求的使用方式
@@ -36,20 +40,50 @@
 - 只对真正有歧义、会影响外部行为的决策提问；能从领域常识或现有契约直接推出的，
   自己定，并在实现里体现。
 
-## 4. 验收
+## 4. 版本数据规则
+
+- 补丁号只写在 `recipes/catalog.toml`；recipe、bundle、state 都不锁补丁。
+- catalog 上的注释不删除。改地址、改版本时同步更新注释内容，保留原意。
+- 填 catalog 前先按 `docs/ADD-RECIPE.md` 判断下载地址是否跳转：跨站点跳转写跳转后的
+  最终地址并注释说明；同一发布方的临时签名跳转写稳定发布地址。
+- dep recipe 不写 PHP 关系；PHP 与库版本的对应写在消费扩展里。
+- 有自己版本线的扩展用 `LINES`；builtin 扩展用 `PHP_LINES` 约束同名依赖库。
+- `target(ctx)` 只写构建参数，不判断兼容性。
+- 是否内置、内置扩展的关闭参数写在 `php<系列>.star` 的 `builtin_exts` / `builtin_disable`；
+  ext recipe 不写 `origin`、`static_enable`、`static_disable`，用 `ctx["is_builtin"]`。
+- 默认启用集合写在 bundle 的 `default_exts`，是空格分隔的扩展 spec，不允许 `version:`；
+  有依赖的内置扩展必须一起写（如 `"libxml xml"`），不做依赖展开。
+- 新增/删除版本线时同步改 catalog、扩展 recipe 的 `LINES`/`PHP_LINES`，必要时改 bundle。
+- 每个 PHP 系列必须有对应的 `bundles/php<系列>.toml` 和 `php<系列>.star`。
+
+## 5. 验收
 
 ```bash
-cargo fmt
-cargo test
-cargo clippy --all-targets
-cargo run -- plan
-cargo run -- plan --ext curl=link:shared,sub:curl[nghttp2]
-cargo run -- plan --ext xdebug=link:static   # 必须失败
-cargo run -- install --ext swoole=sub:curl[ssl]
-cargo run -- ext add xdebug
-cargo run -- ext remove xdebug
-cargo run -- ext list --installed
-cargo run -- update
+cargo fmt --all
+cargo test --workspace
+cargo clippy --workspace --all-targets
+
+cargo run -- install 8.5                          # 默认 openssl + curl(ssl) + PHP
+cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl  # 只装 PHP
+cargo run -- install 8.5 --ext swoole --ext xdebug
+cargo run -- install 8.5 --ext swoole             # bundle: swoole 6.2
+cargo run -- install 7.4 --ext swoole             # swoole 4.8 + openssl 1.1.1
+cargo run -- install 8.2 --ext swoole=version:6.0
+cargo run -- install 8.5 --ext swoole --dep openssl=4.0
+cargo run -- install 8.5 --ext swoole=version:4.8 # 必须失败
+cargo run -- install                               # 必须提示指定 PHP
+cargo run -- --php 8.5 ext list --installed
+cargo run -- --php 8.5 ext add xdebug
+cargo run -- --php 8.5 ext remove xdebug
+cargo run -- --php 8.5 update
+
+cargo run -- install 8.5 --downloads                          # 只下载，不写 state
+cargo run -- install 8.5 --ext swoole --downloads
+cargo run -- install 8.5 --downloads --offline                # 缓存空时必须失败
+cargo run -- install 8.5 --ext swoole --offline               # 下载+解压+编译+写 state
+
+./myphp -v
+./myphp -m | grep -E 'openssl|curl|swoole|xdebug'
 ```
 
 测试和文档都对上才算改完。

@@ -1,0 +1,17 @@
+[package]
+name = "phprt-extract"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+bzip2.workspace = true
+flate2.workspace = true
+lzma-rust2.workspace = true
+phprt-source.workspace = true
+phprt-ui.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+lzma-rust2 = { workspace = true, features = ["encoder"] }

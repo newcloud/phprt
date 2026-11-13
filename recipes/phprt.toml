@@ -1,0 +1,12 @@
+# 下载配置，和 catalog.toml 同级。
+
+# GitHub 直连失败后是否改用镜像下载：enable / disable
+enable_github_proxy_download = "enable"
+
+# 镜像前缀，按顺序尝试，只对 https://github.com/ 生效。
+proxy_urls = [
+    "https://gh-proxy.com/",
+    "https://ghfast.top/",
+    "https://ghproxy.net/",
+    "https://gh.llkk.cc/",
+]

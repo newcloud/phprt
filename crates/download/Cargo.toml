@@ -1,0 +1,14 @@
+[package]
+name = "phprt-download"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+ctrlc.workspace = true
+phprt-source.workspace = true
+phprt-ui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ureq.workspace = true

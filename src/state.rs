@@ -7,17 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::recipe::{Kind, Mode, Registry, Selection, Target};
 
-/// 状态按 PHP 系列存放，升级补丁版本不会丢方案。
-pub fn series_of(version: &str) -> String {
-    let mut parts = version.split('.');
-    match (parts.next(), parts.next()) {
-        (Some(major), Some(minor)) if !major.is_empty() && !minor.is_empty() => {
-            format!("{major}.{minor}")
-        }
-        _ => version.to_owned(),
-    }
-}
-
 pub fn state_path(root: &Path, series: &str) -> PathBuf {
     root.join(".phprt")
         .join(format!("php-{series}"))
@@ -25,11 +14,17 @@ pub fn state_path(root: &Path, series: &str) -> PathBuf {
 }
 
 fn state_version() -> u32 {
-    1
+    2
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExtState {
+    /// 选中的版本线，如 6.2；builtin 扩展为空。
+    #[serde(default)]
+    pub line: String,
+    /// 实际解析到的补丁，如 6.2.5；只记录，不锁定。
+    #[serde(default)]
+    pub version: String,
     #[serde(default)]
     pub link: String,
     #[serde(default)]
@@ -40,6 +35,8 @@ pub struct ExtState {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DepState {
+    #[serde(default)]
+    pub line: String,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -58,6 +55,9 @@ pub struct ProjectState {
     pub active: bool,
     #[serde(default)]
     pub php: String,
+    /// 用户显式指定的版本线；bundle 解析出来的默认线不写在这里。
+    #[serde(default)]
+    pub bindings: BTreeMap<String, String>,
     #[serde(default)]
     pub ext: BTreeMap<String, ExtState>,
     #[serde(default)]
@@ -70,6 +70,7 @@ impl Default for ProjectState {
             version: state_version(),
             active: false,
             php: String::new(),
+            bindings: BTreeMap::new(),
             ext: BTreeMap::new(),
             deps: BTreeMap::new(),
         }
@@ -139,58 +140,50 @@ impl ProjectState {
         Ok(())
     }
 
-    /// 第一次写状态时，用 php recipe 的默认扩展集补种。
-    pub fn ensure_seeded(&mut self, reg: &Registry) -> Result<()> {
-        if self.active {
-            return Ok(());
+    /// 当前构建方案 = 状态里的扩展 ∪ `--ext` 点名的扩展。
+    /// 两者都没有时为空，也就是只装 PHP。
+    /// 当前构建方案 = 状态里的扩展 ∪ 本次命令行点名的扩展。
+    /// 两者都没有时为空，也就是只装 PHP。
+    pub fn scheme_with(&self, cli_names: &[String]) -> Vec<String> {
+        let mut names: Vec<String> = if self.active {
+            self.ext.keys().cloned().collect()
+        } else {
+            Vec::new()
+        };
+        for name in cli_names {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
         }
-        let php = reg.php()?;
-        let names = php.exts.clone();
-        for name in names {
-            let ext = reg.ext(&name)?;
-            self.ext.insert(
-                name,
-                ExtState {
-                    link: ext.default_mode()?.as_str().to_owned(),
-                    installed: false,
-                    sub: BTreeMap::new(),
-                },
-            );
-        }
-        self.active = true;
-        Ok(())
+        names.sort();
+        names
     }
 
-    /// 状态里的扩展列表就是构建方案；没写过状态时沿用 php.exts。
-    pub fn apply_to_registry(&self, reg: &mut Registry) -> Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-        let names: Vec<String> = self.ext.keys().cloned().collect();
-        for name in &names {
+    /// 把方案写进 php.exts；求解器只认这一份，不从 recipe 取默认扩展。
+    pub fn apply_scheme(&self, reg: &mut Registry, names: &[String]) -> Result<()> {
+        for name in names {
             reg.ext(name)?;
         }
         let php_id = reg.php()?.id();
         reg.targets
             .get_mut(&php_id)
             .expect("php 目标刚刚检查过")
-            .exts = names;
+            .exts = names.to_vec();
         Ok(())
     }
 
     /// 把状态里的 link/sub 和命令行选择合并成一次求解用的选择。
-    pub fn effective_selection(&self, reg: &Registry, cli: &Selection) -> Result<Selection> {
-        let php = reg.php()?;
-        let names: Vec<String> = if self.active {
-            self.ext.keys().cloned().collect()
-        } else {
-            php.exts.clone()
-        };
+    pub fn effective_selection(
+        &self,
+        reg: &Registry,
+        cli: &Selection,
+        names: &[String],
+    ) -> Result<Selection> {
         let mut out = Selection::default();
         for name in names {
-            reg.ext(&name)?;
-            let mut spec = cli.per_ext.get(&name).cloned().unwrap_or_default();
-            if let Some(state) = self.ext.get(&name) {
+            reg.ext(name)?;
+            let mut spec = cli.per_ext.get(name).cloned().unwrap_or_default();
+            if let Some(state) = self.ext.get(name) {
                 if spec.link.is_none() && !state.link.is_empty() {
                     spec.link = Some(Mode::parse(&state.link)?);
                 }
@@ -203,7 +196,7 @@ impl ProjectState {
                     }
                 }
             }
-            out.per_ext.insert(name, spec);
+            out.per_ext.insert(name.clone(), spec);
         }
         Ok(out)
     }
@@ -216,6 +209,8 @@ impl ProjectState {
         self.ext.insert(
             name.to_owned(),
             ExtState {
+                line: String::new(),
+                version: String::new(),
                 link: ext.default_mode()?.as_str().to_owned(),
                 installed: false,
                 sub: BTreeMap::new(),
@@ -226,7 +221,14 @@ impl ProjectState {
     }
 
     pub fn remove_ext(&mut self, name: &str) -> bool {
-        self.ext.remove(name).is_some()
+        let Some(ext) = self.ext.remove(name) else {
+            return false;
+        };
+        // builtin 扩展（openssl/curl）没有自己的线，同名 binding 属于依赖库。
+        if !ext.line.is_empty() {
+            self.bindings.remove(name);
+        }
+        true
     }
 
     pub fn set_installed_all(&mut self) {
@@ -236,16 +238,23 @@ impl ProjectState {
     }
 
     /// 把本次求解使用的 link/sub 写回状态，保留 installed。
-    pub fn sync_selection(&mut self, reg: &Registry, sel: &Selection) -> Result<()> {
-        for (name, spec) in &sel.per_ext {
+    pub fn sync_selection(
+        &mut self,
+        reg: &Registry,
+        sel: &Selection,
+        names: &[String],
+    ) -> Result<()> {
+        for name in names {
             let ext = reg.ext(name)?;
+            let spec = sel.per_ext.get(name).cloned().unwrap_or_default();
             let entry = self.ext.entry(name.clone()).or_default();
             entry.link = sel.mode_of(ext)?.as_str().to_owned();
-            entry.sub = spec.subs.clone();
+            entry.line = ext.line.clone();
+            entry.version = ext.version.clone();
+            entry.sub = spec.subs;
         }
         // 方案之外的扩展不留在状态里。
-        let keep: Vec<String> = sel.per_ext.keys().cloned().collect();
-        self.ext.retain(|name, _| keep.contains(name));
+        self.ext.retain(|name, _| names.contains(name));
         self.active = true;
         Ok(())
     }
@@ -284,6 +293,7 @@ impl ProjectState {
                 (
                     t.name.clone(),
                     DepState {
+                        line: t.line.clone(),
                         version: t.version.clone(),
                         features: features.get(&t.name).cloned().unwrap_or_default(),
                     },
@@ -331,6 +341,7 @@ mod tests {
                 crate::recipe::Feature {
                     needs: vec![],
                     configure: vec![],
+                    disable: vec![],
                 },
             );
         }
@@ -366,6 +377,9 @@ mod tests {
             url: String::new(),
             sha256: String::new(),
             needs: vec![],
+            tools: vec![],
+            builtin_exts: vec![],
+            builtin_disable: Default::default(),
             exts: vec![],
             modules: vec![],
             origin: "builtin".into(),
@@ -379,6 +393,8 @@ mod tests {
             make: vec![],
             artifacts: vec![],
             desc: String::new(),
+            line: String::new(),
+            series: String::new(),
         }
     }
 
@@ -394,7 +410,6 @@ mod tests {
             name: "8.5.12".into(),
             version: "8.5.12".into(),
             url: "https://example.com/php.tar.gz".into(),
-            exts: vec!["curl".into(), "swoole".into()],
             ..blank()
         };
         Registry::from_targets(vec![dep("libcurl", &["ssl", "nghttp2"]), curl, swoole, php])
@@ -402,25 +417,19 @@ mod tests {
     }
 
     #[test]
-    fn series_of_takes_major_minor() {
-        assert_eq!(series_of("8.5.12"), "8.5");
-        assert_eq!(series_of("8.6.0-dev"), "8.6");
-        assert_eq!(series_of("8"), "8");
+    fn default_scheme_is_empty() {
+        let state = ProjectState::default();
+        assert!(state.scheme_with(&[]).is_empty());
+
+        let mut reg = registry();
+        state.apply_scheme(&mut reg, &[]).unwrap();
+        assert!(reg.php().unwrap().exts.is_empty());
     }
 
     #[test]
-    fn seed_uses_php_exts_once() {
-        let reg = registry();
-        let mut state = ProjectState::default();
-        state.ensure_seeded(&reg).unwrap();
-        assert_eq!(
-            state.ext.keys().cloned().collect::<Vec<_>>(),
-            vec!["curl", "swoole"]
-        );
-        assert!(state.active);
-        state.remove_ext("swoole");
-        state.ensure_seeded(&reg).unwrap();
-        assert!(!state.ext.contains_key("swoole"));
+    fn scheme_takes_cli_exts() {
+        let state = ProjectState::default();
+        assert_eq!(state.scheme_with(&["swoole".to_owned()]), vec!["swoole"]);
     }
 
     #[test]
@@ -429,6 +438,7 @@ mod tests {
         state.deps.insert(
             "libcurl".into(),
             DepState {
+                line: "8.23".into(),
                 version: "1.0".into(),
                 features: vec!["nghttp2".into()],
             },
@@ -444,7 +454,8 @@ mod tests {
     fn effective_selection_carries_state_subs() {
         let reg = registry();
         let mut state = ProjectState::default();
-        state.ensure_seeded(&reg).unwrap();
+        state.add_ext(&reg, "curl").unwrap();
+        state.add_ext(&reg, "swoole").unwrap();
         state
             .ext
             .get_mut("curl")
@@ -452,7 +463,9 @@ mod tests {
             .sub
             .insert("curl".into(), vec!["nghttp2".into()]);
         let cli = Selection::default();
-        let sel = state.effective_selection(&reg, &cli).unwrap();
+        let names = state.scheme_with(&[]);
+        let sel = state.effective_selection(&reg, &cli, &names).unwrap();
+        assert_eq!(names, vec!["curl", "swoole"]);
         assert_eq!(sel.features(&reg)["libcurl"], vec!["nghttp2"]);
         assert_eq!(
             sel.mode_of(reg.ext("swoole").unwrap()).unwrap(),
@@ -464,7 +477,8 @@ mod tests {
     fn status_reflects_installed_flag() {
         let reg = registry();
         let mut state = ProjectState::default();
-        state.ensure_seeded(&reg).unwrap();
+        assert_eq!(state.ext_status("curl"), "available");
+        state.add_ext(&reg, "curl").unwrap();
         assert_eq!(state.ext_status("curl"), "pending");
         state.set_installed_all();
         assert_eq!(state.ext_status("curl"), "installed");

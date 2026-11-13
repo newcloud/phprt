@@ -1,12 +1,43 @@
+[workspace]
+members = ["crates/source", "crates/ui", "crates/download", "crates/extract", "crates/build"]
+resolver = "3"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+bzip2 = "0.6"
+clap = { version = "4.6.7", features = ["derive"] }
+ctrlc = "3"
+flate2 = "1"
+indicatif = "0.18"
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
+phprt-build = { path = "crates/build" }
+phprt-download = { path = "crates/download" }
+phprt-extract = { path = "crates/extract" }
+phprt-source = { path = "crates/source" }
+phprt-ui = { path = "crates/ui" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11"
+starlark = "0.14"
+tar = "0.4"
+toml = "1.2.1"
+ureq = "3.5"
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2", "bzip2"] }
+
 [package]
 name = "phprt"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.104"
-clap = { version = "4.6.7", features = ["derive"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
-starlark = "0.14"
-toml = "1.2.1"
+anyhow.workspace = true
+clap.workspace = true
+phprt-build.workspace = true
+phprt-download.workspace = true
+phprt-extract.workspace = true
+phprt-source.workspace = true
+phprt-ui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+starlark.workspace = true
+toml.workspace = true

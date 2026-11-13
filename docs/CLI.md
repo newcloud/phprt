@@ -1,58 +1,189 @@
 # 命令行
 
 ```bash
-phprt [--recipes <目录>] [--root <目录>] [--ext <SPEC>] <子命令>
+phprt [--recipes <目录>] [--root <目录>] [--php <系列>] [--ext <SPEC>] [--dep <NAME=LINE>] [--disable-default-ext <NAME>] <子命令>
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--recipes` | `recipes` | recipe 目录 |
-| `--root` | `.` | 项目根目录；状态文件写在 `<root>/.phprt` 下 |
-| `--ext` | 无 | 扩展选择，语法见下 |
+| `--recipes` | `recipes` | recipe 目录；`catalog.toml` 和 `bundles/` 也在这里 |
+| `--root` | `.` | 项目根目录；状态写在 `<root>/.phprt` 下 |
+| `--php` | 无 | PHP 系列，如 `8.5`；`install` 用位置参数，其他命令用这个 |
+| `--ext` | 无 | 扩展选择，同时把点名的扩展加入本次方案 |
+| `--dep` | 无 | 只绑定依赖库的版本线，如 `openssl=3.5` |
+| `--disable-default-ext` | 无 | 禁用当前系列 bundle 里的默认扩展；可重复，只用于 install/update/plan |
 
-子命令：
+## 子命令
 
-| 命令 | 说明 | 写状态文件 |
+| 命令 | 说明 | 写状态 |
 | --- | --- | --- |
-| `list` | 列出所有目标及关键字段 | 否 |
-| `graph` | 按当前选择打印依赖边 | 否 |
-| `plan [目标] [--json]` | 求解并输出模拟计划 | 否 |
-| `install` | 模拟安装：输出计划并写状态 | 是 |
-| `update` | 模拟更新后重新求解 | 是 |
-| `ext list [--installed\|--pending]` | 列出全部 / 已安装 / 待安装扩展 | 否 |
-| `ext add <名字>` | 加入构建方案（待安装） | 是 |
-| `ext remove <名字>` | 从方案移除，并重算 feature | 是 |
+| `list` | 列出当前 PHP 系列下的 recipe | 否 |
+| `graph` | 按当前方案打印依赖边 | 否 |
+| `plan [目标] [--json]` | 求解并输出构建计划 | 否 |
+| `install <PHP 版本> [--downloads]` | 下载、解压、编译并安装；必须指定 PHP | 默认是，`--downloads` 否 |
+| `update [--downloads]` | 在已记录的线内重新解析补丁并构建 | 默认是，`--downloads` 否 |
+| `ext list [--installed\|--pending]` | 列出扩展及版本 | 否 |
+| `ext add <名字>` | 加入方案（待安装） | 是 |
+| `ext remove <名字>` | 从方案移除并重算 feature | 是 |
 
-目标可以写完整 id（`dep:openssl`、`ext:curl`、`php:8.5.12`），也可以只写名字；
-只写名字有歧义时报错并列出候选。
+## PHP 版本
+
+`install` 必须带 PHP 版本：
+
+```bash
+phprt install 8.5
+phprt install 8.5.12
+phprt install php:8.5.12
+```
+
+不带时直接报错：
+
+```text
+error: 请指定 PHP 版本，例如：phprt install 8.5（可用：7.4, 8.0, 8.2, 8.3, 8.4, 8.5, 8.6）
+```
+
+其他命令用 `--php`：
+
+```bash
+phprt --php 8.5 plan
+phprt --php 7.4 ext add swoole
+```
+
+省略 `--php` 时：其他命令在 `.phprt/` 下只有一个状态文件时用它，多个或没有则报错；
+`list` 不是恰好一个状态时使用 catalog 里最高的 PHP 系列。
+
+## 下载与解压
+
+`install` / `update` 默认在打印计划之后、写状态之前完成两件事：
+
+```text
+下载（缓存命中跳过）→ 解压（构建顺序）→ 写 state
+```
+
+```bash
+phprt install 8.5
+phprt install 8.5 --ext swoole
+phprt install 8.5 --ext swoole --ui plain
+```
+
+`--downloads` 只下载源码，后面的解压和写状态都不做：
+
+```bash
+phprt install 8.5 --downloads
+phprt update --downloads
+phprt install 8.5 --ext swoole --downloads --offline
+```
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `--downloads` | 关 | 只下载，不解压、不编译、不写状态 |
+| `--download-jobs N` | 10 | 文件级并发 |
+| `--download-host-jobs N` | 2 | 同一站点并发 |
+| `--connections N` | 4 | 单文件分片数 |
+| `--timeout N` | 900 | 单个请求总超时（秒） |
+| `--proxy URL` | 无 | 覆盖环境里的代理 |
+| `--offline` | 关 | 只用缓存，不联网 |
+| `--ui auto\|plain\|progress` | auto | 下载、解压和编译的进度显示方式 |
+
+- 缓存目录是 `<root>/.phprt/downloads/`；解压目录是 `<root>/build/<组件>/<补丁>/`。
+- 下载失败、解压失败或编译失败都退出 1，并且不写状态。
+- `--downloads` 结束时只打印源码缓存位置，不修改 state。
+- GitHub 直连失败或 30 秒没下完会换镜像；`PHPRT_GITHUB_DIRECT_TIMEOUT` 可改秒数，
+  镜像开关和列表在 `recipes/phprt.toml`。
+- 下载细节见 [DOWNLOAD.md](DOWNLOAD.md)，解压细节见 [EXTRACT.md](EXTRACT.md)，
+  编译细节见 [BUILD.md](BUILD.md)。
+
+## 编译
+
+解压之后按构建顺序编译，日志在 `<root>/build/logs/`：
+
+```bash
+phprt install 8.5
+./myphp -v
+phprt install 8.5 --ext openssl --ext 'curl=sub:curl[ssl]' --ext swoole --ext xdebug
+```
+
+- 每个节点按签名跳过；签名变化先 `make distclean`。
+- 依赖库收进 `.phprt/php-<版本>/lib/phprt`，用 `$ORIGIN` rpath。
+- 成功后写项目根 `myphp`，`.phprt/current` 指向本次安装树。
+- 需要系统 gcc / g++ / make / binutils / pkg-config / patchelf / m4 / perl；
+  autoconf 和缺的纯 Perl 模块由 phprt 自己准备。
+
+## 构建方案
+
+```text
+无 state：
+    方案 = bundle.default_exts - --disable-default-ext + --ext
+有 state：
+    方案 = state.ext - --disable-default-ext + --ext
+```
+
+- `default_exts` 是 `recipes/bundles/php<系列>.toml` 里的空格分隔字符串。
+- 8.5 默认 `openssl` + `curl`（curl 带 ssl）；其他系列暂时没有默认扩展。
+- `--disable-default-ext openssl` 从本次方案扣除；首次 install 成功后落盘。
+- 和 `--ext` 同名同时出现 → 报错。
+- 已经不在方案里的默认扩展 → 幂等跳过。
+- `install` / `update` 默认把方案写进状态；`--downloads` 不写。
+- `plan` / `graph` 只做本次预览，不写状态；`plan` 支持 `--disable-default-ext`。
+- `ext add` 持久化添加；`ext remove` 持久化移除。
+- 全新项目上 `ext add/remove` 会先把当前系列的默认集 seed 进 state。
+
+```bash
+phprt install 8.5 --disable-default-ext openssl
+phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
+phprt plan --php 8.5 --disable-default-ext curl
+```
+
+有依赖的内置扩展必须一起启用/禁用，例如 `libxml` 和 `xml`；phprt 不做依赖展开，
+漏写时 PHP configure 会报错。
+
+## 版本线
+
+`--ext` 的 `version:` 选的是**版本线**，不是补丁号：
+
+```bash
+phprt install 8.5 --ext swoole=version:6.2
+phprt install 8.5 --ext swoole=link:shared,version:6.0,sub:curl[ssl]
+```
+
+- `6.2` 会从 `recipes/catalog.toml` 查到当前最新补丁，如 `6.2.5`。
+- 不能写 `6.2.5`；补丁由 catalog 决定。
+- 写 `--ext swoole` 不写 `version:` 时，使用 bundle 默认线，如 php8.5 的 `6.2`。
+- `--ext curl=version:...` 会报错：curl 是 builtin，没有独立版本线。
+
+依赖库的线用 `--dep`，它不会把扩展加入方案：
+
+```bash
+phprt install 8.5 --ext swoole --dep openssl=version:4.0
+phprt install 8.5 --ext swoole --dep openssl=4.0
+```
+
+`--ext openssl=version:4.0` 是语法糖：安装 ext:openssl，同时绑定 `openssl` 依赖线。
 
 ## ext list
 
 ```bash
-phprt ext list              # 所有 recipe 里的扩展
-phprt ext list --installed  # 只列已安装
-phprt ext list --pending    # 只列已加入方案、未安装
+phprt --php 8.5 ext list
+phprt --php 8.5 ext list --installed
+phprt --php 8.5 ext list --pending
 ```
 
 状态取值：
 
 | 状态 | 含义 |
 | --- | --- |
-| `installed` | 在方案里，且已安装（模拟） |
+| `installed` | 在方案里，且已经编译安装并通过启动校验 |
 | `pending` | 在方案里，但还没安装 |
 | `available` | recipe 存在，但不在方案里 |
 
 ```text
-name         origin    link            status
-curl         builtin   static,shared   installed
-swoole       pecl      shared          pending
-xdebug       pecl      shared          available
+name         origin    link            version    status
+curl         builtin   static,shared   8.5.12     installed
+swoole       pecl      shared          6.2.5      pending
+xdebug       pecl      shared          3.5.3      available
 ```
 
 `--installed` 和 `--pending` 互斥。
-
-没有状态文件时，PHP recipe 的 `exts` 是默认方案，这些扩展显示为 `pending`；
-不在默认方案里、也没有被 `ext add` 加进来的扩展才是 `available`。
 
 ## `--ext` 语法
 
@@ -64,51 +195,38 @@ spec := 名字
       | 名字=link:模式,sub:子配置
       | 名字=link:模式,sub:子配置[feature,feature]
       | 名字=sub:子配置
-      | 名字=sub:子配置[feature,feature]
+      | 名字=version:线
+      | 名字=link:模式,sub:子配置[feature,feature],version:线
 ```
 
 解析规则：
 
-1. `--ext` 可以写多次，每次一个 spec。
-2. 按逗号切分，但 `[...]` 里的逗号不切；`link:` / `sub:` 开头的片段并入前一个扩展。
+1. `--ext` 可以写多次，每次一个 spec；点名的扩展会加入本次构建方案。
+2. 按逗号切分，但 `[...]` 里的逗号不切；`link:` / `sub:` / `version:` 开头的片段并入前一个扩展。
 3. 名字后面的 `=` 和 `:` 等价：`curl=link:shared` 和 `swoole:link:shared`。
-4. 裸名字使用默认值：`origin=builtin` → static，`origin=pecl` → shared。
-5. 只支持 `link:` / `sub:` 选项；`名字=shared` 这种简写不接受。
-6. `sub:名字` 打开扩展自己的子配置，并应用它的 `configure`。
-7. `sub:名字[a,b]` 在打开开关的同时，把 `a`、`b` 转给该子配置绑定的 dep。
+4. 裸名字使用默认值：内置扩展 → static，非内置扩展 → shared（origin 由 php recipe 的 `builtin_exts` 推导）。
+5. `sub:名字` 打开扩展自己的子配置，并应用它的 `configure`。
+6. `sub:名字[a,b]` 在打开开关的同时，把 `a`、`b` 转给该子配置绑定的 dep；
    feature 之间也可以用 `+`。
-8. 不写方括号 → 只打开开关，不向依赖传 feature。
-9. 完全不写某个 `sub:` → 扩展不启用这个子配置，也不碰依赖。
-10. 同一个扩展只能出现一次；同一个子配置也只能出现一次。
+7. 不写方括号 → 只打开开关，不向依赖传 feature。
+8. 完全不写某个 `sub:` → 扩展不启用这个子配置，也不碰依赖。
+9. `version:线` 指定扩展自己的版本线；依赖库用 `--dep`。
+10. 同一个扩展只能出现一次；同一个子配置、同一个 version 也只能出现一次。
 
 示例：
 
 ```bash
-# swoole 打开 curl 支持，并把 ssl/nghttp2 转给 libcurl；
-# curl 编成 shared，只把 ssl 转给 libcurl
-phprt plan --ext swoole=sub:curl[ssl,nghttp2] --ext curl=link:shared,sub:curl[ssl]
+# swoole 走 bundle 的 6.2 线
+phprt install 8.5 --ext swoole
 
-# swoole 不写 sub:curl 时，不会加 --enable-swoole-curl
-phprt plan --ext swoole=link:shared
-```
+# swoole 固定 6.0 线，并把 ssl/nghttp2 转给 libcurl
+phprt install 8.2 --ext swoole=version:6.0,sub:curl[ssl,nghttp2]
 
-## 状态文件
-
-状态写在 `.phprt/php-<系列>/state.json`，例如 `.phprt/php-8.5/state.json`。
-`plan` / `graph` / `ext list` 只读；`install` / `update` / `ext add` / `ext remove` 写入。
-详见 [STATE.md](STATE.md)。
-
-```bash
-phprt install --ext curl=sub:curl[nghttp2]
-phprt ext add swoole
-phprt ext remove swoole
-phprt ext list --installed
-phprt update
+# 只装 PHP：禁用 8.5 的两个默认扩展
+phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
 ```
 
 ## 校验与退出
-
-`--ext` 在解析阶段就对照契约检查，按从左到右的顺序失败即停：
 
 | 情况 | 错误示例 |
 | --- | --- |
@@ -116,17 +234,20 @@ phprt update
 | 契约不支持的链接方式 | `ext:xdebug 契约不支持 static（支持：shared）` |
 | 扩展没有这个子配置 | `ext:curl 契约里没有子配置 nope` |
 | 依赖没有这个 feature | `dep:libcurl 契约没有 feature brotli` |
-| 重复指定扩展 | `--ext 里重复指定了扩展 curl` |
-| 未知选项 | `--ext curl 里未知选项 shared（只支持 link: / sub:）` |
+| 版本线不存在 | `「swoole」没有版本线 6.3（可用：4.8, 5.1, 6.0, 6.2）` |
+| 组件没有版本表 | `「curl」没有可选版本（catalog 里没有这个组件）` |
+| 版本线不支持当前 PHP | `swoole 4.8 不支持 PHP 8.5（可用：6.2）` |
+| 显式 pin 冲突 | `openssl 3.5 与当前 PHP/扩展选择冲突（可用：1.1.1）` |
+| 禁用非默认扩展 | `--disable-default-ext swoole 不是 PHP 8.5 的默认扩展（默认：openssl, curl）` |
+| 同时启用和禁用 | `--ext 和 --disable-default-ext 同时指定了 openssl` |
+| 禁用参数用错命令 | `--disable-default-ext 只支持 install / update / plan` |
 | 状态文件里有未知 feature | `state.json 里 dep:libcurl 没有 feature brotli` |
 | 移除不在方案里的扩展 | `ext:nope 不在构建方案里` |
+| 离线且缓存里没有源码包 | `离线模式，缓存里没有这个文件` |
+| 源码包下载失败 | `N 个源码包下载失败`（退出码 1，不写状态） |
+| 解压时源码包不在缓存 | `源码包不在缓存: ...`（提示先 `--downloads`） |
+| 不认识的压缩格式 | `不认识的压缩格式: x.tar.zst（支持 ...）` |
+| 压缩包越界路径 | `压缩包里有越界路径: ../x` |
+| 解压失败 | `解压 <文件> 失败: ...`（退出码 1，不写状态） |
 
-任何错误都退出码 1，不输出计划内容。`plan` / `install` 成功时退出码 0。
-
-## 目标位置
-
-`plan` 的目标是位置参数：
-
-```bash
-phprt plan php:8.5.12 --ext openssl=link:shared
-```
+除 Ctrl-C（130）外，任何错误都退出码 1。
