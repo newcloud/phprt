@@ -101,7 +101,7 @@ phprt install 8.5 --ext swoole --downloads --offline
 ```bash
 phprt install 8.5
 ./myphp -v
-phprt install 8.5                        # 默认就带 openssl + curl(ssl)
+phprt install 8.5                        # 默认就带 openssl + curl(ssl) + libxml
 phprt install 8.5 --ext swoole --ext xdebug
 ```
 
@@ -121,7 +121,7 @@ phprt install 8.5 --ext swoole --ext xdebug
 ```
 
 - `[default_exts]` 是 `recipes/bundles/php<系列>.toml` 里的表：`link` / `features` / `deps`。
-- 8.5 默认 `openssl` + `curl`（curl 带 ssl）；其他系列暂时没有默认扩展。
+- 8.5 默认 `openssl` + `curl`（curl 带 ssl）+ `libxml`；其他系列暂时没有默认扩展。
 - `--disable-default-ext openssl` 从本次方案扣除；首次 install 成功后落盘。
 - 和 `--ext` 同名同时出现 → 报错。
 - 已经不在方案里的默认扩展 → 幂等跳过。
@@ -132,12 +132,12 @@ phprt install 8.5 --ext swoole --ext xdebug
 
 ```bash
 phprt install 8.5 --disable-default-ext openssl
-phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
+phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml
 phprt plan --php 8.5 --disable-default-ext curl
 ```
 
-有依赖的内置扩展必须一起启用/禁用，例如 `libxml` 和 `xml`；phprt 不做依赖展开，
-漏写时 PHP configure 会报错。
+phprt 不展开扩展之间的依赖：需要 libxml 的扩展（如 DOM/SimpleXML）必须把 `libxml`
+一起写进方案，漏写时 PHP configure 会报错。
 
 ## audit
 
@@ -245,8 +245,8 @@ phprt install 8.5 --ext 'openssl=feature:[argon2]'
 # 已有 state 里默认开了 argon2，想关掉
 phprt install 8.5 --ext 'openssl=feature:[]'
 
-# 只装 PHP：禁用 8.5 的两个默认扩展
-phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
+# 只装 PHP：禁用 8.5 的三个默认扩展
+phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml
 ```
 
 ## 校验与退出
@@ -266,7 +266,7 @@ phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
 | 组件没有版本表 | `「curl」没有可选版本（catalog 里没有这个组件）` |
 | 版本线不支持当前 PHP | `swoole 4.8 不支持 PHP 8.5（可用：6.2）` |
 | 显式 pin 冲突 | `openssl 3.5 与当前 PHP/扩展选择冲突（可用：1.1.1）` |
-| 禁用非默认扩展 | `--disable-default-ext swoole 不是 PHP 8.5 的默认扩展（默认：openssl, curl）` |
+| 禁用非默认扩展 | `--disable-default-ext swoole 不是 PHP 8.5 的默认扩展（默认：curl, libxml, openssl）` |
 | 同时启用和禁用 | `--ext 和 --disable-default-ext 同时指定了 openssl` |
 | 禁用参数用错命令 | `--disable-default-ext 只支持 install / update / plan` |
 | 状态文件里有未知 feature | `state.json 里 dep:libcurl 没有 feature brotli` |

@@ -87,6 +87,7 @@ ext:openssl
 | swoole `--enable-cares` | 常用（异步 DNS） | feature + `needs=["c-ares"]`，默认关 |
 | swoole `--enable-brotli` | 有一定需求 | 缺依赖（未排期）：brotli |
 | swoole `--enable-zstd` | 较新、较少 | 缺依赖（未排期）：zstd |
+| libxml2 `--with-zlib` / `--with-icu` / `--with-readline` / `--with-python` | PHP 的 libxml 用不到 | 固定关闭，避免探测系统库 |
 | swoole iouring / liburing | 性能向，依赖内核 | 少用 |
 | swoole mysqlnd / sockets / pgsql / sqlite / odbc / oracle / firebird / ssh2 / ftp | 少用，且要先有对应 PHP 扩展 | 少用 |
 | swoole asan / debug / debug-log / trace-log / coverage / dev / coro-time / thread | 调试或开发用 | 调试用途 |

@@ -12,7 +12,7 @@ phprt v3 的最小原型：**Starlark 写 recipe，Rust 做版本解析、求解
 版本和默认策略分成三层：
 
 ```text
-bundle       php8.5 默认用 swoole 6.2、openssl 3.5；默认启用 openssl + curl
+bundle       php8.5 默认用 swoole 6.2、openssl 3.5；默认启用 openssl + curl + libxml
 catalog      6.2 → 6.2.5 + 下载地址；3.5 → 3.5.9 + 下载地址
 recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
 ```
@@ -24,9 +24,9 @@ recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
 ## 快速开始
 
 ```bash
-cargo run -- install 8.5                 # 默认 openssl + curl(ssl) + PHP 8.5.12
+cargo run -- install 8.5                 # 默认 openssl + curl(ssl) + libxml + PHP 8.5.12
 ./myphp -v                               # 用项目自己的 PHP
-cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl  # 只装 PHP
+cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
 cargo run -- install 8.5 --downloads     # 只下载源码包
 cargo run -- install 8.5 --ext swoole --downloads   # 只下载扩展和依赖
 cargo run -- install 8.5 --ext swoole --ext xdebug  # 再加两个 PECL 扩展
@@ -149,6 +149,7 @@ PHP：7.4 / 8.0 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
 | swoole | 4.8 / 5.1 / 6.0 / 6.2 | 7.4→4.8，8.0→5.1，8.2/8.3→6.0，8.4+→6.2 |
 | xdebug | 3.1 / 3.5 | 7.4→3.1，8.x→3.5 |
 | libcurl | 8.23 | 8.23.0 |
+| libxml2 | 2.15 | 2.15.4 |
 | nghttp2 | 1.64 | 1.64.0 |
 
 ## 状态文件

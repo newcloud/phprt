@@ -470,8 +470,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo fmt --all --check
 
-cargo run -- install 8.5                                  # 默认 openssl + curl(ssl)
-cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl  # 只装 PHP
+cargo run -- install 8.5                                  # 默认 openssl + curl(ssl) + libxml
+cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
 cargo run -- install 8.5 --ext swoole --ext xdebug        # 加上两个 PECL 扩展
 cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
 cargo run -- install 8.5 --ext openssl --dep openssl=4.0  # openssl 4.0.0

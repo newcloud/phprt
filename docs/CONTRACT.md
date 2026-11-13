@@ -128,8 +128,8 @@ curl = { deps = { libcurl = ["ssl"] } }
   - `features = ["名字", ...]`：扩展自己的编译开关。
   - `deps = { 依赖名 = ["feature", ...] }`：转给依赖的 feature。
 - 不允许写 `version:`；`[default_exts]` 里的名字必须是当前 PHP 系列 `builtin_exts` 的子集，并且有 ext recipe。
-- 有依赖的内置扩展必须和依赖一起写（如 `deps = { libxml = [] }` 的情形要显式列出）；
-  不做依赖展开或校验，漏写时 PHP configure 会报错。
+- 有依赖的内置扩展必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里
+  （如 `curl = { deps = { libcurl = ["ssl"] } }`）；不做依赖展开或校验，漏写时 PHP configure 会报错。
 - 默认 feature 在当前 PHP / 依赖线下不可用时，提示并丢弃，不中断命令。
 
 ## 4. dep

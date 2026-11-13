@@ -74,8 +74,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 
 cargo run -- --php 8.5 audit                      # 上游开关必须全部处置
-cargo run -- install 8.5                          # 默认 openssl + curl(ssl) + PHP
-cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl  # 只装 PHP
+cargo run -- install 8.5                          # 默认 openssl + curl(ssl) + libxml + PHP
+cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
 cargo run -- install 8.5 --ext swoole --ext xdebug
 cargo run -- install 8.5 --ext swoole             # bundle: swoole 6.2
 cargo run -- install 7.4 --ext swoole             # swoole 4.8 + openssl 1.1.1

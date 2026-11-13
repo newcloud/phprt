@@ -165,6 +165,7 @@ def target(ctx):
 [default_exts]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
+libxml = {}
 ```
 
 规则：
@@ -172,12 +173,12 @@ curl = { deps = { libcurl = ["ssl"] } }
 - key 是扩展名；每个扩展可写 `link` / `features` / `deps`，都不允许 `version:`。
 - 表必须放文件最后，否则后面的顶层键会被 TOML 归到这张表里。
 - 只有 `builtin_exts` 里的扩展、并且已有 ext recipe，才能进 `default_exts`。
-- 有依赖的内置扩展必须和依赖一起写，features 要显式列在 `deps` 里，例如：
+- 有依赖的内置扩展必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里，例如：
 
   ```toml
   [default_exts]
+  curl = { deps = { libcurl = ["ssl"] } }
   libxml = {}
-  xml = { deps = { libxml = [] } }
   ```
 
 - 不做依赖展开、不做依赖校验；漏写时 PHP configure 会报错。
@@ -193,6 +194,7 @@ curl = { deps = { libcurl = ["ssl"] } }
 [default_exts]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
+libxml = {}
 ```
 
 `swoole` / `xdebug` 不在默认集里，需要 `--ext` 显式选择。

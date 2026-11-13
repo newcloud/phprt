@@ -103,12 +103,12 @@ sudo dnf install gcc gcc-c++ make binutils pkgconf-pkg-config patchelf tar m4 pe
 ```bash
 rm -rf .phprt build
 
-# 8.5 默认 openssl + curl(ssl)
+# 8.5 默认 openssl + curl(ssl) + libxml
 cargo run -- install 8.5
 ./myphp -v
 
-# 只装 PHP：禁用两个默认扩展
-cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl
+# 只装 PHP：禁用三个默认扩展
+cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml
 
 # 再显式加 swoole / xdebug
 cargo run -- install 8.5 --ext swoole --ext xdebug
