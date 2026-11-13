@@ -61,15 +61,18 @@ pub struct Feature {
     /// feature 未启用时应用的参数（关闭上游自动探测）。
     #[serde(default)]
     pub disable: Vec<String>,
+    /// ext feature 的可用条件；dep feature 不允许写。
+    #[serde(default)]
+    pub requires: Requires,
 }
 
-/// 扩展自己的一个子配置。开关是扩展的，方括号里的 feature 转给 dep。
+/// ext feature 的可用条件：允许的 PHP 系列、允许的依赖线。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SubDef {
+pub struct Requires {
     #[serde(default)]
-    pub dep: String,
+    pub php: Vec<String>,
     #[serde(default)]
-    pub configure: Vec<String>,
+    pub dep: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,8 +104,10 @@ pub struct Target {
     pub origin: String,
     #[serde(default)]
     pub link: Vec<String>,
+    /// 依赖集成：依赖名 -> 选中该依赖时额外加给扩展的 configure 参数。
+    /// 出现即表示允许 dep:NAME；key 必须是 needs 里的依赖。
     #[serde(default)]
-    pub subs: BTreeMap<String, SubDef>,
+    pub dep_configure: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub shared_from: String,
     #[serde(default)]
@@ -173,6 +178,14 @@ impl Target {
                         self.name
                     );
                 }
+                if !self.dep_configure.is_empty() {
+                    bail!("{at}: dep:{} 不允许 dep_configure", self.name);
+                }
+                for (name, f) in &self.features {
+                    if !f.requires.php.is_empty() || !f.requires.dep.is_empty() {
+                        bail!("{at}: dep:{} 的 feature {name} 不允许 requires", self.name);
+                    }
+                }
             }
             Kind::Ext => {
                 if self.modules.is_empty() {
@@ -239,16 +252,69 @@ impl Target {
                         self.name
                     );
                 }
-                for (sub, def) in &self.subs {
-                    if sub.is_empty() {
-                        bail!("{at}: ext:{} 有空名字的子配置", self.name);
+                for (dep, flags) in &self.dep_configure {
+                    if dep.is_empty() {
+                        bail!("{at}: ext:{} 的 dep_configure 里有空名字", self.name);
                     }
-                    if !def.dep.is_empty() && !self.needs.iter().any(|n| n == &def.dep) {
+                    if !self.needs.iter().any(|n| n == dep) {
                         bail!(
-                            "{at}: ext:{} 的子配置 {sub} 指向 dep:{}，但它不在 needs 里",
-                            self.name,
-                            def.dep
+                            "{at}: ext:{} 的 dep_configure 里有 dep:{dep}，但它不在 needs 里；\
+                             声明必需依赖用 needs",
+                            self.name
                         );
+                    }
+                    for flag in flags {
+                        if flag.is_empty() {
+                            bail!("{at}: ext:{} 的 dep_configure[{dep}] 里有空参数", self.name);
+                        }
+                    }
+                }
+                for (name, f) in &self.features {
+                    if name.is_empty() {
+                        bail!("{at}: ext:{} 的 features 里有空名字", self.name);
+                    }
+                    if !f.needs.is_empty() || !f.disable.is_empty() {
+                        bail!(
+                            "{at}: ext:{} 的 feature {name} 只允许 configure/requires；\
+                             needs/disable 只用于 dep 的 feature",
+                            self.name
+                        );
+                    }
+                    for flag in &f.configure {
+                        if flag.is_empty() {
+                            bail!("{at}: ext:{} 的 feature {name} 里有空参数", self.name);
+                        }
+                    }
+                    for php in &f.requires.php {
+                        if php.is_empty() {
+                            bail!(
+                                "{at}: ext:{} 的 feature {name} 的 requires.php 里有空名字",
+                                self.name
+                            );
+                        }
+                    }
+                    for (dep, lines) in &f.requires.dep {
+                        if !self.needs.iter().any(|n| n == dep) {
+                            bail!(
+                                "{at}: ext:{} 的 feature {name} 的 requires.dep 里有 {dep}，\
+                                 但它不在 needs 里",
+                                self.name
+                            );
+                        }
+                        if lines.is_empty() {
+                            bail!(
+                                "{at}: ext:{} 的 feature {name} 的 requires.dep[{dep}] 是空的",
+                                self.name
+                            );
+                        }
+                        for line in lines {
+                            if line.is_empty() {
+                                bail!(
+                                    "{at}: ext:{} 的 feature {name} 的 requires.dep[{dep}] 里有空线",
+                                    self.name
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -283,6 +349,9 @@ impl Target {
                 }
                 if self.series.is_empty() {
                     bail!("{at}: php:{} 缺少 series", self.name);
+                }
+                if !self.dep_configure.is_empty() || !self.features.is_empty() {
+                    bail!("{at}: php:{} 不允许 dep_configure/features", self.name);
                 }
                 if self.version.is_empty() {
                     bail!("{at}: php:{} 缺少 version", self.name);
@@ -319,8 +388,11 @@ pub struct RecipeMeta {
 #[derive(Debug, Clone, Default)]
 pub struct ExtSpec {
     pub link: Option<Mode>,
-    /// 子配置名 -> 转给 dep 的 feature 列表
-    pub subs: BTreeMap<String, Vec<String>>,
+    /// 依赖名 -> 转给该依赖的 feature 列表
+    pub deps: BTreeMap<String, Vec<String>>,
+    /// `feature:[...]` 选中的扩展自己的 feature；None 表示没写，
+    /// Some(空) 表示显式关闭（用于关掉 bundle 默认值）。
+    pub features: Option<BTreeSet<String>>,
     /// `version:6.2` 指定的版本线；只在这里记录，绑定在加载 recipe 前完成。
     pub version: Option<String>,
 }
@@ -355,7 +427,8 @@ pub fn preparse(specs: &[String]) -> Result<Vec<RawExt>> {
                 }
                 continue;
             }
-            if part.starts_with("link:") || part.starts_with("sub:") {
+            if part.starts_with("link:") || part.starts_with("dep:") || part.starts_with("feature:")
+            {
                 current.ok_or_else(|| anyhow!("--ext {spec} 的第一个片段不能是 {part}"))?;
                 continue;
             }
@@ -411,7 +484,8 @@ impl Selection {
                     bail!("--ext {spec} 里有空的片段");
                 }
                 if part.starts_with("link:")
-                    || part.starts_with("sub:")
+                    || part.starts_with("dep:")
+                    || part.starts_with("feature:")
                     || part.starts_with("version:")
                 {
                     let last = chunks
@@ -446,10 +520,16 @@ impl Selection {
                         let item = item.trim();
                         if let Some(m) = item.strip_prefix("link:") {
                             spec.link = Some(Mode::parse(m)?);
-                        } else if let Some(rest) = item.strip_prefix("sub:") {
-                            let (sub, features) = parse_sub(reg, ext, rest)?;
-                            if spec.subs.insert(sub.clone(), features).is_some() {
-                                bail!("--ext {name} 里重复指定了子配置 {sub}");
+                        } else if let Some(rest) = item.strip_prefix("dep:") {
+                            let (dep, features) = parse_dep(reg, ext, rest)?;
+                            if spec.deps.insert(dep.clone(), features).is_some() {
+                                bail!("--ext {name} 里重复指定了 dep:{dep}");
+                            }
+                        } else if let Some(rest) = item.strip_prefix("feature:") {
+                            let feats = parse_feature(reg, ext, rest)?;
+                            let set = spec.features.get_or_insert_with(BTreeSet::new);
+                            for f in feats {
+                                set.insert(f);
                             }
                         } else if let Some(version) = item.strip_prefix("version:") {
                             if version.is_empty() {
@@ -460,7 +540,8 @@ impl Selection {
                             }
                         } else {
                             bail!(
-                                "--ext {name} 里未知选项 {item}（只支持 link: / sub: / version:）"
+                                "--ext {name} 里未知选项 {item}\
+                                 （只支持 link: / dep: / feature: / version:）"
                             );
                         }
                     }
@@ -488,32 +569,33 @@ impl Selection {
         }
     }
 
-    pub fn subs_of<'a>(
+    pub fn deps_of<'a>(
         &'a self,
         ext: &Target,
     ) -> impl Iterator<Item = (&'a String, &'a Vec<String>)> + 'a {
         self.per_ext
             .get(&ext.name)
-            .map(|s| s.subs.iter())
+            .map(|s| s.deps.iter())
             .into_iter()
             .flatten()
+    }
+
+    /// 选中的扩展 feature；None 表示没写，Some(空) 表示显式关闭。
+    pub fn features_of(&self, ext: &Target) -> Option<&BTreeSet<String>> {
+        self.per_ext
+            .get(&ext.name)
+            .and_then(|s| s.features.as_ref())
     }
 
     /// 本次选择给各 dep 带来的 feature 并集。
     pub fn features(&self, reg: &Registry) -> BTreeMap<String, Vec<String>> {
         let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for ext in reg.of_kind(Kind::Ext) {
-            for (sub, feats) in self.subs_of(ext) {
-                let Some(def) = ext.subs.get(sub) else {
-                    continue;
-                };
-                if def.dep.is_empty() {
+            for (dep, feats) in self.deps_of(ext) {
+                if !ext.dep_configure.contains_key(dep) || feats.is_empty() {
                     continue;
                 }
-                if feats.is_empty() {
-                    continue;
-                }
-                let entry = out.entry(def.dep.clone()).or_default();
+                let entry = out.entry(dep.clone()).or_default();
                 for f in feats {
                     if !entry.contains(f) {
                         entry.push(f.clone());
@@ -528,43 +610,43 @@ impl Selection {
     }
 }
 
-fn parse_sub(reg: &Registry, ext: &Target, rest: &str) -> Result<(String, Vec<String>)> {
+/// `dep:NAME` 或 `dep:NAME[f1,f2]`；名字是依赖名，方括号里的 feature 转给该依赖。
+fn parse_dep(reg: &Registry, ext: &Target, rest: &str) -> Result<(String, Vec<String>)> {
     let (name, list) = match rest.find('[') {
         Some(i) => {
             if !rest.ends_with(']') {
-                bail!("ext:{} 的子配置写法不完整：sub:{rest}", ext.name);
+                bail!("ext:{} 的 dep: 写法不完整：dep:{rest}", ext.name);
             }
             (&rest[..i], Some(&rest[i + 1..rest.len() - 1]))
         }
         None => (rest, None),
     };
     if name.is_empty() {
-        bail!("ext:{} 的 sub: 后面缺少名字", ext.name);
+        bail!("ext:{} 的 dep: 后面缺少依赖名", ext.name);
     }
-    let def = ext
-        .subs
-        .get(name)
-        .ok_or_else(|| anyhow!("ext:{} 契约里没有子配置 {name}", ext.name))?;
+    if !ext.dep_configure.contains_key(name) {
+        let available: Vec<&str> = ext.dep_configure.keys().map(String::as_str).collect();
+        let hint = if available.is_empty() {
+            "无".to_owned()
+        } else {
+            available.join(", ")
+        };
+        bail!(
+            "ext:{} 没有依赖集成 {name}（可写：{hint}）；\
+             需要在 recipe 的 dep_configure 里声明",
+            ext.name
+        );
+    }
+    let dep = reg
+        .get(&format!("dep:{name}"))
+        .ok_or_else(|| anyhow!("ext:{} 的 dep:{name} 指向不存在的依赖", ext.name))?;
 
     let mut features = Vec::new();
     if let Some(list) = list {
-        if def.dep.is_empty() {
-            bail!(
-                "ext:{} 的子配置 {name} 没有绑定依赖，不能带方括号",
-                ext.name
-            );
-        }
-        let dep = reg.get(&format!("dep:{}", def.dep)).ok_or_else(|| {
-            anyhow!(
-                "ext:{} 的子配置 {name} 指向不存在的 dep:{}",
-                ext.name,
-                def.dep
-            )
-        })?;
         for f in list.split([',', '+']) {
             let f = f.trim();
             if f.is_empty() {
-                bail!("ext:{} 的子配置 {name} 的 feature 列表里有空项", ext.name);
+                bail!("ext:{} 的 dep:{name} 的 feature 列表里有空项", ext.name);
             }
             if !dep.features.contains_key(f) {
                 bail!("dep:{} 契约没有 feature {f}", dep.name);
@@ -575,6 +657,86 @@ fn parse_sub(reg: &Registry, ext: &Target, rest: &str) -> Result<(String, Vec<St
         }
     }
     Ok((name.to_owned(), features))
+}
+
+/// `feature:[f1,f2]`；必须带方括号，空列表表示显式关闭全部 feature。
+fn parse_feature(reg: &Registry, ext: &Target, rest: &str) -> Result<Vec<String>> {
+    let list = match rest.strip_prefix('[') {
+        Some(inner) => inner
+            .strip_suffix(']')
+            .ok_or_else(|| anyhow!("ext:{} 的 feature: 写法不完整：feature:{rest}", ext.name))?,
+        None => bail!(
+            "ext:{} 的 feature: 后面必须写方括号，例如 feature:[argon2]",
+            ext.name
+        ),
+    };
+
+    let mut features = Vec::new();
+    if list.trim().is_empty() {
+        return Ok(features);
+    }
+    for f in list.split(',') {
+        let f = f.trim();
+        if f.is_empty() {
+            bail!("ext:{} 的 feature 列表里有空项", ext.name);
+        }
+        if !ext.features.contains_key(f) {
+            let available: Vec<&str> = ext.features.keys().map(String::as_str).collect();
+            let hint = if available.is_empty() {
+                "无".to_owned()
+            } else {
+                available.join(", ")
+            };
+            bail!("ext:{} 没有 feature {f}（可用：{hint}）", ext.name);
+        }
+        feature_available(reg, ext, f)?;
+        if !features.iter().any(|x| x == f) {
+            features.push(f.to_owned());
+        }
+    }
+    Ok(features)
+}
+
+/// 检查 ext 的一个 feature 在当前 PHP 系列和依赖线下是否可用。
+pub(crate) fn feature_available(reg: &Registry, ext: &Target, name: &str) -> Result<()> {
+    let Some(def) = ext.features.get(name) else {
+        return Ok(());
+    };
+    let req = &def.requires;
+    if req.php.is_empty() && req.dep.is_empty() {
+        return Ok(());
+    }
+
+    let php = reg.php()?;
+    if !req.php.is_empty() && !req.php.iter().any(|s| s == &php.series) {
+        bail!(
+            "ext:{} 的 feature {name} 需要 PHP {}，当前 PHP {}",
+            ext.name,
+            req.php.join(", "),
+            php.series
+        );
+    }
+    for (dep_name, lines) in &req.dep {
+        let dep = reg.get(&format!("dep:{dep_name}")).ok_or_else(|| {
+            anyhow!(
+                "ext:{} 的 feature {name} 需要不存在的 dep:{dep_name}",
+                ext.name
+            )
+        })?;
+        if !lines.iter().any(|l| l == &dep.line) {
+            let current = if dep.line.is_empty() {
+                "未绑定".to_owned()
+            } else {
+                dep.line.clone()
+            };
+            bail!(
+                "ext:{} 的 feature {name} 需要 dep:{dep_name} {}，当前 {current}",
+                ext.name,
+                lines.join(", ")
+            );
+        }
+    }
+    Ok(())
 }
 
 fn split_top(s: &str, sep: char) -> Result<Vec<&str>> {
@@ -697,13 +859,10 @@ impl Registry {
                     bail!("{} 的 exts 指向不存在的扩展 {id}", t.id());
                 }
             }
-            for (sub, def) in &t.subs {
-                if def.dep.is_empty() {
-                    continue;
-                }
-                let id = format!("dep:{}", def.dep);
+            for dep in t.dep_configure.keys() {
+                let id = format!("dep:{dep}");
                 if !self.targets.contains_key(&id) {
-                    bail!("{} 的子配置 {sub} 指向不存在的依赖 {id}", t.id());
+                    bail!("{} 的 dep_configure 指向不存在的依赖 {id}", t.id());
                 }
             }
         }
@@ -1298,14 +1457,59 @@ mod tests {
     }
 
     #[test]
-    fn default_ext_specs_can_be_parsed_after_loading_targets() {
+    fn default_selection_comes_from_the_bundle_table() {
         let dir = dir();
         let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
         let (reg, _) = load("8.5", &[], &[]).unwrap();
-        let sel = Selection::parse(&reg, &bundle.default_exts).unwrap();
+        let sel = crate::bundle::selection(&reg, &bundle, "8.5").unwrap();
         assert_eq!(sel.mode_of(reg.ext("curl").unwrap()).unwrap(), Mode::Static);
-        assert_eq!(sel.per_ext["curl"].subs["curl"], vec!["ssl".to_owned()]);
-        assert!(sel.per_ext.contains_key("openssl"));
+        assert_eq!(sel.per_ext["curl"].deps["libcurl"], vec!["ssl".to_owned()]);
+        assert_eq!(
+            sel.features_of(reg.ext("openssl").unwrap()),
+            Some(&BTreeSet::from(["argon2".to_owned()]))
+        );
+    }
+
+    #[test]
+    fn argon2_requires_the_right_php_and_openssl_line() {
+        let (reg, _) = load("8.5", &["openssl"], &[]).unwrap();
+        assert!(reg.ext("openssl").unwrap().features.contains_key("argon2"));
+        assert!(Selection::parse(&reg, &["openssl=feature:[argon2]".into()]).is_ok());
+
+        // openssl 线不满足：feature 仍然声明，但选择时报错。
+        let (reg, _) = load("8.5", &["openssl"], &[("openssl", "3.0")]).unwrap();
+        let err = Selection::parse(&reg, &["openssl=feature:[argon2]".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("需要 dep:openssl 3.5, 4.0，当前 3.0"), "{err}");
+
+        // PHP 系列不满足。
+        let (reg, _) = load("8.4", &["openssl"], &[]).unwrap();
+        let err = Selection::parse(&reg, &["openssl=feature:[argon2]".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("需要 PHP 8.5, 8.6，当前 PHP 8.4"), "{err}");
+    }
+
+    #[test]
+    fn feature_selection_is_validated_and_can_be_cleared() {
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        let sel = Selection::parse(&reg, &["openssl=feature:[argon2]".into()]).unwrap();
+        assert_eq!(
+            sel.features_of(reg.ext("openssl").unwrap()),
+            Some(&BTreeSet::from(["argon2".to_owned()]))
+        );
+
+        let sel = Selection::parse(&reg, &["openssl=feature:[]".into()]).unwrap();
+        assert_eq!(
+            sel.features_of(reg.ext("openssl").unwrap()),
+            Some(&BTreeSet::from([]))
+        );
+
+        let err = Selection::parse(&reg, &["openssl=feature:argon2".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("必须写方括号"), "{err}");
     }
 
     #[test]
@@ -1372,7 +1576,8 @@ mod tests {
 
     #[test]
     fn preparse_reads_version_option() {
-        let raw = preparse(&["swoole=link:shared,sub:curl[ssl],version:6.2".to_owned()]).unwrap();
+        let raw =
+            preparse(&["swoole=link:shared,dep:libcurl[ssl],version:6.2".to_owned()]).unwrap();
         assert_eq!(raw.len(), 1);
         assert_eq!(raw[0].name, "swoole");
         assert_eq!(raw[0].version.as_deref(), Some("6.2"));

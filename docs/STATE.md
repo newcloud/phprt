@@ -28,7 +28,16 @@
       "version": "6.2.5",
       "link": "shared",
       "installed": true,
-      "sub": { "curl": ["ssl"] }
+      "deps": { "libcurl": ["ssl"] },
+      "features": []
+    },
+    "openssl": {
+      "line": "",
+      "version": "8.5.12",
+      "link": "static",
+      "installed": true,
+      "deps": {},
+      "features": ["argon2"]
     }
   },
   "deps": {
@@ -50,7 +59,8 @@
 | `ext.<名字>.version` | 实际补丁，如 6.2.5；只记录，不锁定 |
 | `ext.<名字>.link` | 当前链接方式 |
 | `ext.<名字>.installed` | 是否已经编译安装并通过启动校验 |
-| `ext.<名字>.sub` | 选中的子配置及其转发 feature |
+| `ext.<名字>.deps` | 依赖名 → 转给它的 feature |
+| `ext.<名字>.features` | 扩展自己的 feature |
 | `deps.<名字>.line` | 依赖实际使用的版本线 |
 | `deps.<名字>.version` | 依赖实际补丁 |
 | `deps.<名字>.features` | 当前构建使用的 feature 并集 |
@@ -107,9 +117,14 @@ allowed = catalog 里该组件的线
 ## 5. feature 规则
 
 - `ext add` / `install` / `update`：`deps.features` 取并集，只增不减。
-- `ext remove`：按剩余扩展的 sub 重新计算，允许收窄。
-- 状态里记录了每个扩展的 `sub`，所以 `ext add` 不会冲掉其他扩展之前的子配置。
+- 扩展自己的 `features` 以显式选择为准：CLI 写了 `feature:[...]`（包括 `feature:[]`）
+  就覆盖 state 里的值，没写就沿用 state。
+- `ext remove`：按剩余扩展的 dep 重新计算，允许收窄。
+- 状态里记录了每个扩展的 `deps` / `features`，所以 `ext add` 不会冲掉其他扩展之前的选择。
 - 状态里有、recipe 里没有的扩展或 feature → 报错，要求手工处理。
+- feature 的 `requires` 不满足（PHP 系列或依赖线变了）→ 报错并提示改 state 或换依赖线。
+- 旧版本 state 里的 `sub` 字段会被当作 `deps` 读取，但里面的 key 需要手工迁移
+  （`sub: curl` 已改名为 `dep: libcurl`）。
 
 ## 6. 写入边界
 

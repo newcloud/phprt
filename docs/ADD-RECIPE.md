@@ -131,39 +131,70 @@ def target(ctx):
 - `configure` 同时用于 PHP static 和扩展自己的 shared 构建。
 - 正向参数写在 ext；负向参数来自 php 版本的 `builtin_disable`。
 - 内置扩展支持 shared 时必须有 `shared_from`；非内置必须有 catalog 的 url/version。
+- 依赖的集成参数写 `dep_configure`，key 是 `needs` 里的依赖名：
+
+  ```python
+  dep_configure = {"libcurl": ["--enable-swoole-curl"]},
+  ```
+
+- 扩展自己的开关写 `features`；有条件的能力用 `requires` 声明，不要写成
+  `target(ctx)` 里的 `if`：
+
+  ```python
+  features = {
+      "argon2": feature(
+          configure = ["--with-openssl-argon2"],
+          requires = {
+              "php": ["8.5", "8.6"],
+              "dep": {"openssl": ["3.5", "4.0"]},
+          },
+      ),
+  }
+  ```
+
+  显式选择不满足时报错并说明缺哪条；bundle 默认不满足时提示并丢弃。
 
 ### 6.3 默认启用
 
-默认集合写在 `recipes/bundles/php<系列>.toml` 的 `default_exts`，是**空格分隔的字符串**：
+默认集合写在 `recipes/bundles/php<系列>.toml` 的 `[default_exts]` 表：
 
 ```toml
-default_exts = "openssl curl=sub:curl[ssl]"
+[default_exts]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }
 ```
 
 规则：
 
-- 使用 `--ext` 的 spec 语法（`link:` / `sub:`），不允许 `version:`。
+- key 是扩展名；每个扩展可写 `link` / `features` / `deps`，都不允许 `version:`。
+- 表必须放文件最后，否则后面的顶层键会被 TOML 归到这张表里。
 - 只有 `builtin_exts` 里的扩展、并且已有 ext recipe，才能进 `default_exts`。
-- 有依赖的内置扩展必须和依赖写在同一个字符串里，例如：
+- 有依赖的内置扩展必须和依赖一起写，features 要显式列在 `deps` 里，例如：
 
   ```toml
-  default_exts = "libxml xml"
-  default_exts = "libxml dom simplexml xml xmlreader xmlwriter"
+  [default_exts]
+  libxml = {}
+  xml = { deps = { libxml = [] } }
   ```
 
 - 不做依赖展开、不做依赖校验；漏写时 PHP configure 会报错。
-- 未适配的 PHP 系列不写 `default_exts`，等价于空字符串。
-- 新增 PHP 系列时先写 `builtin_exts` / `builtin_disable`，再写该系列的 `default_exts`。
+- 未适配的 PHP 系列不写 `[default_exts]`，等价于空表。
+- 条件 feature 在当前 PHP / 依赖线下不可用时提示并丢弃。
+- 新增 PHP 系列时先写 `builtin_exts` / `builtin_disable`，再写该系列的 `[default_exts]`。
 
 ### 6.4 当前默认
 
 只有 8.5 写了默认集：
 
 ```toml
-default_exts = "openssl curl=sub:curl[ssl]"
+[default_exts]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }
 ```
 
 `swoole` / `xdebug` 不在默认集里，需要 `--ext` 显式选择。
+默认集只在第一次写 state 时落盘；已有项目要开 argon2 就显式传
+`--ext 'openssl=feature:[argon2]'`。
 
 ## 7. 验收
 

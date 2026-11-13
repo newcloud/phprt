@@ -37,6 +37,7 @@
 
 - 扩展对必需依赖是事实，不是可选项：curl 一定依赖 libcurl，openssl 扩展一定依赖
   dep openssl。直接按契约写进 recipe，不要拿这类问题让用户确认。
+- 同一能力有多种等价写法时，直接选一种定下来、写进契约和文档，不要把选项抛回给用户。
 - 只对真正有歧义、会影响外部行为的决策提问；能从领域常识或现有契约直接推出的，
   自己定，并在实现里体现。
 
@@ -51,8 +52,11 @@
 - `target(ctx)` 只写构建参数，不判断兼容性。
 - 是否内置、内置扩展的关闭参数写在 `php<系列>.star` 的 `builtin_exts` / `builtin_disable`；
   ext recipe 不写 `origin`、`static_enable`、`static_disable`，用 `ctx["is_builtin"]`。
-- 默认启用集合写在 bundle 的 `default_exts`，是空格分隔的扩展 spec，不允许 `version:`；
-  有依赖的内置扩展必须一起写（如 `"libxml xml"`），不做依赖展开。
+- 默认启用集合写在 bundle 的 `[default_exts]` 表：`link` / `features` / `deps`，
+  不允许 `version:`；有依赖的内置扩展必须一起写，不做依赖展开。
+- 扩展自己的条件能力用 `requires` 声明，不写成 `target(ctx)` 里的 if：
+  `feature(configure=[...], requires={"php": ["8.5","8.6"], "dep": {"openssl": ["3.5","4.0"]}})`。
+  显式选择不满足时报错并说明是哪一条不满足；bundle 默认不满足时提示并丢弃。
 - 新增/删除版本线时同步改 catalog、扩展 recipe 的 `LINES`/`PHP_LINES`，必要时改 bundle。
 - 每个 PHP 系列必须有对应的 `bundles/php<系列>.toml` 和 `php<系列>.star`。
 

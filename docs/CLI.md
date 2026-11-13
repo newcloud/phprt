@@ -100,7 +100,8 @@ phprt install 8.5 --ext swoole --downloads --offline
 ```bash
 phprt install 8.5
 ./myphp -v
-phprt install 8.5 --ext openssl --ext 'curl=sub:curl[ssl]' --ext swoole --ext xdebug
+phprt install 8.5                        # 默认就带 openssl + curl(ssl)
+phprt install 8.5 --ext swoole --ext xdebug
 ```
 
 - 每个节点按签名跳过；签名变化先 `make distclean`。
@@ -113,12 +114,12 @@ phprt install 8.5 --ext openssl --ext 'curl=sub:curl[ssl]' --ext swoole --ext xd
 
 ```text
 无 state：
-    方案 = bundle.default_exts - --disable-default-ext + --ext
+    方案 = bundle 的 [default_exts] - --disable-default-ext + --ext
 有 state：
     方案 = state.ext - --disable-default-ext + --ext
 ```
 
-- `default_exts` 是 `recipes/bundles/php<系列>.toml` 里的空格分隔字符串。
+- `[default_exts]` 是 `recipes/bundles/php<系列>.toml` 里的表：`link` / `features` / `deps`。
 - 8.5 默认 `openssl` + `curl`（curl 带 ssl）；其他系列暂时没有默认扩展。
 - `--disable-default-ext openssl` 从本次方案扣除；首次 install 成功后落盘。
 - 和 `--ext` 同名同时出现 → 报错。
@@ -143,7 +144,7 @@ phprt plan --php 8.5 --disable-default-ext curl
 
 ```bash
 phprt install 8.5 --ext swoole=version:6.2
-phprt install 8.5 --ext swoole=link:shared,version:6.0,sub:curl[ssl]
+phprt install 8.5 --ext swoole=link:shared,version:6.0,dep:libcurl[ssl]
 ```
 
 - `6.2` 会从 `recipes/catalog.toml` 查到当前最新补丁，如 `6.2.5`。
@@ -187,31 +188,30 @@ xdebug       pecl      shared          3.5.3      available
 
 ## `--ext` 语法
 
-```
+```text
 --ext <spec>[,<spec>...]        # 可以重复，每次一个 spec
 spec := 名字
       | 名字=link:static|shared
-      | 名字:link:static|shared
-      | 名字=link:模式,sub:子配置
-      | 名字=link:模式,sub:子配置[feature,feature]
-      | 名字=sub:子配置
+      | 名字=dep:依赖
+      | 名字=dep:依赖[feature,...]
+      | 名字=feature:[名字,...]
       | 名字=version:线
-      | 名字=link:模式,sub:子配置[feature,feature],version:线
+      | 上述选项的任意组合，用逗号分隔
 ```
 
 解析规则：
 
 1. `--ext` 可以写多次，每次一个 spec；点名的扩展会加入本次构建方案。
-2. 按逗号切分，但 `[...]` 里的逗号不切；`link:` / `sub:` / `version:` 开头的片段并入前一个扩展。
+2. 按逗号切分，但 `[...]` 里的逗号不切；`link:` / `dep:` / `feature:` / `version:` 开头的片段并入前一个扩展。
 3. 名字后面的 `=` 和 `:` 等价：`curl=link:shared` 和 `swoole:link:shared`。
 4. 裸名字使用默认值：内置扩展 → static，非内置扩展 → shared（origin 由 php recipe 的 `builtin_exts` 推导）。
-5. `sub:名字` 打开扩展自己的子配置，并应用它的 `configure`。
-6. `sub:名字[a,b]` 在打开开关的同时，把 `a`、`b` 转给该子配置绑定的 dep；
-   feature 之间也可以用 `+`。
-7. 不写方括号 → 只打开开关，不向依赖传 feature。
-8. 完全不写某个 `sub:` → 扩展不启用这个子配置，也不碰依赖。
-9. `version:线` 指定扩展自己的版本线；依赖库用 `--dep`。
-10. 同一个扩展只能出现一次；同一个子配置、同一个 version 也只能出现一次。
+5. `dep:依赖` 打开这个依赖的集成：按 recipe 的 `dep_configure` 给扩展加参数，不向依赖传 feature。
+6. `dep:依赖[a,b]` 在打开集成的同时把 `a`、`b` 转给该依赖；feature 之间也可以用 `+`。
+7. `feature:[a,b]` 打开扩展自己的编译开关。必须带方括号；`feature:[[]]` 不合法，关闭全部 feature 写 `feature:[]`。
+8. `feature:` 可以出现多次，取并集；跨列表重复的 feature 会去重。
+9. 条件 feature（如 `argon2`）在版本不满足时直接报错，并说明缺哪一条。
+10. `version:线` 指定扩展自己的版本线；依赖库用 `--dep`。
+11. 同一个扩展只能出现一次；同一个依赖、同一个 version 只能出现一次。
 
 示例：
 
@@ -220,7 +220,13 @@ spec := 名字
 phprt install 8.5 --ext swoole
 
 # swoole 固定 6.0 线，并把 ssl/nghttp2 转给 libcurl
-phprt install 8.2 --ext swoole=version:6.0,sub:curl[ssl,nghttp2]
+phprt install 8.2 --ext swoole=version:6.0,dep:libcurl[ssl,nghttp2]
+
+# openssl 打开 argon2（需要 PHP 8.5/8.6 + openssl 3.5/4.0）
+phprt install 8.5 --ext 'openssl=feature:[argon2]'
+
+# 已有 state 里默认开了 argon2，想关掉
+phprt install 8.5 --ext 'openssl=feature:[]'
 
 # 只装 PHP：禁用 8.5 的两个默认扩展
 phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
@@ -232,7 +238,11 @@ phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
 | --- | --- |
 | 未知扩展 | `未知扩展 ext:nope` |
 | 契约不支持的链接方式 | `ext:xdebug 契约不支持 static（支持：shared）` |
-| 扩展没有这个子配置 | `ext:curl 契约里没有子配置 nope` |
+| 扩展没有这个依赖集成 | `ext:curl 没有依赖集成 nope（可写：libcurl）；需要在 recipe 的 dep_configure 里声明` |
+| 扩展没有这个 feature | `ext:openssl 没有 feature nope（可用：argon2）` |
+| feature 写法不对 | `ext:openssl 的 feature: 后面必须写方括号，例如 feature:[argon2]` |
+| feature 的 PHP 条件不满足 | `ext:openssl 的 feature argon2 需要 PHP 8.5, 8.6，当前 PHP 8.4` |
+| feature 的依赖线条件不满足 | `ext:openssl 的 feature argon2 需要 dep:openssl 3.5, 4.0，当前 3.0` |
 | 依赖没有这个 feature | `dep:libcurl 契约没有 feature brotli` |
 | 版本线不存在 | `「swoole」没有版本线 6.3（可用：4.8, 5.1, 6.0, 6.2）` |
 | 组件没有版本表 | `「curl」没有可选版本（catalog 里没有这个组件）` |

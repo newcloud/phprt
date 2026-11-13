@@ -4,6 +4,14 @@ openssl = "3.5"
 swoole = "6.2"
 xdebug = "3.5"
 
-# 空格分隔的扩展规格；有依赖的内置扩展要一起写，例如 "libxml xml"。
+# 默认启用的扩展。
+#
+# features 是扩展自己的编译开关；deps 按依赖名列出要转给它的 feature。
+# 需要某个依赖的功能时，deps 必须和扩展一起写，例如
+#   curl = { deps = { libcurl = ["ssl"] } }
 # 不写代码做依赖推导，漏写时 PHP configure 会报错。
-default_exts = "openssl curl=sub:curl[ssl]"
+#
+# 这张表必须放在文件最后：TOML 里表头之后的裸键都属于这个表。
+[default_exts]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }

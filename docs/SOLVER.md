@@ -114,7 +114,7 @@ self = 当前 recipe 同名组件的记录
 ### 4.1 默认方案
 
 ```text
-无 state：方案 = bundles/php<系列>.toml 的 default_exts
+无 state：方案 = bundles/php<系列>.toml 的 [default_exts]
                  - --disable-default-ext
                  + --ext
 有 state：方案 = state.ext
@@ -122,11 +122,12 @@ self = 当前 recipe 同名组件的记录
                  + --ext
 ```
 
-- `default_exts` 是空格分隔的扩展 spec 字符串，允许 `link:` / `sub:`，不允许 `version:`。
+- `default_exts` 是 TOML 表：`link` / `features` / `deps`，不允许 `version:`。
 - 默认扩展必须是当前 PHP 系列 `builtin_exts` 的子集，并且有 ext recipe。
 - 首次 install / ext add / ext remove 会把默认集 materialize 到 state；
   已有 state 不随 `default_exts` 变化。
 - 不做依赖展开：有依赖的内置扩展要在 `default_exts` 里一起写。
+- 条件 feature 在当前 PHP / 依赖线下不可用时提示并丢弃；显式 `--ext` 选择才报错。
 
 ### 4.2 PHP configure 参数
 

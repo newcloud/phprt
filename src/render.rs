@@ -30,7 +30,7 @@ pub struct Node {
     pub needs: Vec<String>,
     pub tools: Vec<String>,
     pub modules: Vec<String>,
-    pub subs: Vec<SubNode>,
+    pub deps: Vec<DepNode>,
     pub features: Vec<String>,
     pub configure: Vec<String>,
     pub steps: Vec<String>,
@@ -42,9 +42,9 @@ pub struct Node {
 }
 
 #[derive(Debug, Serialize)]
-pub struct SubNode {
+pub struct DepNode {
+    /// 依赖名；也是 `dep:NAME` 里的名字。
     pub name: String,
-    pub dep: String,
     pub features: Vec<String>,
 }
 
@@ -103,6 +103,12 @@ pub fn build(
         let mut needs: Vec<String> = t.needs.iter().map(|n| format!("dep:{n}")).collect();
         let tools: Vec<String> = t.tools.iter().map(|n| format!("dep:{n}")).collect();
         let mut enabled_features: Vec<String> = Vec::new();
+
+        if t.kind == Kind::Ext
+            && let Some(selected) = sel.features_of(t)
+        {
+            enabled_features = selected.iter().cloned().collect();
+        }
 
         if t.kind == Kind::Dep {
             if let Some(enabled) = features.get(&t.name) {
@@ -182,11 +188,10 @@ pub fn build(
             None => {}
         }
 
-        let subs = if t.kind == Kind::Ext {
-            sel.subs_of(t)
-                .map(|(name, feats)| SubNode {
+        let dep_nodes = if t.kind == Kind::Ext {
+            sel.deps_of(t)
+                .map(|(name, feats)| DepNode {
                     name: name.clone(),
-                    dep: t.subs.get(name).map(|d| d.dep.clone()).unwrap_or_default(),
                     features: feats.clone(),
                 })
                 .collect()
@@ -213,7 +218,7 @@ pub fn build(
             needs,
             tools,
             modules: t.modules.clone(),
-            subs,
+            deps: dep_nodes,
             features: enabled_features,
             configure,
             steps,
@@ -304,11 +309,21 @@ pub(crate) fn ext_configure(
     for arg in &ext.configure {
         out.push(expand(arg, ctx, reg)?);
     }
-    for (sub, _) in sel.subs_of(ext) {
-        let Some(def) = ext.subs.get(sub) else {
+    if let Some(selected) = sel.features_of(ext) {
+        for (name, def) in &ext.features {
+            if !selected.contains(name) {
+                continue;
+            }
+            for arg in &def.configure {
+                out.push(expand(arg, ctx, reg)?);
+            }
+        }
+    }
+    for (dep, _) in sel.deps_of(ext) {
+        let Some(flags) = ext.dep_configure.get(dep) else {
             continue;
         };
-        for arg in &def.configure {
+        for arg in flags {
             out.push(expand(arg, ctx, reg)?);
         }
     }
@@ -377,18 +392,13 @@ pub fn to_text(sim: &Sim) -> String {
         if !n.modules.is_empty() {
             out.push_str(&format!("  modules    {}\n", n.modules.join(", ")));
         }
-        for sub in &n.subs {
-            let feats = if sub.features.is_empty() {
+        for dep in &n.deps {
+            let feats = if dep.features.is_empty() {
                 String::new()
             } else {
-                format!(" [{}]", sub.features.join(", "))
+                format!(" [{}]", dep.features.join(", "))
             };
-            let dep = if sub.dep.is_empty() {
-                String::new()
-            } else {
-                format!(" -> dep:{}", sub.dep)
-            };
-            out.push_str(&format!("  sub        {}{}{}\n", sub.name, feats, dep));
+            out.push_str(&format!("  dep        {}{}\n", dep.name, feats));
         }
         if !n.features.is_empty() {
             out.push_str(&format!("  features   {}\n", n.features.join(", ")));
@@ -525,19 +535,15 @@ pub fn list_text(reg: &Registry) -> String {
         if t.kind == Kind::Ext {
             notes.push(format!("origin={}", t.origin));
             notes.push(format!("link={}", t.link.join(",")));
-            if !t.subs.is_empty() {
-                let subs: Vec<String> = t
-                    .subs
-                    .iter()
-                    .map(|(name, def)| {
-                        if def.dep.is_empty() {
-                            name.clone()
-                        } else {
-                            format!("{name}->{}", def.dep)
-                        }
-                    })
-                    .collect();
-                notes.push(format!("subs={}", subs.join(",")));
+            if !t.dep_configure.is_empty() {
+                notes.push(format!(
+                    "dep_configure={}",
+                    t.dep_configure
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
             }
         }
         if !t.features.is_empty() {
@@ -607,6 +613,7 @@ mod tests {
                 needs: vec!["openssl".into()],
                 configure: vec!["--with-openssl={dep:openssl}".into()],
                 disable: vec!["--without-ssl".into()],
+                requires: Default::default(),
             },
         );
         target
@@ -627,7 +634,7 @@ mod tests {
             modules: vec![],
             origin: "builtin".into(),
             link: vec![],
-            subs: Default::default(),
+            dep_configure: Default::default(),
             shared_from: String::new(),
             ini: String::new(),
             ini_lines: vec![],

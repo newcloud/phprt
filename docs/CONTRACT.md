@@ -115,16 +115,22 @@ openssl = "3.5"
 swoole = "6.2"
 xdebug = "3.5"
 
-default_exts = "openssl curl=sub:curl[ssl]"
+[default_exts]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }
 ```
 
 - `php` 必须和文件名一致。
 - 版本线的值只能是 catalog 里存在的线；没有写 `version:` 的扩展使用这里的默认线。
-- `default_exts` 是**空格分隔的字符串**，使用 `--ext` 的 spec 语法；
-  不允许 `version:`；缺省为空。
-- `default_exts` 里的名字必须是当前 PHP 系列 `builtin_exts` 的子集，并且有 ext recipe。
-- 有依赖的内置扩展必须写在同一个字符串里（如 `"libxml xml"`）；
+- `[default_exts]` 是表，key 是扩展名；必须放在文件最后，否则后面的顶层键会被 TOML 归到这张表里。
+- 每个扩展支持三个键，都是可选的：
+  - `link = "static" | "shared"`：不写时按内置/非内置推导。
+  - `features = ["名字", ...]`：扩展自己的编译开关。
+  - `deps = { 依赖名 = ["feature", ...] }`：转给依赖的 feature。
+- 不允许写 `version:`；`[default_exts]` 里的名字必须是当前 PHP 系列 `builtin_exts` 的子集，并且有 ext recipe。
+- 有依赖的内置扩展必须和依赖一起写（如 `deps = { libxml = [] }` 的情形要显式列出）；
   不做依赖展开或校验，漏写时 PHP configure 会报错。
+- 默认 feature 在当前 PHP / 依赖线下不可用时，提示并丢弃，不中断命令。
 
 ## 4. dep
 
@@ -158,8 +164,9 @@ TARGET = target
 - `version` / `url` / `sha256` 由 ctx 注入。
 - 安装前缀仍是 `.phprt/php-<php 版本>/deps/<name>-<version>`。
 - 禁止 `exts` 和 `tools`。
-- `features` 由 ext 的 `sub:` 间接启用；没启用的 feature 会应用它的 `disable`
-  参数（用来关掉上游的自动探测），没有 `disable` 就不传。
+- `features` 由 ext 的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
+  `disable` 参数（用来关掉上游的自动探测），没有 `disable` 就不传。
+- dep 的 feature 不允许写 `requires`。
 
 ## 5. ext
 
@@ -175,7 +182,7 @@ def target(ctx):
         sha256="" if ctx["is_builtin"] else self["sha256"],
         needs=["libcurl", "openssl"],
         tools=["autoconf"],
-        subs={"curl": sub(dep="libcurl", configure=["--enable-swoole-curl"])},
+        dep_configure={"libcurl": ["--enable-swoole-curl"]},
         configure=["--enable-swoole", "--with-openssl-dir={dep:openssl}"],
         ini="27-swoole.ini",
     )
@@ -196,9 +203,26 @@ TARGET = target
   交给扩展自己的 configure。
 - 关闭参数不在 ext recipe 里，来自 php recipe 的 `builtin_disable`。
   同一个内置扩展只会出现 `--with-*` 或 `--without-*` 其中一组。
-- `subs` 是“子配置名 → `sub(dep, configure)`”：
-  - `dep` 必须出现在 `needs` 里；
-  - 方括号里的 feature 必须在该 dep 的 `features` 里。
+- `dep_configure` 是“依赖名 → 选中 `dep:NAME` 时额外加给扩展的 configure 参数”：
+  - key 必须是 `needs` 里的依赖（声明必需依赖用 `needs`，不是这里）；
+  - 值为空列表表示“只允许转发 feature，不加参数”。
+- `features` 是扩展自己的开关：
+
+  ```python
+  features = {
+      "argon2": feature(
+          configure = ["--with-openssl-argon2"],
+          requires = {
+              "php": ["8.5", "8.6"],
+              "dep": {"openssl": ["3.5", "4.0"]},
+          },
+      ),
+  }
+  ```
+
+  - 只允许 `configure` / `requires`；`needs` / `disable` 只用于 dep 的 feature。
+  - `requires.php` 是允许的 PHP 系列；`requires.dep` 是允许的依赖线，key 必须在 `needs` 里。
+  - 显式选择不满足时报错；bundle 默认不满足时提示并丢弃。
 - 版本线通过 `LINES` / `PHP_LINES` 声明，不在 recipe 里写死。
 
 ## 6. php
@@ -246,7 +270,7 @@ TARGET = php(
 4. `needs` 指向的 `dep:*` 存在。
 5. `tools` 指向的 `dep:*` 存在。
 6. `features.*.needs` 指向的 `dep:*` 存在。
-7. `subs.*.dep` 指向的 `dep:*` 存在，且在 `needs` 里。
+7. `dep_configure` 的 key 在 `needs` 里；ext 的 `features.*.requires.dep` 的 key 也在 `needs` 里。
 8. php 的 `builtin_exts` 非空、无重复；`builtin_disable` 的 key 是其子集，
    值是单个 `--without-*` / `--disable-*`。
 9. catalog 的 PHP 系列与 php recipe 集合一致。

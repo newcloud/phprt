@@ -31,7 +31,8 @@ cargo run -- install 8.5 --downloads     # 只下载源码包
 cargo run -- install 8.5 --ext swoole --downloads   # 只下载扩展和依赖
 cargo run -- install 8.5 --ext swoole --ext xdebug  # 再加两个 PECL 扩展
 cargo run -- install 8.5 --ext swoole    # swoole 6.2.5 + libcurl + openssl 3.5.9
-cargo run -- install 8.5 --ext curl=link:shared,sub:curl[ssl,nghttp2]
+cargo run -- install 8.5 --ext 'openssl=feature:[argon2]'   # 打开 argon2
+cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
 cargo run -- install 7.4 --ext swoole    # swoole 4.8.13 + openssl 1.1.1w
 cargo run -- --php 8.5 ext list           # 查看扩展和版本
 cargo run -- --php 8.5 ext add xdebug     # 加入方案（待安装）
@@ -90,7 +91,7 @@ def target(ctx):
         modules=["swoole"],
         link=["shared"],
         needs=["libcurl", "openssl"],
-        subs={"curl": sub(dep="libcurl", configure=["--enable-swoole-curl"])},
+        dep_configure={"libcurl": ["--enable-swoole-curl"]},
         configure=["--enable-swoole", "--with-openssl-dir={dep:openssl}"],
         ini="27-swoole.ini",
     )
@@ -105,17 +106,27 @@ TARGET = target
 - `ctx["is_builtin"]`：由 php recipe 的 `builtin_exts` 推导，不在 ext recipe 里写 `origin`。
 - `TARGET` 也可以是普通 dict。
 
-### 子配置与 feature
+### 依赖集成与 feature
 
-`sub:` 打开扩展自己的子配置，方括号里的 feature 转给依赖：
+`dep:` 打开扩展对某个依赖的集成，方括号里的 feature 转给该依赖：
 
 ```bash
-cargo run -- install 8.2 --ext swoole=version:6.0,sub:curl[ssl,nghttp2]
+cargo run -- install 8.2 --ext swoole=version:6.0,dep:libcurl[ssl,nghttp2]
 ```
 
-- `sub:curl` 给 swoole 加 `--enable-swoole-curl`。
+- `dep:libcurl` 给 swoole 加 recipe 里 `dep_configure` 声明的参数（`--enable-swoole-curl`）。
 - `[ssl,nghttp2]` 转给 libcurl，具体编译参数由 libcurl 的 `features` 决定。
-- 不写 `sub:curl` → 开关和转发都不发生。
+- 不写 `dep:libcurl` → 开关和转发都不发生。
+
+`feature:` 是扩展自己的开关，和依赖无关：
+
+```bash
+cargo run -- install 8.5 --ext 'openssl=feature:[argon2]'
+cargo run -- install 8.5 --ext 'openssl=feature:[]'   # 关掉默认开的 feature
+```
+
+- 必须带方括号；多个 feature 用逗号分隔。
+- 有条件的能力在 recipe 里用 `requires` 声明；版本不满足时选择会直接报错。
 
 ### 占位符
 
@@ -167,8 +178,10 @@ bundle 默认线不写进 `bindings`；显式 `version:` 会写入并保留。�
   内置扩展还要 `shared_from`，非内置还要 `url`+`version`；origin 由 `builtin_exts` 推导。
 - php recipe 的 `builtin_exts` 非空无重复；`builtin_disable` 的 key 必须是内置扩展，
   值必须是单个 `--without-*` / `--disable-*`。
-- bundle `default_exts` 是空格分隔的 spec；名字必须是内置扩展且有 recipe，不允许 `version:`。
-- `subs.*.dep` 必须出现在 `needs` 里；方括号里的 feature 必须在该 dep 的 `features` 里。
+- bundle `[default_exts]` 是表（`link` / `features` / `deps`）；名字必须是内置扩展且有 recipe，
+  不允许 `version:`；条件 feature 不满足时提示并丢弃。
+- `dep_configure` 的 key 必须在 `needs` 里；方括号里的 feature 必须在该 dep 的 `features` 里。
+- ext 的 `features` 只允许 `configure` / `requires`；`requires` 不满足时显式选择直接报错。
 - 下载缓存命中跳过；有 sha256 的文件按哈希判断，没有 sha256 时按远端大小判断。
 - `--downloads` 只下载，不解压、不编译、不写状态；下载、解压或编译失败都不写状态。
 - 解压目标 `build/<组件>/<补丁>/` 已存在时跳过。

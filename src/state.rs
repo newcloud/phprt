@@ -29,8 +29,12 @@ pub struct ExtState {
     pub link: String,
     #[serde(default)]
     pub installed: bool,
+    /// 依赖名 -> 转给该依赖的 feature。
+    #[serde(default, alias = "sub")]
+    pub deps: BTreeMap<String, Vec<String>>,
+    /// 扩展自己的 feature。
     #[serde(default)]
-    pub sub: BTreeMap<String, Vec<String>>,
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -109,21 +113,45 @@ impl ProjectState {
                     );
                 }
             }
-            for (sub, feats) in &state.sub {
-                let def = ext
-                    .subs
-                    .get(sub)
-                    .ok_or_else(|| anyhow::anyhow!("state.json 里 ext:{name} 没有子配置 {sub}"))?;
+            for (dep_name, feats) in &state.deps {
+                if !ext.dep_configure.contains_key(dep_name) {
+                    let available: Vec<&str> =
+                        ext.dep_configure.keys().map(String::as_str).collect();
+                    let hint = if available.is_empty() {
+                        "无".to_owned()
+                    } else {
+                        available.join(", ")
+                    };
+                    bail!(
+                        "state.json 里 ext:{name} 的 dep={dep_name} 不存在（可写：{hint}）；\
+                         sub 已改名为 dep，旧状态需要手工迁移或删除 \
+                         .phprt/php-<系列>/state.json"
+                    );
+                }
                 if feats.is_empty() {
                     continue;
                 }
-                let dep = reg.get(&format!("dep:{}", def.dep)).ok_or_else(|| {
-                    anyhow::anyhow!("state.json 里 ext:{name} 的子配置 {sub} 没绑定依赖")
+                let dep = reg.get(&format!("dep:{dep_name}")).ok_or_else(|| {
+                    anyhow::anyhow!("state.json 里 ext:{name} 的 dep:{dep_name} 不存在")
                 })?;
                 for f in feats {
                     if !dep.features.contains_key(f) {
                         bail!("state.json 里 dep:{} 没有 feature {f}", dep.name);
                     }
+                }
+            }
+            for feature in &state.features {
+                if !ext.features.contains_key(feature) {
+                    let available: Vec<&str> = ext.features.keys().map(String::as_str).collect();
+                    let hint = if available.is_empty() {
+                        "无".to_owned()
+                    } else {
+                        available.join(", ")
+                    };
+                    bail!("state.json 里 ext:{name} 没有 feature {feature}（可用：{hint}）");
+                }
+                if let Err(err) = crate::recipe::feature_available(reg, ext, feature) {
+                    bail!("state.json 里 {err}；改 state 或换依赖线后重试");
                 }
             }
         }
@@ -187,13 +215,17 @@ impl ProjectState {
                 if spec.link.is_none() && !state.link.is_empty() {
                     spec.link = Some(Mode::parse(&state.link)?);
                 }
-                for (sub, feats) in &state.sub {
-                    let entry = spec.subs.entry(sub.clone()).or_default();
+                for (dep, feats) in &state.deps {
+                    let entry = spec.deps.entry(dep.clone()).or_default();
                     for f in feats {
                         if !entry.contains(f) {
                             entry.push(f.clone());
                         }
                     }
+                }
+                // feature 只增不减会让默认值关不掉；CLI 显式写了就以 CLI 为准。
+                if spec.features.is_none() {
+                    spec.features = Some(state.features.iter().cloned().collect());
                 }
             }
             out.per_ext.insert(name.clone(), spec);
@@ -213,7 +245,8 @@ impl ProjectState {
                 version: String::new(),
                 link: ext.default_mode()?.as_str().to_owned(),
                 installed: false,
-                sub: BTreeMap::new(),
+                deps: BTreeMap::new(),
+                features: Vec::new(),
             },
         );
         self.active = true;
@@ -251,7 +284,11 @@ impl ProjectState {
             entry.link = sel.mode_of(ext)?.as_str().to_owned();
             entry.line = ext.line.clone();
             entry.version = ext.version.clone();
-            entry.sub = spec.subs;
+            entry.deps = spec.deps;
+            entry.features = spec
+                .features
+                .map(|set| set.into_iter().collect())
+                .unwrap_or_default();
         }
         // 方案之外的扩展不留在状态里。
         self.ext.retain(|name, _| names.contains(name));
@@ -325,7 +362,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::{SubDef, Target};
+    use crate::recipe::Target;
 
     fn dep(name: &str, features: &[&str]) -> Target {
         let mut t = Target {
@@ -342,6 +379,7 @@ mod tests {
                     needs: vec![],
                     configure: vec![],
                     disable: vec![],
+                    requires: Default::default(),
                 },
             );
         }
@@ -359,13 +397,7 @@ mod tests {
             ini: format!("20-{name}.ini"),
             ..blank()
         };
-        t.subs.insert(
-            "curl".into(),
-            SubDef {
-                dep: "libcurl".into(),
-                configure: vec![],
-            },
-        );
+        t.dep_configure.insert("libcurl".into(), vec![]);
         t
     }
 
@@ -384,7 +416,7 @@ mod tests {
             modules: vec![],
             origin: "builtin".into(),
             link: vec![],
-            subs: Default::default(),
+            dep_configure: Default::default(),
             shared_from: String::new(),
             ini: String::new(),
             ini_lines: vec![],
@@ -451,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_selection_carries_state_subs() {
+    fn effective_selection_carries_state_deps() {
         let reg = registry();
         let mut state = ProjectState::default();
         state.add_ext(&reg, "curl").unwrap();
@@ -460,8 +492,8 @@ mod tests {
             .ext
             .get_mut("curl")
             .unwrap()
-            .sub
-            .insert("curl".into(), vec!["nghttp2".into()]);
+            .deps
+            .insert("libcurl".into(), vec!["nghttp2".into()]);
         let cli = Selection::default();
         let names = state.scheme_with(&[]);
         let sel = state.effective_selection(&reg, &cli, &names).unwrap();

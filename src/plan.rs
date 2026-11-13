@@ -115,7 +115,7 @@ pub fn resolve<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::{Feature, SubDef, Target};
+    use crate::recipe::{Feature, Target};
 
     fn dep(name: &str, needs: &[&str]) -> Target {
         Target {
@@ -133,6 +133,7 @@ mod tests {
             needs: needs.iter().map(|s| s.to_string()).collect(),
             configure: vec![],
             disable: vec![],
+            requires: Default::default(),
         }
     }
 
@@ -201,7 +202,7 @@ mod tests {
             modules: vec![],
             origin: "builtin".into(),
             link: vec![],
-            subs: Default::default(),
+            dep_configure: Default::default(),
             shared_from: String::new(),
             ini: String::new(),
             ini_lines: vec![],
@@ -224,23 +225,13 @@ mod tests {
 
         let mut curl = builtin("curl", &["libcurl"]);
         curl.tools = vec!["autoconf".into()];
-        curl.subs.insert(
-            "curl".into(),
-            SubDef {
-                dep: "libcurl".into(),
-                configure: vec![],
-            },
-        );
+        curl.dep_configure.insert("libcurl".into(), vec![]);
 
         let mut swoole = pecl("swoole");
         swoole.needs = vec!["libcurl".into()];
-        swoole.subs.insert(
-            "curl".into(),
-            SubDef {
-                dep: "libcurl".into(),
-                configure: vec!["--enable-swoole-curl".into()],
-            },
-        );
+        swoole
+            .dep_configure
+            .insert("libcurl".into(), vec!["--enable-swoole-curl".into()]);
 
         Registry::from_targets(vec![
             dep("openssl", &[]),
@@ -317,13 +308,13 @@ mod tests {
     }
 
     #[test]
-    fn subs_flow_to_the_dep() {
+    fn deps_flow_to_the_dep() {
         let reg = fixture();
         let sel = selection(
             &reg,
             &[
-                "curl=link:shared,sub:curl[nghttp2,ssl]",
-                "swoole=sub:curl[ssl]",
+                "curl=link:shared,dep:libcurl[nghttp2,ssl]",
+                "swoole=dep:libcurl[ssl]",
             ],
         );
         let features = sel.features(&reg);
@@ -336,27 +327,27 @@ mod tests {
     }
 
     #[test]
-    fn swoole_without_sub_does_not_forward() {
+    fn swoole_without_dep_does_not_forward() {
         let reg = fixture();
         let sel = selection(&reg, &["swoole=link:shared"]);
         assert!(sel.features(&reg).is_empty());
 
-        let sel = selection(&reg, &["swoole=sub:curl"]);
+        let sel = selection(&reg, &["swoole=dep:libcurl"]);
         assert!(sel.features(&reg).is_empty());
         let swoole = reg.ext("swoole").unwrap();
-        let subs: Vec<&String> = sel.subs_of(swoole).map(|(name, _)| name).collect();
-        assert_eq!(subs, vec!["curl"]);
+        let deps: Vec<&String> = sel.deps_of(swoole).map(|(name, _)| name).collect();
+        assert_eq!(deps, vec!["libcurl"]);
     }
 
     #[test]
-    fn unknown_sub_is_rejected() {
+    fn unknown_dep_is_rejected() {
         let reg = fixture();
-        let err = Selection::parse(&reg, &["curl=sub:nope".into()])
+        let err = Selection::parse(&reg, &["curl=dep:nope".into()])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("没有子配置 nope"), "{err}");
+        assert!(err.contains("没有依赖集成 nope"), "{err}");
 
-        let err = Selection::parse(&reg, &["curl=sub:curl[brotli]".into()])
+        let err = Selection::parse(&reg, &["curl=dep:libcurl[brotli]".into()])
             .unwrap_err()
             .to_string();
         assert!(err.contains("契约没有 feature brotli"), "{err}");

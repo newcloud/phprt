@@ -115,7 +115,7 @@ cargo run -- install 8.5 --ext swoole --ext xdebug
 ./myphp -m | grep -E 'openssl|curl|swoole|xdebug'
 
 # curl 动态编译，并启用 SSL / nghttp2
-cargo run -- install 8.5 --ext curl=link:shared,sub:curl[ssl,nghttp2]
+cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
 
 # 只下载，不编译
 cargo run -- install 8.5 --downloads --offline

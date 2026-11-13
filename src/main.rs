@@ -42,7 +42,7 @@ struct Cli {
     #[arg(long = "php", value_name = "SERIES", global = true)]
     php: Option<String>,
 
-    /// 扩展选择：名字[=link:模式][,sub:名字[feature,feature]][,version:线]；可重复
+    /// 扩展选择：名字[=link:模式][,dep:依赖[feature,...]][,feature:[名字,...]][,version:线]；可重复
     #[arg(long = "ext", value_name = "SPEC", global = true)]
     ext: Vec<String>,
 
@@ -167,14 +167,7 @@ fn run() -> Result<()> {
         .ok_or_else(|| anyhow!("没有找到 PHP {series} 的 recipe 元数据"))?;
     let builtin_exts = php_meta.builtin_exts.clone();
 
-    let default_raw = recipe::preparse(&bundle.default_exts)?;
-    if let Some(raw) = default_raw.iter().find(|raw| raw.version.is_some()) {
-        bail!(
-            "bundle php{series}.toml 的 default_exts 不能写 version:（{}）",
-            raw.name
-        );
-    }
-    let default_names: Vec<String> = default_raw.iter().map(|raw| raw.name.clone()).collect();
+    let default_names: Vec<String> = bundle.default_exts.keys().cloned().collect();
     for name in &default_names {
         if !builtin_exts.iter().any(|item| item == name) {
             bail!("bundle php{series}.toml 的 default_exts 里 {name} 不是该 PHP 版本的内置扩展");
@@ -227,7 +220,6 @@ fn run() -> Result<()> {
                 name.clone(),
                 state::ExtState {
                     link: String::new(),
-                    sub: BTreeMap::new(),
                     installed: false,
                     ..state::ExtState::default()
                 },
@@ -292,11 +284,7 @@ fn run() -> Result<()> {
         &builtin_exts,
     )?;
 
-    let default_sel = if bundle.default_exts.is_empty() {
-        Selection::default()
-    } else {
-        Selection::parse(&reg, &bundle.default_exts)?
-    };
+    let default_sel = bundle::selection(&reg, &bundle, &series)?;
     if seeded_defaults {
         for (name, spec) in &default_sel.per_ext {
             let Some(entry) = project.ext.get_mut(name) else {
@@ -307,7 +295,13 @@ fn run() -> Result<()> {
             {
                 entry.link = mode.as_str().to_owned();
             }
-            entry.sub = spec.subs.clone();
+            entry.deps = spec.deps.clone();
+            entry.features = spec
+                .features
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
         }
     }
 

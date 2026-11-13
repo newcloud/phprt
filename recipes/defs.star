@@ -10,27 +10,29 @@ recipe 里不执行命令、不访问网络、不读写文件。
 """
 
 
-def feature(needs = [], configure = [], disable = []):
-    """dep 的一个可选 feature。只有 ext 的 sub 带方括号时才会启用。
+def feature(needs = [], configure = [], disable = [], requires = {}):
+    """一个可选 feature。
 
+    dep 的 feature：由 ext 的 dep:NAME[feature] 打开，needs 是它额外需要的库，
     disable 是 feature 未启用时应用的参数，用来显式关掉上游的自动探测。
+
+    ext 的 feature：由 --ext NAME=feature:[...] 打开，只写 configure；
+    它是扩展自己的编译开关，和依赖库无关。
+
+    requires 只用于 ext 的 feature，声明可用条件：
+
+        requires = {
+            "php": ["8.5", "8.6"],              # 允许的 PHP 系列
+            "dep": {"openssl": ["3.5", "4.0"]},  # 允许的依赖线
+        }
+
+    显式选择不满足时报错；bundle 默认不满足时提示并丢弃。
     """
     return {
         "needs": needs,
         "configure": configure,
         "disable": disable,
-    }
-
-
-def sub(dep = "", configure = []):
-    """ext 自己的一个子配置。
-
-    dep：方括号里的 feature 转给哪个依赖；空表示不转。
-    configure：选中这个子配置时追加到 ext 的编译参数。
-    """
-    return {
-        "dep": dep,
-        "configure": configure,
+        "requires": requires,
     }
 
 
@@ -71,7 +73,8 @@ def ext(
         version = "",
         needs = [],
         tools = [],
-        subs = {},
+        dep_configure = {},
+        features = {},
         configure = [],
         shared_from = "",
         url = "",
@@ -93,8 +96,12 @@ def ext(
             然后 phpize 编成 .so，写 etc/conf.d/<ini> 让 PHP 启动时加载。
 
     tools 是构建期工具依赖（如 autoconf）：参与构建顺序和 PATH，不参与链接。
-    subs 是扩展自己的子配置表：选中时应用 configure，
-    方括号里的 feature 转给 sub.dep 指向的依赖。
+
+    dep_configure 按依赖名声明「这个依赖可以集成」：出现即表示允许
+    dep:NAME 选择它；值是选中时额外加给扩展的 configure 参数（可以为空）。
+    它的 key 必须是 needs 里的依赖。
+
+    features 是扩展自己的开关：名字 -> feature(configure=[])。
     """
     return {
         "kind": "ext",
@@ -104,7 +111,8 @@ def ext(
         "link": link,
         "needs": needs,
         "tools": tools,
-        "subs": subs,
+        "dep_configure": dep_configure,
+        "features": features,
         "configure": configure,
         "shared_from": shared_from,
         "url": url,

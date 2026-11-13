@@ -31,7 +31,7 @@ def target(ctx):
         link = ["shared"],
         needs = needs,
         tools = ["autoconf"],
-        subs = {"curl": sub(dep = "libcurl", configure = ["--enable-swoole-curl"])},
+        dep_configure = {"libcurl": ["--enable-swoole-curl"]},
         version = ctx["php_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],
         sha256 = "" if builtin else self["sha256"],

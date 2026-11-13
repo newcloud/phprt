@@ -31,7 +31,7 @@ Sim { root, tree, order: [Node] }
 | `needs` | 实际依赖的 `dep:*` / `php:*` |
 | `tools` | 构建期工具依赖，如 `dep:autoconf` |
 | `modules` | ext 提供的模块 |
-| `subs` | ext 选中的子配置：`[{name, dep, features}]` |
+| `deps` | ext 选中的依赖集成：`[{name, features}]` |
 | `features` | 该 dep 实际启用的 feature（含历史累计） |
 | `configure` | 展开后的 configure 参数 |
 | `steps` | shared ext 的构建步骤 |
@@ -82,11 +82,13 @@ Sim { root, tree, order: [Node] }
 标签随节点变化：
 
 - static ext：每个 `configure` 正向参数一行 `flag`。
+- ext 选中的依赖集成输出一行 `dep        libcurl [ssl]`；选中的 feature 输出在
+  `features` 行（与 dep 的 feature 共用这个字段）。
 - php：`configure` 里每个内置扩展只出现正向参数或 php recipe
   `builtin_disable` 的关闭参数其中一组，不会同时出现 `--without-x` 和 `--with-x`。
 - shared ext：每个构建步骤一行 `step`。
 - dep / php：`configure` 每个参数一行，`make` 每个步骤一行。
-- 有值才输出：`source`、`sha256`、`unpack`、`needs`、`tools`、`modules`、`subs`、
+- 有值才输出：`source`、`sha256`、`unpack`、`needs`、`tools`、`modules`、`deps`、
   `features`、`outputs`、`ini`。
 - 首次项目会把 bundle 的 `default_exts` 算进方案；`plan` 输出里能直接看到这些节点。
 - dep 的 `configure` 包含未启用 feature 的 `disable` 参数（如 `--without-ssl`）。
@@ -118,8 +120,8 @@ Sim { root, tree, order: [Node] }
       "mode": "shared",
       "source": "build/php/php-8.5.12/ext/curl",
       "needs": ["dep:libcurl", "php:8.5.12"],
-      "subs": [
-        {"name": "curl", "dep": "libcurl", "features": ["ssl", "nghttp2"]}
+      "deps": [
+        {"name": "libcurl", "features": ["ssl", "nghttp2"]}
       ],
       "features": [],
       "steps": ["phpize", "./configure ...", "make", "make install"],

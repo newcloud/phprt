@@ -196,7 +196,7 @@ allowed = catalog 里该库的所有线
 - DFS 后序即构建顺序；成环时报出完整路径。
 - 无 state 时方案 = bundle `default_exts` - `--disable-default-ext` + `--ext`；
   有 state 时以 `state.ext` 为准，再应用禁用和 `--ext`。
-- `default_exts` 是空格分隔的扩展 spec；有依赖的内置扩展必须一起写，不做依赖展开。
+- `[default_exts]` 是 TOML 表（`link` / `features` / `deps`）；有依赖的内置扩展必须一起写，不做依赖展开。
 
 ### 5.6 下载源码
 
@@ -265,7 +265,7 @@ dep → 静态扩展（只贡献 PHP 参数） → php → 共享扩展 → 运�
 
 | 内容 | 作用 |
 | --- | --- |
-| 构建方案（扩展、链接方式、子配置、installed） | 下次 install/update 装什么 |
+| 构建方案（扩展、链接方式、依赖集成、feature、installed） | 下次 install/update 装什么 |
 | 显式线 `bindings` | 用户用 `version:` / `--dep` 选过的线，下次继续生效 |
 | 每条线实际解析到的补丁 | 可观测，不参与求解 |
 
@@ -471,7 +471,7 @@ cargo fmt --all --check
 cargo run -- install 8.5                                  # 默认 openssl + curl(ssl)
 cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl  # 只装 PHP
 cargo run -- install 8.5 --ext swoole --ext xdebug        # 加上两个 PECL 扩展
-cargo run -- install 8.5 --ext curl=link:shared,sub:curl[ssl,nghttp2]
+cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
 cargo run -- install 8.5 --ext openssl --dep openssl=4.0  # openssl 4.0.0
 cargo run -- install 7.4 --ext openssl --dep openssl=3.5  # 必须失败
 cargo run -- install 8.2 --ext swoole=version:4.8         # 提示自动改用 1.1.1
