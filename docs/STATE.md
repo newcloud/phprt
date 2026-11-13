@@ -76,12 +76,15 @@ phprt install 8.5 --ext swoole=version:6.0
 之后不带 `version:` 再执行 install，仍会停在 6.0，因为 `bindings.swoole = "6.0"`。
 bundle 只影响没有显式选择的组件。
 
+`bindings` 的键是 catalog 组件名：有独立版本线的扩展（如 `swoole`）或依赖库（如 `openssl`）。
+内置扩展没有自己的版本线，不会出现在这里；`bindings.openssl` 一定指 OpenSSL 库。
+
 ## 3. 选线优先级
 
 ```text
 CLI 显式 --ext ...=version:线 / --dep NAME=线
   > state.bindings
-  > bundle 默认线
+  > bundle 默认线（扩展写顶层，依赖库写 [deps]）
   > 组件只有一条线时直接用
 ```
 

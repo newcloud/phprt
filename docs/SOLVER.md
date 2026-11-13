@@ -9,7 +9,7 @@
 
 ```text
 php 系列         install 的位置参数 / --php / 唯一 state
-bundle           该系列默认线 + default_exts
+bundle           该系列扩展默认线 + [deps] 依赖库默认线 + default_exts
 CLI --ext version: / --dep
 state.bindings   之前显式保存的线
 catalog          每条线的最新补丁
@@ -27,7 +27,8 @@ CLI 显式 > state.bindings > bundle 默认 > 单线组件自动
 对每个组件：
 
 1. 如果显式指定了线，必须在 catalog 里。
-2. 否则使用 bundle；bundle 没有且只有一条线时直接用它。
+2. 否则使用 bundle：有独立版本线的扩展取顶层键，依赖库取 `[deps]`；
+   bundle 没有且只有一条线时直接用它。
 3. 有自己版本线的扩展（swoole / xdebug）校验 `LINES[线].php` 包含当前 PHP 系列。
    - 显式线不满足 → 报错。
    - bundle 线不满足、且只有一条候选 → 自动改用并打印提示。
@@ -73,7 +74,7 @@ dep 自身不参与 PHP 兼容；它只是库。
 例：
 
 ```text
-php8.2 bundle: openssl = 3.5
+php8.2 bundle [deps]: openssl = 3.5
 --ext swoole=version:4.8
 swoole 4.8 只允许 openssl 1.1.1
 → openssl 自动改用 1.1.1，并打印提示

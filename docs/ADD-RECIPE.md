@@ -191,12 +191,20 @@ libxml = {}
 只有 8.5 写了默认集：
 
 ```toml
+php = "8.5"
+swoole = "6.2"
+xdebug = "3.5"
+
+[deps]
+openssl = "3.5"
+
 [default_exts]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
 libxml = {}
 ```
 
+顶层是扩展默认线，`[deps]` 是依赖库默认线；内置扩展没有版本线，不能写顶层。
 `swoole` / `xdebug` 不在默认集里，需要 `--ext` 显式选择。
 默认集只在第一次写 state 时落盘；已有项目要开 argon2 就显式传
 `--ext 'openssl=feature:[argon2]'`。

@@ -20,7 +20,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::bundle::Bundle;
 use crate::catalog::Catalog;
-use crate::recipe::{Kind, RawExt, Registry, Selection};
+use crate::recipe::{Kind, RawExt, RecipeMeta, Registry, Selection};
 use crate::state::ProjectState;
 use phprt_ui::Mode;
 
@@ -214,7 +214,7 @@ fn run() -> Result<()> {
         bail!("--disable-default-ext 只支持 install / update / plan");
     }
 
-    let mut cli_pins = pins_from_cli(&raw_exts, &cli.dep)?;
+    let mut cli_pins = pins_from_cli(&raw_exts, &cli.dep, &metas)?;
 
     // 首次方案从 bundle 的默认扩展开始；已有 state 时以 state 为准。
     let seeded_defaults = !project.active;
@@ -573,10 +573,35 @@ fn infer_state_series(root: &Path) -> Result<Option<String>> {
     }
 }
 
-fn pins_from_cli(raw: &[RawExt], deps: &[String]) -> Result<BTreeMap<String, String>> {
+fn pins_from_cli(
+    raw: &[RawExt],
+    deps: &[String],
+    metas: &[RecipeMeta],
+) -> Result<BTreeMap<String, String>> {
     let mut pins = BTreeMap::new();
     for ext in raw {
         if let Some(version) = &ext.version {
+            let Some(meta) = metas
+                .iter()
+                .find(|meta| meta.kind == Kind::Ext && meta.name == ext.name)
+            else {
+                bail!("--ext 里指定了未知扩展 {} 的版本线", ext.name);
+            };
+            if meta.lines.is_empty() {
+                if metas
+                    .iter()
+                    .any(|meta| meta.kind == Kind::Dep && meta.name == ext.name)
+                {
+                    bail!(
+                        "ext:{} 是内置扩展，没有自己的版本线；\
+                         依赖库 {} 的版本请用 --dep {}=<线>",
+                        ext.name,
+                        ext.name,
+                        ext.name
+                    );
+                }
+                bail!("ext:{} 是内置扩展，没有自己的版本线", ext.name);
+            }
             pins.insert(ext.name.clone(), version.clone());
         }
     }
@@ -588,6 +613,12 @@ fn pins_from_cli(raw: &[RawExt], deps: &[String]) -> Result<BTreeMap<String, Str
         let line = value.strip_prefix("version:").unwrap_or(value);
         if name.is_empty() || line.is_empty() {
             bail!("--dep {spec} 写法不合法，应为 NAME=LINE");
+        }
+        if !metas
+            .iter()
+            .any(|meta| meta.kind == Kind::Dep && meta.name == name)
+        {
+            bail!("--dep {name} 不是依赖库");
         }
         if pins.insert(name.to_owned(), line.to_owned()).is_some() {
             bail!("--dep 里重复指定了 {name}");
@@ -625,4 +656,51 @@ fn plan_root(
         bail!("当前加载的是 PHP {series}（{php_version}），不能 plan php:{rest}");
     }
     reg.resolve_name(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn metas() -> Vec<RecipeMeta> {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        recipe::load_meta(&dir, &catalog).unwrap()
+    }
+
+    fn raw(name: &str, version: &str) -> RawExt {
+        RawExt {
+            name: name.to_owned(),
+            version: Some(version.to_owned()),
+        }
+    }
+
+    #[test]
+    fn ext_version_only_applies_to_versioned_extensions() {
+        let pins = pins_from_cli(&[raw("swoole", "6.0")], &[], &metas()).unwrap();
+        assert_eq!(pins["swoole"], "6.0");
+
+        let err = pins_from_cli(&[raw("openssl", "4.0")], &[], &metas())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("内置扩展"), "{err}");
+        assert!(err.contains("--dep openssl"), "{err}");
+
+        let err = pins_from_cli(&[raw("curl", "8.0")], &[], &metas())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("内置扩展"), "{err}");
+    }
+
+    #[test]
+    fn dep_pin_only_accepts_dependency_recipes() {
+        let pins = pins_from_cli(&[], &["openssl=4.0".to_owned()], &metas()).unwrap();
+        assert_eq!(pins["openssl"], "4.0");
+
+        let err = pins_from_cli(&[], &["swoole=6.0".to_owned()], &metas())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("不是依赖库"), "{err}");
+    }
 }

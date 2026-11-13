@@ -9,12 +9,14 @@ use crate::recipe::{ExtSpec, Mode, Registry, Selection};
 
 /// `recipes/bundles/php<系列>.toml`：某个 PHP 系列的默认策略。
 ///
-/// - 行版本线：只存线，不存补丁号；补丁号来自 catalog。
+/// - 顶层：有独立版本线的扩展 -> 默认线；只存线，不存补丁号。
+/// - `[deps]`：依赖库 -> 默认线。内置扩展没有自己的版本线，它的同名库写在这里。
 /// - `[default_exts]`：默认启用的扩展，以及它们选中的 feature / 依赖功能。
 #[derive(Debug, Clone)]
 pub struct Bundle {
     pub php: String,
-    pub defaults: BTreeMap<String, String>,
+    pub ext_lines: BTreeMap<String, String>,
+    pub dep_lines: BTreeMap<String, String>,
     pub default_exts: BTreeMap<String, ExtDefault>,
 }
 
@@ -40,7 +42,8 @@ impl Bundle {
         let raw: toml::Table = toml::from_str(&text)
             .with_context(|| format!("{} 不是合法的 bundle", path.display()))?;
 
-        let mut defaults = BTreeMap::new();
+        let mut ext_lines = BTreeMap::new();
+        let mut dep_lines = BTreeMap::new();
         let mut php = None;
         let mut default_exts = BTreeMap::new();
         for (key, value) in raw {
@@ -49,6 +52,13 @@ impl Bundle {
                     toml::Value::String(text) => php = Some(text),
                     _ => bail!("{} 的 php 必须是字符串", path.display()),
                 }
+            } else if key == "deps" {
+                dep_lines = value.try_into().with_context(|| {
+                    format!(
+                        "{} 的 [deps] 必须是「依赖库名 -> 版本线字符串」",
+                        path.display()
+                    )
+                })?;
             } else if key == "default_exts" {
                 default_exts = value
                     .try_into()
@@ -56,10 +66,11 @@ impl Bundle {
             } else {
                 match value {
                     toml::Value::String(text) => {
-                        defaults.insert(key, text);
+                        ext_lines.insert(key, text);
                     }
                     _ => bail!(
-                        "{} 的 {key} 必须是版本线字符串（默认扩展写在 [default_exts] 表里）",
+                        "{} 的 {key} 必须是版本线字符串：扩展默认线写顶层，依赖库默认线写在 [deps]，\
+                         默认扩展写在 [default_exts]",
                         path.display()
                     ),
                 }
@@ -69,7 +80,8 @@ impl Bundle {
         let php = php.ok_or_else(|| anyhow::anyhow!("{} 缺少 php", path.display()))?;
         Ok(Self {
             php,
-            defaults,
+            ext_lines,
+            dep_lines,
             default_exts,
         })
     }
@@ -161,7 +173,9 @@ mod tests {
         let curl = &bundle.default_exts["curl"];
         assert!(curl.features.is_empty());
         assert_eq!(curl.deps["libcurl"], vec!["ssl".to_owned()]);
-        assert_eq!(bundle.defaults["openssl"], "3.5");
+        assert_eq!(bundle.ext_lines["swoole"], "6.2");
+        assert_eq!(bundle.dep_lines["openssl"], "3.5");
+        assert!(!bundle.ext_lines.contains_key("openssl"));
     }
 
     #[test]
@@ -180,6 +194,19 @@ mod tests {
         .unwrap();
         let err = Bundle::load(&path).unwrap_err().to_string();
         assert!(err.contains("必须是版本线字符串"), "{err}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn deps_values_must_be_lines() {
+        let path = std::env::temp_dir().join(format!("phprt-bundle-deps-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            "php = \"8.5\"\n[deps]\nopenssl = { line = \"3.5\" }\n",
+        )
+        .unwrap();
+        let err = Bundle::load(&path).unwrap_err().to_string();
+        assert!(err.contains("[deps]"), "{err}");
         let _ = std::fs::remove_file(&path);
     }
 

@@ -341,7 +341,7 @@ v3 把这两件事分别压到一条 catalog 记录和一行 bundle 记录。
 | --- | --- | --- |
 | 入口 | `src/main.rs` | 命令 → PHP 系列 → 串接其余角色、退出码 |
 | 版本库 | `src/catalog.rs` | 线/补丁查询、PHP 系列解析 |
-| 默认线 / 默认集 | `src/bundle.rs` | 读取某系列的默认线和 `default_exts` |
+| 默认线 / 默认集 | `src/bundle.rs` | 读取扩展默认线、`[deps]` 库默认线和 `default_exts` |
 | 选线 | `src/bind.rs` | 优先级、兼容校验、约束交集、生成上下文 |
 | 声明 | `src/recipe.rs` | 两阶段加载、契约校验、内置扩展事实、`--ext` 解析 |
 | 依赖 | `src/plan.rs` | 依赖边、拓扑序、成环检测 |

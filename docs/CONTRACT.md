@@ -111,9 +111,11 @@ PHP_LINES = {
 
 ```toml
 php = "8.5"
-openssl = "3.5"
 swoole = "6.2"
 xdebug = "3.5"
+
+[deps]
+openssl = "3.5"
 
 [default_exts]
 openssl = { features = ["argon2"] }
@@ -121,7 +123,11 @@ curl = { deps = { libcurl = ["ssl"] } }
 ```
 
 - `php` 必须和文件名一致。
-- 版本线的值只能是 catalog 里存在的线；没有写 `version:` 的扩展使用这里的默认线。
+- 顶层键只写**有独立版本线的扩展**（如 `swoole`、`xdebug`）；值只能是 catalog 里存在的线。
+  内置扩展（如 `openssl`、`curl`、`libxml`）没有自己的版本线，不能写在顶层。
+- `[deps]` 只写依赖库，key 必须是 `dep/*.star` 里的目标；值是该库在 catalog 里的线。
+  内置扩展的同名库版本写在这里，例如 `openssl = "3.5"` 指 OpenSSL 库，不是 PHP 的 openssl 扩展。
+- 同一个名字不能同时出现在顶层和 `[deps]`。
 - `[default_exts]` 是表，key 是扩展名；必须放在文件最后，否则后面的顶层键会被 TOML 归到这张表里。
 - 每个扩展支持三个键，都是可选的：
   - `link = "static" | "shared"`：不写时按内置/非内置推导。

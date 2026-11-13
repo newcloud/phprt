@@ -53,11 +53,59 @@ pub fn resolve(
         }
     }
 
-    for name in bundle.defaults.keys() {
-        if !catalog.components.contains_key(name) {
+    for (name, line) in &bundle.ext_lines {
+        let Some(meta) = ext_meta(metas, name) else {
+            bail!("bundle 里的 {name} 不是扩展");
+        };
+        if meta.lines.is_empty() {
+            if metas
+                .iter()
+                .any(|meta| meta.kind == Kind::Dep && meta.name == *name)
+            {
+                bail!(
+                    "bundle 里的 {name} 是内置扩展，没有自己的版本线；\
+                     依赖库 {name} 的默认线请写进 [deps]"
+                );
+            }
+            bail!("bundle 里的 {name} 是内置扩展，没有自己的版本线");
+        }
+        let Some(lines) = catalog.lines(name) else {
             bail!("bundle 里的 {name} 不在 catalog 中");
+        };
+        if !lines.contains_key(line) {
+            bail!(
+                "bundle 里的 {name} {line} 不在 catalog（可用：{}）",
+                lines.keys().cloned().collect::<Vec<_>>().join(", ")
+            );
         }
     }
+    for (name, line) in &bundle.dep_lines {
+        let is_dep = metas
+            .iter()
+            .any(|meta| meta.kind == Kind::Dep && meta.name == *name);
+        if !is_dep {
+            if ext_meta(metas, name).is_some() {
+                bail!("bundle [deps] 里的 {name} 是扩展，默认线请写在顶层");
+            }
+            bail!("bundle [deps] 里的 {name} 不是依赖库");
+        }
+        let Some(lines) = catalog.lines(name) else {
+            bail!("bundle [deps] 里的 {name} 不在 catalog 中");
+        };
+        if !lines.contains_key(line) {
+            bail!(
+                "bundle [deps] 里的 {name} {line} 不在 catalog（可用：{}）",
+                lines.keys().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+    for name in bundle.ext_lines.keys() {
+        if bundle.dep_lines.contains_key(name) {
+            bail!("bundle 里的 {name} 同时写在了顶层和 [deps]");
+        }
+    }
+    let mut defaults = bundle.ext_lines.clone();
+    defaults.extend(bundle.dep_lines.clone());
 
     // 2. 初始选择：pins > bundle > 唯一的线。
     let mut choices: BTreeMap<String, Choice> = BTreeMap::new();
@@ -68,7 +116,7 @@ pub fn resolve(
                 line: line.clone(),
                 source: Source::Pinned,
             })
-        } else if let Some(line) = bundle.defaults.get(name) {
+        } else if let Some(line) = defaults.get(name) {
             Some(Choice {
                 line: line.clone(),
                 source: Source::Bundle,
@@ -344,5 +392,43 @@ fn list(lines: &BTreeSet<String>) -> String {
         "无".to_owned()
     } else {
         lines.iter().cloned().collect::<Vec<_>>().join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn setup() -> (Catalog, Bundle, Vec<RecipeMeta>) {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        let metas = crate::recipe::load_meta(&dir, &catalog).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
+        (catalog, bundle, metas)
+    }
+
+    #[test]
+    fn builtin_extension_line_belongs_in_deps_table() {
+        let (catalog, mut bundle, metas) = setup();
+        bundle
+            .ext_lines
+            .insert("openssl".to_owned(), "3.5".to_owned());
+        let err = resolve(&catalog, &bundle, &metas, "8.5", &[], &BTreeMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("[deps]"), "{err}");
+    }
+
+    #[test]
+    fn dependency_line_must_not_name_an_extension() {
+        let (catalog, mut bundle, metas) = setup();
+        bundle
+            .dep_lines
+            .insert("swoole".to_owned(), "6.2".to_owned());
+        let err = resolve(&catalog, &bundle, &metas, "8.5", &[], &BTreeMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("是扩展"), "{err}");
     }
 }

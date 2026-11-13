@@ -12,7 +12,7 @@ phprt v3 的最小原型：**Starlark 写 recipe，Rust 做版本解析、求解
 版本和默认策略分成三层：
 
 ```text
-bundle       php8.5 默认用 swoole 6.2、openssl 3.5；默认启用 openssl + curl + libxml
+bundle       php8.5 扩展默认线 swoole 6.2，[deps] 里 openssl 库 3.5；默认启用 openssl + curl + libxml
 catalog      6.2 → 6.2.5 + 下载地址；3.5 → 3.5.9 + 下载地址
 recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
 ```

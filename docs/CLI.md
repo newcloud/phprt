@@ -166,7 +166,8 @@ phprt install 8.5 --ext swoole=link:shared,version:6.0,dep:libcurl[ssl]
 - `6.2` 会从 `recipes/catalog.toml` 查到当前最新补丁，如 `6.2.5`。
 - 不能写 `6.2.5`；补丁由 catalog 决定。
 - 写 `--ext swoole` 不写 `version:` 时，使用 bundle 默认线，如 php8.5 的 `6.2`。
-- `--ext curl=version:...` 会报错：curl 是 builtin，没有独立版本线。
+- `version:` 只作用于有独立版本线的扩展；`--ext openssl=version:4.0` 和
+  `--ext curl=version:...` 都会报错：内置扩展没有自己的版本线。
 
 依赖库的线用 `--dep`，它不会把扩展加入方案：
 
@@ -175,7 +176,11 @@ phprt install 8.5 --ext swoole --dep openssl=version:4.0
 phprt install 8.5 --ext swoole --dep openssl=4.0
 ```
 
-`--ext openssl=version:4.0` 是语法糖：安装 ext:openssl，同时绑定 `openssl` 依赖线。
+`--dep` 只接受 `dep/*.star` 里的依赖库；给内置扩展指库线时两个参数分开写：
+
+```bash
+phprt install 8.5 --ext openssl --dep openssl=4.0
+```
 
 ## ext list
 
@@ -260,10 +265,12 @@ phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl --dis
 | feature 写法不对 | `ext:openssl 的 feature: 后面必须写方括号，例如 feature:[argon2]` |
 | feature 的 PHP 条件不满足 | `ext:openssl 的 feature argon2 需要 PHP 8.5, 8.6，当前 PHP 8.4` |
 | feature 的依赖线条件不满足 | `ext:openssl 的 feature argon2 需要 dep:openssl 3.5, 4.0，当前 3.0` |
+| 内置扩展写版本线 | `ext:openssl 是内置扩展，没有自己的版本线；依赖库 openssl 的版本请用 --dep openssl=<线>` |
+| `--dep` 写了扩展名 | `--dep swoole 不是依赖库` |
 | 上游选项未处置 | `N 个上游选项还没处置：\n  ext:openssl --with-system-ciphers ...` |
 | 依赖没有这个 feature | `dep:libcurl 契约没有 feature brotli` |
 | 版本线不存在 | `「swoole」没有版本线 6.3（可用：4.8, 5.1, 6.0, 6.2）` |
-| 组件没有版本表 | `「curl」没有可选版本（catalog 里没有这个组件）` |
+| 组件没有版本表 | `「nope」没有可选版本（catalog 里没有这个组件）` |
 | 版本线不支持当前 PHP | `swoole 4.8 不支持 PHP 8.5（可用：6.2）` |
 | 显式 pin 冲突 | `openssl 3.5 与当前 PHP/扩展选择冲突（可用：1.1.1）` |
 | 禁用非默认扩展 | `--disable-default-ext swoole 不是 PHP 8.5 的默认扩展（默认：curl, libxml, openssl）` |
