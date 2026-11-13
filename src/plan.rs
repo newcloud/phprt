@@ -24,6 +24,8 @@ fn children(
         }
         Kind::Ext => {
             out.extend(t.needs.iter().map(|n| format!("dep:{n}")));
+            // 选中的 feature 可能额外需要一个依赖库（如 swoole 的 cares）。
+            out.extend(sel.feature_needs(t).into_iter().map(|n| format!("dep:{n}")));
             // 只有 shared 扩展需要 phpize / autoconf。
             if sel.mode_of(t)? == Mode::Shared {
                 out.extend(t.tools.iter().map(|n| format!("dep:{n}")));
@@ -207,6 +209,7 @@ mod tests {
             ini: String::new(),
             ini_lines: vec![],
             features: Default::default(),
+            ignored: Default::default(),
             configure: vec![],
             make: vec![],
             artifacts: vec![],
@@ -337,6 +340,28 @@ mod tests {
         let swoole = reg.ext("swoole").unwrap();
         let deps: Vec<&String> = sel.deps_of(swoole).map(|(name, _)| name).collect();
         assert_eq!(deps, vec!["libcurl"]);
+    }
+
+    #[test]
+    fn ext_feature_needs_join_the_build_order() {
+        let mut reg = fixture();
+        reg.targets.insert("dep:c-ares".into(), dep("c-ares", &[]));
+        reg.targets.get_mut("ext:swoole").unwrap().features.insert(
+            "cares".into(),
+            Feature {
+                needs: vec!["c-ares".into()],
+                ..Default::default()
+            },
+        );
+
+        let sel = selection(&reg, &["swoole=feature:[cares]"]);
+        let features = sel.features(&reg);
+        let order = ids(&resolve(&reg, "php:8.5.12", &sel, &features).unwrap());
+        assert!(pos(&order, "dep:c-ares") < pos(&order, "ext:swoole"));
+
+        let sel = selection(&reg, &["swoole=link:shared"]);
+        let order = ids(&resolve(&reg, "php:8.5.12", &sel, &BTreeMap::new()).unwrap());
+        assert!(!order.contains(&"dep:c-ares".to_owned()));
     }
 
     #[test]

@@ -229,3 +229,19 @@ xdebug       pecl      shared          3.5.3      available
 ```
 
 文件格式见 [STATE.md](STATE.md)。
+
+## 9. audit
+
+```text
+ext:openssl
+  source  build/php/php-8.5.12/ext/openssl
+  --with-openssl                     configure
+  --with-openssl-argon2              feature argon2
+  --with-openssl-legacy-provider     ignored: 会改变默认 TLS 行为，需要单独验证
+  feature argon2                   默认开  requires php 8.5/8.6，dep:openssl 3.5/4.0
+```
+
+- 每个扩展/依赖一个段落；`source` 是源码目录，`note` 说明为什么拿不到清单。
+- `--json` 输出 `{series, components[]}`；每个组件的 `options[]` 是
+  `{option, state, detail?}`，`state` 为 `configure` / `feature` / `ignored` / `missing`。
+- `features[]` 带 `default_on`（当前系列 bundle 是否默认开）和 `available`（requires 是否满足）。

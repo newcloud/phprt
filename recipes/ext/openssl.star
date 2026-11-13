@@ -28,6 +28,15 @@ def target(ctx):
                 "dep": {"openssl": ["3.5", "4.0"]},
             },
         ),
+        # 老证书、MD4/RC4/DES 这类遗留算法需要加载 legacy provider。
+        # 默认关：它会降低安全边界，只在对接旧系统时显式打开。
+        "legacy-provider": feature(
+            configure = ["--with-openssl-legacy-provider"],
+            requires = {
+                "php": ["8.5", "8.6"],
+                "dep": {"openssl": ["3.0", "3.5", "4.0"]},
+            },
+        ),
     }
 
     return ext(
@@ -40,6 +49,9 @@ def target(ctx):
         url = "" if builtin else self["url"],
         sha256 = "" if builtin else self["sha256"],
         features = features,
+        ignored = {
+            "--with-system-ciphers": "少用：依赖系统 cipher 配置，构建不可复现",
+        },
         configure = flags,
         shared_from = "ext/openssl",
         ini = "20-openssl.ini",

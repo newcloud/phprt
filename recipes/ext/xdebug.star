@@ -13,6 +13,11 @@ def target(ctx):
         modules = ["xdebug"],
         link = ["shared"],
         tools = ["autoconf"],
+        ignored = {
+            "--enable-xdebug": "phpize 默认编译该扩展，不需要显式开关",
+            "--enable-xdebug-dev": "调试用途：开发者构建开关",
+            "--with-xdebug-compression": "缺依赖（未排期）：zlib",
+        },
         version = ctx["php_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],
         sha256 = "" if builtin else self["sha256"],

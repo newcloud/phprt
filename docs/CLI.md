@@ -20,6 +20,7 @@ phprt [--recipes <目录>] [--root <目录>] [--php <系列>] [--ext <SPEC>] [--
 | `list` | 列出当前 PHP 系列下的 recipe | 否 |
 | `graph` | 按当前方案打印依赖边 | 否 |
 | `plan [目标] [--json]` | 求解并输出构建计划 | 否 |
+| `audit [--json]` | 对照上游选项清单检查 recipe 的处置 | 否 |
 | `install <PHP 版本> [--downloads]` | 下载、解压、编译并安装；必须指定 PHP | 默认是，`--downloads` 否 |
 | `update [--downloads]` | 在已记录的线内重新解析补丁并构建 | 默认是，`--downloads` 否 |
 | `ext list [--installed\|--pending]` | 列出扩展及版本 | 否 |
@@ -138,6 +139,21 @@ phprt plan --php 8.5 --disable-default-ext curl
 有依赖的内置扩展必须一起启用/禁用，例如 `libxml` 和 `xml`；phprt 不做依赖展开，
 漏写时 PHP configure 会报错。
 
+## audit
+
+`audit` 读已解压的上游源码，列出每个扩展/依赖的上游 configure 选项，以及 recipe 的处置：
+
+```bash
+phprt --php 8.5 audit
+phprt --php 8.5 audit --json
+```
+
+- 扩展选项三态：`configure`（固定）、`feature 名字`（暴露）、`ignored: 理由`（不暴露）。
+- 扩展有「未处理」或 `ignored` 写了上游不存在的选项 → 退出码 1。
+- 源码没解压 → 该组件算未审计，同样退出码 1，提示先安装一次。
+- 依赖库只给数量统计：库的选项大多由 recipe 固定，不要求全部做成 feature。
+- 详见 [FEATURES.md](FEATURES.md)。
+
 ## 版本线
 
 `--ext` 的 `version:` 选的是**版本线**，不是补丁号：
@@ -207,7 +223,8 @@ spec := 名字
 4. 裸名字使用默认值：内置扩展 → static，非内置扩展 → shared（origin 由 php recipe 的 `builtin_exts` 推导）。
 5. `dep:依赖` 打开这个依赖的集成：按 recipe 的 `dep_configure` 给扩展加参数，不向依赖传 feature。
 6. `dep:依赖[a,b]` 在打开集成的同时把 `a`、`b` 转给该依赖；feature 之间也可以用 `+`。
-7. `feature:[a,b]` 打开扩展自己的编译开关。必须带方括号；`feature:[[]]` 不合法，关闭全部 feature 写 `feature:[]`。
+7. `feature:[a,b]` 打开扩展自己的编译开关；开关可能在选中时额外引入一个依赖库
+   （如 `swoole=feature:[cares]` 会编 `c-ares`）。必须带方括号；`feature:[[]]` 不合法，关闭全部 feature 写 `feature:[]`。
 8. `feature:` 可以出现多次，取并集；跨列表重复的 feature 会去重。
 9. 条件 feature（如 `argon2`）在版本不满足时直接报错，并说明缺哪一条。
 10. `version:线` 指定扩展自己的版本线；依赖库用 `--dep`。
@@ -243,6 +260,7 @@ phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl
 | feature 写法不对 | `ext:openssl 的 feature: 后面必须写方括号，例如 feature:[argon2]` |
 | feature 的 PHP 条件不满足 | `ext:openssl 的 feature argon2 需要 PHP 8.5, 8.6，当前 PHP 8.4` |
 | feature 的依赖线条件不满足 | `ext:openssl 的 feature argon2 需要 dep:openssl 3.5, 4.0，当前 3.0` |
+| 上游选项未处置 | `N 个上游选项还没处置：\n  ext:openssl --with-system-ciphers ...` |
 | 依赖没有这个 feature | `dep:libcurl 契约没有 feature brotli` |
 | 版本线不存在 | `「swoole」没有版本线 6.3（可用：4.8, 5.1, 6.0, 6.2）` |
 | 组件没有版本表 | `「curl」没有可选版本（catalog 里没有这个组件）` |

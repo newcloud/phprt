@@ -1,3 +1,4 @@
+mod audit;
 mod bind;
 mod build;
 mod bundle;
@@ -83,6 +84,12 @@ enum Cmd {
     Update {
         #[command(flatten)]
         download: DownloadArgs,
+    },
+    /// 对照上游选项清单，检查 recipe 是否漏掉或静默忽略了开关
+    Audit {
+        /// 输出 JSON
+        #[arg(long)]
+        json: bool,
     },
     /// 扩展管理
     Ext {
@@ -400,6 +407,58 @@ fn run() -> Result<()> {
             project.save(&state_file)?;
             println!();
             println!("已写入 {}", state_file.display());
+        }
+        Cmd::Audit { json } => {
+            let names = scheme_names(&project, &raw_exts, None);
+            project.apply_scheme(&mut reg, &names)?;
+            let report = audit::run(
+                &reg,
+                &audit::Options {
+                    root: &cli.root,
+                    series: &series,
+                    bundle: &bundle,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", audit::text(&report));
+            }
+            let missing = report.missing();
+            let unaudited: Vec<String> = report
+                .components
+                .iter()
+                .filter(|component| component.is_ext && component.options.is_empty())
+                .map(|component| format!("{}（{}）", component.id, component.note))
+                .collect();
+            let stale: Vec<_> = report
+                .components
+                .iter()
+                .filter(|component| component.is_ext)
+                .flat_map(|component| {
+                    component
+                        .stale
+                        .iter()
+                        .map(move |(flag, _)| (component.id.clone(), flag.clone()))
+                })
+                .collect();
+            if !missing.is_empty() || !stale.is_empty() || !unaudited.is_empty() {
+                let mut lines = Vec::new();
+                for (component, row) in missing {
+                    lines.push(format!("{} {}", component.id, row.option));
+                }
+                for (id, flag) in stale {
+                    lines.push(format!("{id} {flag}（ignored 但上游没有这个选项）"));
+                }
+                lines.extend(unaudited);
+                bail!(
+                    "{} 项没有通过 audit：\n  {}\n\
+                     处置方式：写进 features，或用 ignored 写明不暴露的理由；\
+                     源码没解压的先安装一次",
+                    lines.len(),
+                    lines.join("\n  ")
+                );
+            }
         }
         Cmd::Ext { what } => match what {
             ExtCmd::List { installed, pending } => {

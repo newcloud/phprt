@@ -346,6 +346,7 @@ v3 把这两件事分别压到一条 catalog 记录和一行 bundle 记录。
 | 声明 | `src/recipe.rs` | 两阶段加载、契约校验、内置扩展事实、`--ext` 解析 |
 | 依赖 | `src/plan.rs` | 依赖边、拓扑序、成环检测 |
 | 输出 | `src/render.rs` | 占位符展开、文本与 JSON |
+| 选项盘点 | `src/audit.rs` | 读上游 config.m4 / configure --help，检查 recipe 的处置 |
 | 状态 | `src/state.rs` | 方案、显式线、feature 并集、写回 |
 | 路径 | `src/layout.rs` | 压缩包名、源码 stem、`build/<组件>/<补丁>` |
 | 清单 | `src/sources.rs` | 求解结果 → 下载/解压共用的 `Source` 列表 |
@@ -459,6 +460,7 @@ phprt install 8.5 --ext openssl --dep openssl=4.0
 | [DOWNLOAD.md](DOWNLOAD.md) | `--downloads`、缓存布局、镜像、分片与续传、进度输出 |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、ini、入口、验收 |
+| [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 
 ## 16. 验收
 

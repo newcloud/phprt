@@ -116,6 +116,9 @@ pub struct Target {
     pub ini_lines: Vec<String>,
     #[serde(default)]
     pub features: BTreeMap<String, Feature>,
+    /// 看过但决定不暴露的上游选项 -> 理由；只有 dep / ext 使用。
+    #[serde(default)]
+    pub ignored: BTreeMap<String, String>,
     #[serde(default)]
     pub configure: Vec<String>,
     #[serde(default)]
@@ -186,6 +189,7 @@ impl Target {
                         bail!("{at}: dep:{} 的 feature {name} 不允许 requires", self.name);
                     }
                 }
+                self.check_ignored(&at)?;
             }
             Kind::Ext => {
                 if self.modules.is_empty() {
@@ -273,12 +277,20 @@ impl Target {
                     if name.is_empty() {
                         bail!("{at}: ext:{} 的 features 里有空名字", self.name);
                     }
-                    if !f.needs.is_empty() || !f.disable.is_empty() {
+                    if !f.disable.is_empty() {
                         bail!(
-                            "{at}: ext:{} 的 feature {name} 只允许 configure/requires；\
-                             needs/disable 只用于 dep 的 feature",
+                            "{at}: ext:{} 的 feature {name} 只允许 needs/configure/requires；\
+                             disable 只用于 dep 的 feature",
                             self.name
                         );
+                    }
+                    for need in &f.needs {
+                        if need.is_empty() {
+                            bail!(
+                                "{at}: ext:{} 的 feature {name} 的 needs 里有空名字",
+                                self.name
+                            );
+                        }
                     }
                     for flag in &f.configure {
                         if flag.is_empty() {
@@ -350,8 +362,14 @@ impl Target {
                 if self.series.is_empty() {
                     bail!("{at}: php:{} 缺少 series", self.name);
                 }
-                if !self.dep_configure.is_empty() || !self.features.is_empty() {
-                    bail!("{at}: php:{} 不允许 dep_configure/features", self.name);
+                if !self.dep_configure.is_empty()
+                    || !self.features.is_empty()
+                    || !self.ignored.is_empty()
+                {
+                    bail!(
+                        "{at}: php:{} 不允许 dep_configure/features/ignored",
+                        self.name
+                    );
                 }
                 if self.version.is_empty() {
                     bail!("{at}: php:{} 缺少 version", self.name);
@@ -359,6 +377,27 @@ impl Target {
                 if self.url.is_empty() {
                     bail!("{at}: php:{} 缺少 url", self.name);
                 }
+            }
+        }
+        self.check_ignored(&at)?;
+        Ok(())
+    }
+
+    fn check_ignored(&self, at: &std::path::Display<'_>) -> Result<()> {
+        for (option, reason) in &self.ignored {
+            if !option.starts_with("--") {
+                bail!(
+                    "{at}: {}:{} 的 ignored key {option} 必须是 --enable-* / --with-* 形式的选项",
+                    self.kind.as_str(),
+                    self.name
+                );
+            }
+            if reason.trim().is_empty() {
+                bail!(
+                    "{at}: {}:{} 的 ignored[{option}] 需要写理由",
+                    self.kind.as_str(),
+                    self.name
+                );
             }
         }
         Ok(())
@@ -585,6 +624,20 @@ impl Selection {
         self.per_ext
             .get(&ext.name)
             .and_then(|s| s.features.as_ref())
+    }
+
+    /// 选中的扩展 feature 额外需要的依赖；没选中就返回空。
+    pub fn feature_needs<'a>(&'a self, ext: &'a Target) -> Vec<&'a String> {
+        let Some(selected) = self.features_of(ext) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for name in selected {
+            if let Some(def) = ext.features.get(name) {
+                out.extend(def.needs.iter());
+            }
+        }
+        out
     }
 
     /// 本次选择给各 dep 带来的 feature 并集。

@@ -19,6 +19,7 @@
 | --- | --- |
 | recipe 字段、ctx、LINES、catalog/bundle | `docs/CONTRACT.md` |
 | 新增/更新版本线、补丁号、catalog 下载地址、扩展默认规则 | `docs/ADD-RECIPE.md` |
+| 上游开关盘点、feature 取舍、默认值判据 | `docs/FEATURES.md` |
 | 子命令、`--php`、`--ext`、`--dep`、错误 | `docs/CLI.md` |
 | 选线、依赖线交集、依赖边、子功能传播 | `docs/SOLVER.md` |
 | 文本/JSON 输出、路径、字段 | `docs/OUTPUT.md` |
@@ -54,6 +55,11 @@
   ext recipe 不写 `origin`、`static_enable`、`static_disable`，用 `ctx["is_builtin"]`。
 - 默认启用集合写在 bundle 的 `[default_exts]` 表：`link` / `features` / `deps`，
   不允许 `version:`；有依赖的内置扩展必须一起写，不做依赖展开。
+- 新增或修改 ext / dep recipe 时，必须按 `docs/FEATURES.md` 盘点上游选项：
+  跑 `phprt audit`，把每个选项处置成 `configure` / `features` / `ignored`（含理由），
+  默认值按该文档的四条判据写进 bundle；`audit` 不通过不算做完。
+- 常用 / 有需求的开关要开发，不能一律记成 `ignored`：需要新库就加 dep recipe，
+  用 feature 的 `needs` 让它只在选中时引入。`ignored` 只留给少用、调试和缺依赖未排期的项。
 - 扩展自己的条件能力用 `requires` 声明，不写成 `target(ctx)` 里的 if：
   `feature(configure=[...], requires={"php": ["8.5","8.6"], "dep": {"openssl": ["3.5","4.0"]}})`。
   显式选择不满足时报错并说明是哪一条不满足；bundle 默认不满足时提示并丢弃。
@@ -67,6 +73,7 @@ cargo fmt --all
 cargo test --workspace
 cargo clippy --workspace --all-targets
 
+cargo run -- --php 8.5 audit                      # 上游开关必须全部处置
 cargo run -- install 8.5                          # 默认 openssl + curl(ssl) + PHP
 cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl  # 只装 PHP
 cargo run -- install 8.5 --ext swoole --ext xdebug

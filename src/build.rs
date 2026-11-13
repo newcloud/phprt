@@ -338,6 +338,9 @@ fn link_closure(
             for need in &target.needs {
                 walk_dep(reg, features, need, &mut out);
             }
+            for need in sel.feature_needs(target) {
+                walk_dep(reg, features, need, &mut out);
+            }
         }
         Kind::Php => {
             for name in &target.exts {
@@ -346,6 +349,9 @@ fn link_closure(
                     continue;
                 }
                 for need in &ext.needs {
+                    walk_dep(reg, features, need, &mut out);
+                }
+                for need in sel.feature_needs(ext) {
                     walk_dep(reg, features, need, &mut out);
                 }
             }

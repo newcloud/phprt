@@ -43,3 +43,7 @@
 
 [nghttp2]
 "1.64" = { version = "1.64.0", url = "https://github.com/nghttp2/nghttp2/releases/download/v1.64.0/nghttp2-1.64.0.tar.gz" }
+
+# c-ares 发布在 GitHub Releases；c-ares.org/download 指向同一批文件。
+[c-ares]
+"1.34" = { version = "1.34.9", url = "https://github.com/c-ares/c-ares/releases/download/v1.34.9/c-ares-1.34.9.tar.gz" }

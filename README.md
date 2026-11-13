@@ -34,6 +34,7 @@ cargo run -- install 8.5 --ext swoole    # swoole 6.2.5 + libcurl + openssl 3.5.
 cargo run -- install 8.5 --ext 'openssl=feature:[argon2]'   # 打开 argon2
 cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
 cargo run -- install 7.4 --ext swoole    # swoole 4.8.13 + openssl 1.1.1w
+cargo run -- --php 8.5 audit               # 检查上游开关是否都已处置
 cargo run -- --php 8.5 ext list           # 查看扩展和版本
 cargo run -- --php 8.5 ext add xdebug     # 加入方案（待安装）
 cargo run -- --php 8.5 install 8.5        # 装方案里的扩展
@@ -182,6 +183,8 @@ bundle 默认线不写进 `bindings`；显式 `version:` 会写入并保留。�
   不允许 `version:`；条件 feature 不满足时提示并丢弃。
 - `dep_configure` 的 key 必须在 `needs` 里；方括号里的 feature 必须在该 dep 的 `features` 里。
 - ext 的 `features` 只允许 `configure` / `requires`；`requires` 不满足时显式选择直接报错。
+- `audit` 对照上游选项清单：扩展有未处置的选项、或 `ignored` 写了不存在的选项时退出码 1；
+  处置规则和默认值判据见 [docs/FEATURES.md](docs/FEATURES.md)。
 - 下载缓存命中跳过；有 sha256 的文件按哈希判断，没有 sha256 时按远端大小判断。
 - `--downloads` 只下载，不解压、不编译、不写状态；下载、解压或编译失败都不写状态。
 - 解压目标 `build/<组件>/<补丁>/` 已存在时跳过。

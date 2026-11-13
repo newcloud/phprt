@@ -101,6 +101,14 @@ pub fn build(
         };
 
         let mut needs: Vec<String> = t.needs.iter().map(|n| format!("dep:{n}")).collect();
+        if t.kind == Kind::Ext {
+            for need in sel.feature_needs(t) {
+                let id = format!("dep:{need}");
+                if !needs.contains(&id) {
+                    needs.push(id);
+                }
+            }
+        }
         let tools: Vec<String> = t.tools.iter().map(|n| format!("dep:{n}")).collect();
         let mut enabled_features: Vec<String> = Vec::new();
 
@@ -639,6 +647,7 @@ mod tests {
             ini: String::new(),
             ini_lines: vec![],
             features: Default::default(),
+            ignored: Default::default(),
             configure: vec![],
             make: vec![],
             artifacts: vec![],

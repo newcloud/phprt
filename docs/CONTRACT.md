@@ -167,6 +167,7 @@ TARGET = target
 - `features` 由 ext 的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
   `disable` 参数（用来关掉上游的自动探测），没有 `disable` 就不传。
 - dep 的 feature 不允许写 `requires`。
+- `ignored` 是「看过但决定不暴露」的上游选项 -> 理由；`phprt audit` 会对照上游清单检查。
 
 ## 5. ext
 
@@ -220,9 +221,13 @@ TARGET = target
   }
   ```
 
-  - 只允许 `configure` / `requires`；`needs` / `disable` 只用于 dep 的 feature。
+  - 允许 `needs` / `configure` / `requires`；`disable` 只用于 dep 的 feature。
+  - `needs` 是**选中这个 feature 时**才加入构建顺序和链接闭包的依赖
+    （例：swoole 的 `cares` 需要 `c-ares`，不选就不编 c-ares）。
   - `requires.php` 是允许的 PHP 系列；`requires.dep` 是允许的依赖线，key 必须在 `needs` 里。
   - 显式选择不满足时报错；bundle 默认不满足时提示并丢弃。
+- `ignored` 记录看过但不暴露的上游选项，值为理由（不能为空）；`audit` 会对照上游清单
+  检查遗漏和拼写错误。取舍规则见 [FEATURES.md](FEATURES.md)。
 - 版本线通过 `LINES` / `PHP_LINES` 声明，不在 recipe 里写死。
 
 ## 6. php
@@ -271,6 +276,7 @@ TARGET = php(
 5. `tools` 指向的 `dep:*` 存在。
 6. `features.*.needs` 指向的 `dep:*` 存在。
 7. `dep_configure` 的 key 在 `needs` 里；ext 的 `features.*.requires.dep` 的 key 也在 `needs` 里。
+    `ignored` 只能出现在 dep / ext 上，key 是 `--...` 选项，理由非空。
 8. php 的 `builtin_exts` 非空、无重复；`builtin_disable` 的 key 是其子集，
    值是单个 `--without-*` / `--disable-*`。
 9. catalog 的 PHP 系列与 php recipe 集合一致。

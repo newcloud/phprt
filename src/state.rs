@@ -421,6 +421,7 @@ mod tests {
             ini: String::new(),
             ini_lines: vec![],
             features: Default::default(),
+            ignored: Default::default(),
             configure: vec![],
             make: vec![],
             artifacts: vec![],

@@ -16,8 +16,8 @@ def feature(needs = [], configure = [], disable = [], requires = {}):
     dep 的 feature：由 ext 的 dep:NAME[feature] 打开，needs 是它额外需要的库，
     disable 是 feature 未启用时应用的参数，用来显式关掉上游的自动探测。
 
-    ext 的 feature：由 --ext NAME=feature:[...] 打开，只写 configure；
-    它是扩展自己的编译开关，和依赖库无关。
+    ext 的 feature：由 --ext NAME=feature:[...] 打开，是扩展自己的编译开关。
+    ext 的 feature 也可以写 needs：只有选中它时才引入这个依赖（如 swoole 的 cares）。
 
     requires 只用于 ext 的 feature，声明可用条件：
 
@@ -43,6 +43,7 @@ def dep(
         sha256 = "",
         needs = [],
         features = {},
+        ignored = {},
         configure = [],
         make = ["make"],
         artifacts = [],
@@ -59,6 +60,7 @@ def dep(
         "sha256": sha256,
         "needs": needs,
         "features": features,
+        "ignored": ignored,
         "configure": configure,
         "make": make,
         "artifacts": artifacts,
@@ -75,6 +77,7 @@ def ext(
         tools = [],
         dep_configure = {},
         features = {},
+        ignored = {},
         configure = [],
         shared_from = "",
         url = "",
@@ -102,6 +105,8 @@ def ext(
     它的 key 必须是 needs 里的依赖。
 
     features 是扩展自己的开关：名字 -> feature(configure=[])。
+    ignored 是「看过但决定不暴露」的上游选项：选项 -> 理由。
+    两项都由 phprt audit 对照上游选项清单检查，避免漏掉或静默忽略。
     """
     return {
         "kind": "ext",
@@ -113,6 +118,7 @@ def ext(
         "tools": tools,
         "dep_configure": dep_configure,
         "features": features,
+        "ignored": ignored,
         "configure": configure,
         "shared_from": shared_from,
         "url": url,

@@ -107,6 +107,9 @@ BUILTIN_DISABLE = {
 - 只列 phprt 需要控制的内置扩展；`--enable-filter` 这类基础参数不放进表里。
 - 未适配的 PHP 系列先写最小 `builtin_exts` 和 `builtin_disable`，等适配时再补全。
 
+> 新增或修改 ext / dep recipe 前先读 [FEATURES.md](FEATURES.md)：
+> 上游选项要逐个处置，并决定是否默认开启。
+
 ### 6.2 ext recipe
 
 ext recipe 只写构建参数，不写 `origin`、`static_enable`、`static_disable`。是否内置由 `php<系列>.star` 的 `builtin_exts` 推导，通过 `ctx["is_builtin"]` 使用：
