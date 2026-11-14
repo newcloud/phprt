@@ -56,8 +56,10 @@ pub struct FeatureRow {
     pub flags: Vec<String>,
     /// 形如 `php 8.5/8.6，dep:openssl 3.5/4.0`；无条件下为空。
     pub requires: String,
-    /// 当前系列 bundle 里是否默认开启。
+    /// 当前系列 bundle 里是否默认安装时开启。
     pub default_on: bool,
+    /// 当前系列 bundle 里是否作为“选中扩展时”的预设开启。
+    pub preset_on: bool,
     /// 当前 PHP / 依赖线是否满足 requires。
     pub available: bool,
 }
@@ -151,9 +153,13 @@ pub fn run(reg: &Registry, opts: &Options<'_>) -> Result<Report> {
                 requires: describe_requires(def),
                 default_on: opts
                     .bundle
-                    .default_exts
-                    .get(&target.name)
-                    .map(|d| d.features.contains(name))
+                    .default_features(&target.name)
+                    .map(|features| features.contains(name))
+                    .unwrap_or(false),
+                preset_on: opts
+                    .bundle
+                    .preset_features(&target.name)
+                    .map(|features| features.contains(name))
                     .unwrap_or(false),
                 available: feature_available(reg, target, name).is_ok(),
             });
@@ -388,6 +394,9 @@ fn describe_requires(def: &crate::recipe::Feature) -> String {
     for (dep, lines) in &def.requires.dep {
         parts.push(format!("dep:{dep} {}", lines.join("/")));
     }
+    for command in &def.requires.commands {
+        parts.push(format!("命令 {command}"));
+    }
     parts.join("，")
 }
 
@@ -434,6 +443,8 @@ pub fn text(report: &Report) -> String {
                 "不可用"
             } else if feature.default_on {
                 "默认开"
+            } else if feature.preset_on {
+                "预设开"
             } else {
                 "未默认"
             };

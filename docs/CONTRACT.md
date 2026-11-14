@@ -79,9 +79,33 @@ PHP_LINES = {
 - value 里的线必须存在于 catalog 的同名组件（`ext:openssl` → `openssl`）。
 - 只在选中该扩展时参与约束。
 
+### 没有同名依赖的 builtin 扩展：`PHP_DEP_LINES`
+
+gd 这类内置扩展依赖多个不同名字的库，不能写 `PHP_LINES`。用 `PHP_DEP_LINES`
+按 PHP 系列列出每个依赖允许的线：
+
+```python
+# ext/gd.star
+PHP_DEP_LINES = {
+    "8.5": {
+        "zlib": ["1.3"],
+        "libpng": ["1.6"],
+        "jpeg": ["3.1"],
+        "webp": ["1.6"],
+        "aom": ["3.12"],
+        "avif": ["1.3"],
+        "freetype": ["2.13"],
+    },
+}
+```
+
+- key 是 catalog 里的 PHP 系列；**每个系列都要有入口**，新增 PHP 系列时漏写会加载失败。
+- 内层 key 必须是 `dep/*.star` 里的依赖名；允许的线必须存在于 catalog。
+- 只在选中该扩展时参与约束，和 `PHP_LINES` 一样进入依赖线交集。
+
 ### dep 不写 PHP 关系
 
-`dep` recipe 禁止声明 `LINES` / `PHP_LINES`。OpenSSL、libcurl、nghttp2
+`dep` recipe 禁止声明 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`。OpenSSL、libcurl、nghttp2
 与 PHP 没有直接关系；哪个 PHP 能用哪条 OpenSSL 线，由消费它的扩展决定。
 
 `target(ctx)` 只负责构建参数，不判断能不能配。
@@ -117,9 +141,16 @@ xdebug = "3.5"
 [deps]
 openssl = "3.5"
 
+# 扩展被选中时的默认 feature；不决定是否默认安装
+[ext_presets]
+gd = { features = ["jpeg", "webp", "freetype"] }
+
+# 默认启用的扩展；必须放在文件最后
 [default_exts]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
+# gd 默认安装时只引用预设，不重复 features
+# gd = { ref = "ext_presets.gd" }
 ```
 
 - `php` 必须和文件名一致。
@@ -128,15 +159,22 @@ curl = { deps = { libcurl = ["ssl"] } }
 - `[deps]` 只写依赖库，key 必须是 `dep/*.star` 里的目标；值是该库在 catalog 里的线。
   内置扩展的同名库版本写在这里，例如 `openssl = "3.5"` 指 OpenSSL 库，不是 PHP 的 openssl 扩展。
 - 同一个名字不能同时出现在顶层和 `[deps]`。
-- `[default_exts]` 是表，key 是扩展名；必须放在文件最后，否则后面的顶层键会被 TOML 归到这张表里。
-- 每个扩展支持三个键，都是可选的：
-  - `link = "static" | "shared"`：不写时按内置/非内置推导。
+- `[ext_presets]` 和 `[default_exts]` 都是表，key 是扩展名；`[default_exts]` 必须放在文件最后。
+- `[ext_presets]` 只在扩展被 `--ext` / `ext add` 选中时提供默认 `link` / `features` / `deps`，
+  **不会默认安装扩展**。
+- `[default_exts]` 决定默认安装集合。每个扩展支持：
+  - `ref = "ext_presets.<名字>"`：引用预设；后缀必须和扩展名一致。
+  - `link = "static" | "shared"`：不写时按内置/非内置推导；使用 ref 时仍可写 link 覆盖 preset。
   - `features = ["名字", ...]`：扩展自己的编译开关。
   - `deps = { 依赖名 = ["feature", ...] }`：转给依赖的 feature。
-- 不允许写 `version:`；`[default_exts]` 里的名字必须是当前 PHP 系列 `builtin_exts` 的子集，并且有 ext recipe。
+- 使用 `ref` 时不能再写本地 `features` / `deps`；需要不同配置时另建 preset。
+- 不写 `ref` 时只使用本地配置，不会隐式套同名 preset。
+- 不允许写 `version:`；`[default_exts]` / `[ext_presets]` 里的名字必须是当前 PHP 系列的 ext recipe。
 - 有依赖的内置扩展必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里
   （如 `curl = { deps = { libcurl = ["ssl"] } }`）；不做依赖展开或校验，漏写时 PHP configure 会报错。
 - 默认 feature 在当前 PHP / 依赖线下不可用时，提示并丢弃，不中断命令。
+- 选中扩展时的 feature 优先级：CLI 显式 `feature:[...]`（含 `[]`） > state >
+  `[ext_presets]` > 空。preset 只在扩展还没有 state 时生效，和默认集一样 materialize 一次。
 
 ## 4. dep
 
@@ -172,7 +210,22 @@ TARGET = target
 - 禁止 `exts` 和 `tools`。
 - `features` 由 ext 的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
   `disable` 参数（用来关掉上游的自动探测），没有 `disable` 就不传。
-- dep 的 feature 不允许写 `requires`。
+- dep 的 feature 允许写 `requires.commands`（宿主机命令）；不允许 `requires.php` /
+  `requires.dep`。例如 libjpeg 的 SIMD：
+
+  ```python
+  features = {
+      "simd": feature(
+          configure = ["-DWITH_SIMD=ON", "-DREQUIRE_SIMD=ON"],
+          disable = ["-DWITH_SIMD=OFF"],
+          requires = {"commands": ["nasm"]},
+      ),
+  }
+  ```
+
+- dep 的 `configure` 第一个元素是程序，其余是参数；CMake 依赖写
+  `configure=["cmake", "-S", "{build}", ...]`，`make` 用
+  `cmake --build {build} --parallel` / `cmake --install {build}`。
 - `ignored` 是「看过但决定不暴露」的上游选项 -> 理由；`phprt audit` 会对照上游清单检查。
 
 ## 5. ext
@@ -211,8 +264,18 @@ TARGET = target
 - 关闭参数不在 ext recipe 里，来自 php recipe 的 `builtin_disable`。
   同一个内置扩展只会出现 `--with-*` 或 `--without-*` 其中一组。
 - `dep_configure` 是“依赖名 → 选中 `dep:NAME` 时额外加给扩展的 configure 参数”：
-  - key 必须是 `needs` 里的依赖（声明必需依赖用 `needs`，不是这里）；
+  - key 必须是 `needs` 里的依赖，或某个 feature 的 `needs` 里的条件依赖；
   - 值为空列表表示“只允许转发 feature，不加参数”。
+
+  gd 的 jpeg 是条件依赖，所以可以写：
+
+  ```python
+  needs = ["libpng"]
+  dep_configure = {"jpeg": []}
+  features = {"jpeg": feature(needs=["jpeg"], configure=["--with-jpeg"])}
+  ```
+
+  这样 `--ext 'gd=feature:[jpeg],dep:jpeg[simd]'` 才能把 `simd` 转给 libjpeg。
 - `features` 是扩展自己的开关：
 
   ```python
@@ -230,11 +293,12 @@ TARGET = target
   - 允许 `needs` / `configure` / `requires`；`disable` 只用于 dep 的 feature。
   - `needs` 是**选中这个 feature 时**才加入构建顺序和链接闭包的依赖
     （例：swoole 的 `cares` 需要 `c-ares`，不选就不编 c-ares）。
-  - `requires.php` 是允许的 PHP 系列；`requires.dep` 是允许的依赖线，key 必须在 `needs` 里。
+  - `requires.php` 是允许的 PHP 系列；`requires.dep` 是允许的依赖线，key 必须在 `needs` 里；
+    `requires.commands` 是需要出现在 PATH 里的宿主机命令（如 `nasm`）。
   - 显式选择不满足时报错；bundle 默认不满足时提示并丢弃。
 - `ignored` 记录看过但不暴露的上游选项，值为理由（不能为空）；`audit` 会对照上游清单
   检查遗漏和拼写错误。取舍规则见 [FEATURES.md](FEATURES.md)。
-- 版本线通过 `LINES` / `PHP_LINES` 声明，不在 recipe 里写死。
+- 版本线通过 `LINES` / `PHP_LINES` / `PHP_DEP_LINES` 声明，不在 recipe 里写死。
 
 ## 6. php
 
@@ -281,12 +345,18 @@ TARGET = php(
 4. `needs` 指向的 `dep:*` 存在。
 5. `tools` 指向的 `dep:*` 存在。
 6. `features.*.needs` 指向的 `dep:*` 存在。
-7. `dep_configure` 的 key 在 `needs` 里；ext 的 `features.*.requires.dep` 的 key 也在 `needs` 里。
-    `ignored` 只能出现在 dep / ext 上，key 是 `--...` 选项，理由非空。
+7. `dep_configure` 的 key 在 `needs` 或某个 feature 的 `needs` 里；ext 的
+    `features.*.requires.dep` 的 key 也在 `needs` 里。`requires.commands` 每项非空；
+    dep 的 feature 只允许 `commands` 条件。`ignored` 只能出现在 dep / ext 上，
+    key 是 `--...` 选项，理由非空。
 8. php 的 `builtin_exts` 非空、无重复；`builtin_disable` 的 key 是其子集，
    值是单个 `--without-*` / `--disable-*`。
 9. catalog 的 PHP 系列与 php recipe 集合一致。
 10. catalog 里每个组件都有同名 recipe；扩展声明 `LINES` 时线集合必须一致。
 11. `LINES` 的每条线都有非空 `php` 数组。
-12. dep recipe 不声明 `LINES` / `PHP_LINES`。
+12. dep recipe 不声明 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`。
 13. `PHP_LINES` 覆盖所有 PHP 系列，引用的线都在 catalog 里。
+14. `PHP_DEP_LINES` 只用于 ext，覆盖所有 PHP 系列；内层名字是 dep recipe，引用的线都在 catalog 里。
+15. 既不是当前 PHP 内置扩展、也没有 catalog 记录的 ext recipe 不加载；例如 gd 只在 8.5 出现。
+16. `[ext_presets]` 自己不能写 `ref`；`[default_exts]` 的 `ref` 必须是
+    `"ext_presets.<同名扩展>"`，指向存在的 preset，且不能和本地 `features`/`deps` 同时写。

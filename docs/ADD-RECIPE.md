@@ -8,7 +8,7 @@
 | 改什么 | 动哪些文件 |
 | --- | --- |
 | 升补丁号、换下载地址 | `recipes/catalog.toml` |
-| 新增版本线 | `recipes/catalog.toml` + 消费方的 `LINES` / `PHP_LINES`，必要时 `recipes/bundles/php<系列>.toml` |
+| 新增版本线 | `recipes/catalog.toml` + 消费方的 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`，必要时 `recipes/bundles/php<系列>.toml` |
 | 换默认线 | `recipes/bundles/php<系列>.toml` |
 | 新增扩展 / 改构建参数 | `recipes/ext/<名字>.star` |
 | 新增内置扩展事实 | `recipes/php<系列>.star` 的 `builtin_exts` / `builtin_disable` |
@@ -79,7 +79,8 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 除 catalog 外，还要同步：
 
 - 有自己版本线的扩展：`recipes/ext/<名字>.star` 的 `LINES`，线集合必须和 catalog 一致
-- builtin 扩展：`recipes/ext/<名字>.star` 的 `PHP_LINES`
+- builtin 扩展：`recipes/ext/<名字>.star` 的 `PHP_LINES`（同名依赖）或
+  `PHP_DEP_LINES`（不同名依赖，如 gd 的 libpng/jpeg）
 - 默认线变化：`recipes/bundles/php<系列>.toml`
 - 新增 PHP 系列：`recipes/php<系列>.star` + `recipes/bundles/php<系列>.toml` + catalog `[php]`
 
@@ -134,10 +135,13 @@ def target(ctx):
 - `configure` 同时用于 PHP static 和扩展自己的 shared 构建。
 - 正向参数写在 ext；负向参数来自 php 版本的 `builtin_disable`。
 - 内置扩展支持 shared 时必须有 `shared_from`；非内置必须有 catalog 的 url/version。
-- 依赖的集成参数写 `dep_configure`，key 是 `needs` 里的依赖名：
+- 依赖的集成参数写 `dep_configure`，key 是 `needs` 里的依赖名，或某个 feature 的
+  `needs` 里的条件依赖：
 
   ```python
   dep_configure = {"libcurl": ["--enable-swoole-curl"]},
+  # gd 的 jpeg 由 feature 条件引入
+  dep_configure = {"jpeg": []},
   ```
 
 - 扩展自己的开关写 `features`；有条件的能力用 `requires` 声明，不要写成
@@ -157,11 +161,45 @@ def target(ctx):
 
   显式选择不满足时报错并说明缺哪条；bundle 默认不满足时提示并丢弃。
 
+- 需要宿主机命令的 feature 用 `requires.commands`，不要塞进 `needs`（`needs` 只认 dep recipe）：
+
+  ```python
+  features = {
+      "simd": feature(
+          configure = ["-DWITH_SIMD=ON", "-DREQUIRE_SIMD=ON"],
+          disable = ["-DWITH_SIMD=OFF"],
+          requires = {"commands": ["nasm"]},
+      ),
+  }
+  ```
+
+- CMake 依赖的 `configure` 第一个元素是程序：
+
+  ```python
+  configure = ["cmake", "-S", "{build}", "-B", "{build}",
+               "-DCMAKE_INSTALL_PREFIX={prefix}", ...]
+  make = ["cmake --build {build} --parallel", "cmake --install {build}"]
+  ```
+
+- builtin 扩展依赖多个不同名字的库时，用 `PHP_DEP_LINES`，不要写 `PHP_LINES`：
+
+  ```python
+  PHP_DEP_LINES = {
+      "8.5": {"libpng": ["1.6"], "jpeg": ["3.1"], "webp": ["1.6"],
+              "avif": ["1.3"], "freetype": ["2.13"]},
+  }
+  ```
+
+  每个 PHP 系列都必须有入口；新增 PHP 系列时漏写会直接加载失败。
+
 ### 6.3 默认启用
 
 默认集合写在 `recipes/bundles/php<系列>.toml` 的 `[default_exts]` 表：
 
 ```toml
+[ext_presets]
+gd = { features = ["jpeg", "webp", "freetype"] }
+
 [default_exts]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
@@ -170,8 +208,18 @@ libxml = {}
 
 规则：
 
+- `[ext_presets]` 提供“扩展被选中时”的默认配置，不决定是否默认安装。
+- `[default_exts]` 决定默认安装集合，必须放在文件最后。
+- `[default_exts]` 可以用 `ref = "ext_presets.<同名扩展>"` 引用预设：
+
+  ```toml
+  [default_exts]
+  gd = { ref = "ext_presets.gd" }
+  ```
+
+  使用 `ref` 时不能再写本地 `features`/`deps`；`link` 可以本地覆盖。
+- 不写 `ref` 时只使用本地配置，不会隐式套同名 preset。
 - key 是扩展名；每个扩展可写 `link` / `features` / `deps`，都不允许 `version:`。
-- 表必须放文件最后，否则后面的顶层键会被 TOML 归到这张表里。
 - 只有 `builtin_exts` 里的扩展、并且已有 ext recipe，才能进 `default_exts`。
 - 有依赖的内置扩展必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里，例如：
 
@@ -197,6 +245,16 @@ xdebug = "3.5"
 
 [deps]
 openssl = "3.5"
+zlib = "1.3"
+libpng = "1.6"
+jpeg = "3.1"
+webp = "1.6"
+aom = "3.12"
+avif = "1.3"
+freetype = "2.13"
+
+[ext_presets]
+gd = { features = ["jpeg", "webp", "freetype"] }
 
 [default_exts]
 openssl = { features = ["argon2"] }
@@ -205,8 +263,9 @@ libxml = {}
 ```
 
 顶层是扩展默认线，`[deps]` 是依赖库默认线；内置扩展没有版本线，不能写顶层。
-`swoole` / `xdebug` 不在默认集里，需要 `--ext` 显式选择。
-默认集只在第一次写 state 时落盘；已有项目要开 argon2 就显式传
+`swoole` / `xdebug` / `gd` 不在默认集里，需要 `--ext` 显式选择；gd 选中时
+自动使用 `[ext_presets].gd`，不需要再写 `feature:[...]`。
+默认集和 preset 都只在第一次写 state 时落盘；已有项目要开 argon2 就显式传
 `--ext 'openssl=feature:[argon2]'`。
 
 ## 7. 验收

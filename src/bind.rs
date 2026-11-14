@@ -215,6 +215,20 @@ pub fn resolve(
                 .or_default()
                 .push(allowed.clone());
         }
+        if !meta.php_dep_lines.is_empty() {
+            let Some(deps) = meta.php_dep_lines.get(php_series) else {
+                bail!("ext:{ext_name} 没有声明 PHP {php_series} 的依赖兼容线");
+            };
+            for (dep, allowed) in deps {
+                if !catalog.components.contains_key(dep) {
+                    bail!("ext:{ext_name} 的 PHP_DEP_LINES 引用了 catalog 没有的 {dep}");
+                }
+                constraints
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(allowed.clone());
+            }
+        }
         if meta.lines.is_empty() {
             continue;
         }

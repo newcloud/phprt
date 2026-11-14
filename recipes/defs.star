@@ -19,11 +19,12 @@ def feature(needs = [], configure = [], disable = [], requires = {}):
     ext 的 feature：由 --ext NAME=feature:[...] 打开，是扩展自己的编译开关。
     ext 的 feature 也可以写 needs：只有选中它时才引入这个依赖（如 swoole 的 cares）。
 
-    requires 只用于 ext 的 feature，声明可用条件：
+    requires 声明可用条件：
 
         requires = {
-            "php": ["8.5", "8.6"],              # 允许的 PHP 系列
-            "dep": {"openssl": ["3.5", "4.0"]},  # 允许的依赖线
+            "php": ["8.5", "8.6"],              # 允许的 PHP 系列（只用于 ext feature）
+            "dep": {"openssl": ["3.5", "4.0"]},  # 允许的依赖线（只用于 ext feature）
+            "commands": ["nasm"],               # 需要出现在 PATH 里的命令
         }
 
     显式选择不满足时报错；bundle 默认不满足时提示并丢弃。

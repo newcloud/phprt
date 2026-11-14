@@ -6,6 +6,18 @@ xdebug = "3.5"
 # 依赖库的默认版本线，按 dep recipe 的名字索引。
 [deps]
 openssl = "3.5"
+zlib = "1.3"
+libpng = "1.6"
+jpeg = "3.1"
+webp = "1.6"
+aom = "3.12"
+avif = "1.3"
+freetype = "2.13"
+
+# 扩展被选中时的默认 feature / 依赖功能；不决定是否默认安装。
+# --ext gd 或 ext add gd 时使用这里的配置。
+[ext_presets]
+gd = { features = ["jpeg", "webp", "freetype"] }
 
 # 默认启用的扩展。
 #
@@ -13,6 +25,10 @@ openssl = "3.5"
 # 需要某个依赖的功能时，deps 必须和扩展一起写，例如
 #   curl = { deps = { libcurl = ["ssl"] } }
 # 不写代码做依赖推导，漏写时 PHP configure 会报错。
+#
+# 默认项也可以用 ref 引用 [ext_presets]；ref 只接受
+# "ext_presets.<同名扩展>"，不能和 features/deps 同时写。例如：
+#   gd = { ref = "ext_presets.gd" }
 #
 # 这张表必须放在文件最后：TOML 里表头之后的裸键都属于这个表。
 [default_exts]

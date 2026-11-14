@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::recipe::{Kind, Mode, Registry, Selection, Target};
+use crate::recipe::{ExtSpec, Kind, Mode, Registry, Selection, Target};
 
 pub fn state_path(root: &Path, series: &str) -> PathBuf {
     root.join(".phprt")
@@ -163,6 +163,9 @@ impl ProjectState {
                 if !target.features.contains_key(f) {
                     bail!("state.json 里 dep:{name} 没有 feature {f}");
                 }
+                if let Err(err) = crate::recipe::feature_available(reg, target, f) {
+                    bail!("state.json 里 {err}；装上缺少的命令，或修改 state.json");
+                }
             }
         }
         Ok(())
@@ -205,6 +208,7 @@ impl ProjectState {
         &self,
         reg: &Registry,
         cli: &Selection,
+        presets: &Selection,
         names: &[String],
     ) -> Result<Selection> {
         let mut out = Selection::default();
@@ -227,26 +231,60 @@ impl ProjectState {
                 if spec.features.is_none() {
                     spec.features = Some(state.features.iter().cloned().collect());
                 }
+            } else if let Some(preset) = presets.per_ext.get(name) {
+                // 首次选择这个扩展：CLI 没写的 feature/link 用 preset 补齐。
+                let explicit_deps: BTreeSet<String> = spec.deps.keys().cloned().collect();
+                if spec.link.is_none() {
+                    spec.link = preset.link;
+                }
+                if spec.features.is_none() {
+                    spec.features = preset.features.clone();
+                }
+                for (dep, feats) in &preset.deps {
+                    if explicit_deps.contains(dep) {
+                        continue;
+                    }
+                    let entry = spec.deps.entry(dep.clone()).or_default();
+                    for f in feats {
+                        if !entry.contains(f) {
+                            entry.push(f.clone());
+                        }
+                    }
+                }
             }
             out.per_ext.insert(name.clone(), spec);
         }
         Ok(out)
     }
 
-    pub fn add_ext(&mut self, reg: &Registry, name: &str) -> Result<bool> {
+    pub fn add_ext_with_preset(
+        &mut self,
+        reg: &Registry,
+        name: &str,
+        preset: Option<&ExtSpec>,
+    ) -> Result<bool> {
         if self.ext.contains_key(name) {
             return Ok(false);
         }
         let ext = reg.ext(name)?;
+        let link = match preset.and_then(|spec| spec.link) {
+            Some(mode) => mode.as_str().to_owned(),
+            None => ext.default_mode()?.as_str().to_owned(),
+        };
+        let deps = preset.map(|spec| spec.deps.clone()).unwrap_or_default();
+        let features = preset
+            .and_then(|spec| spec.features.clone())
+            .map(|features| features.into_iter().collect())
+            .unwrap_or_default();
         self.ext.insert(
             name.to_owned(),
             ExtState {
                 line: String::new(),
                 version: String::new(),
-                link: ext.default_mode()?.as_str().to_owned(),
+                link,
                 installed: false,
-                deps: BTreeMap::new(),
-                features: Vec::new(),
+                deps,
+                features,
             },
         );
         self.active = true;
@@ -487,8 +525,8 @@ mod tests {
     fn effective_selection_carries_state_deps() {
         let reg = registry();
         let mut state = ProjectState::default();
-        state.add_ext(&reg, "curl").unwrap();
-        state.add_ext(&reg, "swoole").unwrap();
+        state.add_ext_with_preset(&reg, "curl", None).unwrap();
+        state.add_ext_with_preset(&reg, "swoole", None).unwrap();
         state
             .ext
             .get_mut("curl")
@@ -497,7 +535,9 @@ mod tests {
             .insert("libcurl".into(), vec!["nghttp2".into()]);
         let cli = Selection::default();
         let names = state.scheme_with(&[]);
-        let sel = state.effective_selection(&reg, &cli, &names).unwrap();
+        let sel = state
+            .effective_selection(&reg, &cli, &Selection::default(), &names)
+            .unwrap();
         assert_eq!(names, vec!["curl", "swoole"]);
         assert_eq!(sel.features(&reg)["libcurl"], vec!["nghttp2"]);
         assert_eq!(
@@ -507,11 +547,55 @@ mod tests {
     }
 
     #[test]
+    fn preset_applies_only_without_existing_state() {
+        let reg = registry();
+        let mut presets = Selection::default();
+        presets.per_ext.insert(
+            "curl".into(),
+            ExtSpec {
+                link: Some(Mode::Shared),
+                features: Some(BTreeSet::from(["ssl".into()])),
+                deps: BTreeMap::from([("libcurl".into(), vec!["ssl".into()])]),
+                ..Default::default()
+            },
+        );
+        let names = vec!["curl".to_owned()];
+
+        let state = ProjectState::default();
+        let sel = state
+            .effective_selection(&reg, &Selection::default(), &presets, &names)
+            .unwrap();
+        assert_eq!(
+            sel.features_of(reg.ext("curl").unwrap()),
+            Some(&BTreeSet::from(["ssl".to_owned()]))
+        );
+        assert_eq!(sel.deps_of(reg.ext("curl").unwrap()).count(), 1);
+        assert_eq!(sel.mode_of(reg.ext("curl").unwrap()).unwrap(), Mode::Shared);
+
+        let mut state = ProjectState::default();
+        state
+            .add_ext_with_preset(&reg, "curl", presets.per_ext.get("curl"))
+            .unwrap();
+        assert_eq!(state.ext["curl"].features, vec!["ssl"]);
+        assert_eq!(state.ext["curl"].deps["libcurl"], vec!["ssl"]);
+
+        // 已有 state（即使 feature 为空）优先，不再套 preset。
+        state.ext.get_mut("curl").unwrap().features.clear();
+        let sel = state
+            .effective_selection(&reg, &Selection::default(), &presets, &names)
+            .unwrap();
+        assert_eq!(
+            sel.features_of(reg.ext("curl").unwrap()),
+            Some(&BTreeSet::new())
+        );
+    }
+
+    #[test]
     fn status_reflects_installed_flag() {
         let reg = registry();
         let mut state = ProjectState::default();
         assert_eq!(state.ext_status("curl"), "available");
-        state.add_ext(&reg, "curl").unwrap();
+        state.add_ext_with_preset(&reg, "curl", None).unwrap();
         assert_eq!(state.ext_status("curl"), "pending");
         state.set_installed_all();
         assert_eq!(state.ext_status("curl"), "installed");

@@ -9,13 +9,14 @@
 
 ```text
 php 系列         install 的位置参数 / --php / 唯一 state
-bundle           该系列扩展默认线 + [deps] 依赖库默认线 + default_exts
+bundle           该系列扩展默认线 + [deps] 依赖库默认线 + ext_presets + default_exts
 CLI --ext version: / --dep
 state.bindings   之前显式保存的线
 catalog          每条线的最新补丁
-recipe LINES     扩展自己的线支持的 PHP、依赖约束
-recipe PHP_LINES builtin 扩展对同名依赖库的 PHP 约束
-php recipe       builtin_exts / builtin_disable：该版本的内置扩展事实
+recipe LINES         扩展自己的线支持的 PHP、依赖约束
+recipe PHP_LINES     builtin 扩展对同名依赖库的 PHP 约束
+recipe PHP_DEP_LINES builtin 扩展对不同名依赖库的 PHP 约束（如 gd）
+php recipe           builtin_exts / builtin_disable：该版本的内置扩展事实
 ```
 
 优先级：
@@ -54,6 +55,21 @@ LINES = {
 # ext/openssl.star
 PHP_LINES = {
     "8.5": ["1.1.1", "3.0", "3.5", "4.0"],
+}
+```
+
+3. builtin 扩展对不同名依赖的 `PHP_DEP_LINES`：
+
+```python
+# ext/gd.star
+PHP_DEP_LINES = {
+    "8.5": {
+        "libpng": ["1.6"],
+        "jpeg": ["3.1"],
+        "webp": ["1.6"],
+        "avif": ["1.3"],
+        "freetype": ["2.13"],
+    },
 }
 ```
 
@@ -125,8 +141,12 @@ self = 当前 recipe 同名组件的记录
 
 - `default_exts` 是 TOML 表：`link` / `features` / `deps`，不允许 `version:`。
 - 默认扩展必须是当前 PHP 系列 `builtin_exts` 的子集，并且有 ext recipe。
-- 首次 install / ext add / ext remove 会把默认集 materialize 到 state；
-  已有 state 不随 `default_exts` 变化。
+- `default_exts` 可用 `ref = "ext_presets.<同名扩展>"` 引用 `[ext_presets]`；
+  写 ref 时不能再写本地 `features` / `deps`，`link` 仍可本地覆盖。
+- `[ext_presets]` 只给被选中的扩展提供默认配置，不加入默认方案。
+- 选中扩展时的优先级：CLI 显式 `feature:[...]`（含 `[]`） > state > preset > 空。
+- 首次 install / ext add / ext remove 会把默认集和 preset materialize 到 state；
+  已有 state 不随 `default_exts` / `ext_presets` 变化。
 - 不做依赖展开：有依赖的内置扩展要在 `default_exts` 里一起写。
 - 条件 feature 在当前 PHP / 依赖线下不可用时提示并丢弃；显式 `--ext` 选择才报错。
 

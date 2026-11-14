@@ -48,7 +48,7 @@ php8.5.star
 
 ```text
 catalog.toml             组件 + 线  →  当前最新补丁 / url / sha256
-bundles/php<系列>.toml    某个 PHP 系列的默认版本线 + 默认启用扩展
+bundles/php<系列>.toml    某个 PHP 系列的默认版本线 + 扩展预设 + 默认启用扩展
 recipes/**.star          每条线支持哪些 PHP / 依赖、怎么构建，以及 PHP 版本事实
 CLI + state              本次覆盖哪条线 / 哪些扩展，以及要保留哪些显式选择
 ```
@@ -197,6 +197,8 @@ allowed = catalog 里该库的所有线
 - 无 state 时方案 = bundle `default_exts` - `--disable-default-ext` + `--ext`；
   有 state 时以 `state.ext` 为准，再应用禁用和 `--ext`。
 - `[default_exts]` 是 TOML 表（`link` / `features` / `deps`）；有依赖的内置扩展必须一起写，不做依赖展开。
+- `[ext_presets]` 只给被选中的扩展补默认 feature，不改变默认安装集合；
+  `default_exts` 可用 `ref = "ext_presets.<同名扩展>"` 复用 preset。
 
 ### 5.6 下载源码
 
@@ -261,7 +263,8 @@ dep → 静态扩展（只贡献 PHP 参数） → php → 共享扩展 → 运�
 
 状态按 PHP 系列存放：`.phprt/php-<系列>/state.json`。补丁升级不丢方案，安装树
 仍然按补丁版本命名。首次写 state 时把当前系列的 `default_exts` materialize 进去；
-之后 bundle 默认集变化不再影响已有项目。
+被 `--ext` / `ext add` 新选中的扩展则把 `ext_presets` materialize 进去。之后 bundle
+默认集和 preset 变化不再影响已有项目。
 
 | 内容 | 作用 |
 | --- | --- |
@@ -341,7 +344,7 @@ v3 把这两件事分别压到一条 catalog 记录和一行 bundle 记录。
 | --- | --- | --- |
 | 入口 | `src/main.rs` | 命令 → PHP 系列 → 串接其余角色、退出码 |
 | 版本库 | `src/catalog.rs` | 线/补丁查询、PHP 系列解析 |
-| 默认线 / 默认集 | `src/bundle.rs` | 读取扩展默认线、`[deps]` 库默认线和 `default_exts` |
+| 默认线 / 默认集 | `src/bundle.rs` | 读取扩展默认线、`[deps]` 库默认线、`ext_presets` 和 `default_exts` |
 | 选线 | `src/bind.rs` | 优先级、兼容校验、约束交集、生成上下文 |
 | 声明 | `src/recipe.rs` | 两阶段加载、契约校验、内置扩展事实、`--ext` 解析 |
 | 依赖 | `src/plan.rs` | 依赖边、拓扑序、成环检测 |
@@ -474,6 +477,10 @@ cargo run -- install 8.5                                  # 默认 openssl + cur
 cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
 cargo run -- install 8.5 --ext swoole --ext xdebug        # 加上两个 PECL 扩展
 cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
+cargo run -- install 8.5 --ext gd
+cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'
+cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'
+./myphp -r 'var_export(gd_info());'
 cargo run -- install 8.5 --ext openssl --dep openssl=4.0  # openssl 4.0.0
 cargo run -- install 7.4 --ext openssl --dep openssl=3.5  # 必须失败
 cargo run -- install 8.2 --ext swoole=version:4.8         # 提示自动改用 1.1.1
@@ -490,9 +497,11 @@ cargo run -- install 8.5 --ext swoole --offline               # 下载+解压+�
 `rm -rf .phprt build` 开始，避免上一条的扩展方案、`bindings` 和解压目录影响下一条。
 `--downloads` 只下载，不写 state；需要网络时直连失败会自动换镜像。
 
-测试覆盖：所有 PHP 系列的默认线、bundle `default_exts`、两次 materialize 语义、
+测试覆盖：所有 PHP 系列的默认线、bundle `default_exts` / `ext_presets` / `ref`、
+两次 materialize 语义、
 内置扩展事实与 `builtin_disable`、`--disable-default-ext` 冲突/范围、软默认自动切换、
-硬选择冲突、版本线不支持 PHP、builtin 扩展的 `PHP_LINES`、dep 不允许声明 PHP 关系、
+硬选择冲突、版本线不支持 PHP、builtin 扩展的 `PHP_LINES` / `PHP_DEP_LINES`、
+dep 不允许声明 PHP 关系、feature 的 `requires.commands`、只有 8.5 加载 gd、
 `--ext` 的 version 预解析、
 catalog PHP 版本解析、下载的 Range 分片/续传/镜像顺序/重试/校验，以及原有的
 依赖闭包/拓扑/契约测试，解压的四种格式、顶层提平、PECL 包提平、跳过、越界拒绝和

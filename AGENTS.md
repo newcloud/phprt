@@ -50,12 +50,15 @@
 - 填 catalog 前先按 `docs/ADD-RECIPE.md` 判断下载地址是否跳转：跨站点跳转写跳转后的
   最终地址并注释说明；同一发布方的临时签名跳转写稳定发布地址。
 - dep recipe 不写 PHP 关系；PHP 与库版本的对应写在消费扩展里。
-- 有自己版本线的扩展用 `LINES`；builtin 扩展用 `PHP_LINES` 约束同名依赖库。
+- 有自己版本线的扩展用 `LINES`；builtin 扩展用 `PHP_LINES` 约束同名依赖库，
+  用 `PHP_DEP_LINES` 约束不同名依赖（如 gd 的 libpng/jpeg）。
 - `target(ctx)` 只写构建参数，不判断兼容性。
 - 是否内置、内置扩展的关闭参数写在 `php<系列>.star` 的 `builtin_exts` / `builtin_disable`；
   ext recipe 不写 `origin`、`static_enable`、`static_disable`，用 `ctx["is_builtin"]`。
 - 默认启用集合写在 bundle 的 `[default_exts]` 表：`link` / `features` / `deps`，
   不允许 `version:`；有依赖的内置扩展必须一起写，不做依赖展开。
+- 扩展被选中时的默认 feature 写在 `[ext_presets]`；`[default_exts]` 用
+  `ref = "ext_presets.<同名扩展>"` 引用，写 ref 时不再重复 features/deps。
 - 新增或修改 ext / dep recipe 时，必须按 `docs/FEATURES.md` 盘点上游选项：
   跑 `phprt audit`，把每个选项处置成 `configure` / `features` / `ignored`（含理由），
   默认值按该文档的四条判据写进 bundle；`audit` 不通过不算做完。
@@ -64,7 +67,8 @@
 - 扩展自己的条件能力用 `requires` 声明，不写成 `target(ctx)` 里的 if：
   `feature(configure=[...], requires={"php": ["8.5","8.6"], "dep": {"openssl": ["3.5","4.0"]}})`。
   显式选择不满足时报错并说明是哪一条不满足；bundle 默认不满足时提示并丢弃。
-- 新增/删除版本线时同步改 catalog、扩展 recipe 的 `LINES`/`PHP_LINES`，必要时改 bundle。
+- 新增/删除版本线时同步改 catalog、扩展 recipe 的 `LINES`/`PHP_LINES`/`PHP_DEP_LINES`，
+  必要时改 bundle。
 - 每个 PHP 系列必须有对应的 `bundles/php<系列>.toml` 和 `php<系列>.star`。
 
 ## 5. 验收
@@ -79,6 +83,10 @@ cargo run -- install 8.5                          # 默认 openssl + curl(ssl) +
 cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
 cargo run -- install 8.5 --ext swoole --ext xdebug
 cargo run -- install 8.5 --ext swoole             # bundle: swoole 6.2
+cargo run -- install 8.5 --ext gd                 # 使用 [ext_presets].gd
+cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'
+cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'
+cargo run -- install 8.2 --ext gd                  # 必须失败：gd 只在 8.5 加载
 cargo run -- install 7.4 --ext swoole             # swoole 4.8 + openssl 1.1.1
 cargo run -- install 8.2 --ext swoole=version:6.0
 cargo run -- install 8.5 --ext swoole --dep openssl=4.0

@@ -33,6 +33,10 @@ cargo run -- install 8.5 --ext swoole --ext xdebug  # 再加两个 PECL 扩展
 cargo run -- install 8.5 --ext swoole    # swoole 6.2.5 + libcurl + openssl 3.5.9
 cargo run -- install 8.5 --ext 'openssl=feature:[argon2]'   # 打开 argon2
 cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
+cargo run -- install 8.5 --ext gd        # gd preset：JPEG/PNG/WebP/FreeType
+cargo run -- install 8.5 --ext 'gd=feature:[]'  # 清空 preset，只保留 PNG
+cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'  # preset + JPEG SIMD
+cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'  # 再加 AVIF（需要 nasm）
 cargo run -- install 7.4 --ext swoole    # swoole 4.8.13 + openssl 1.1.1w
 cargo run -- --php 8.5 audit               # 检查上游开关是否都已处置
 cargo run -- --php 8.5 ext list           # 查看扩展和版本
@@ -40,6 +44,11 @@ cargo run -- --php 8.5 ext add xdebug     # 加入方案（待安装）
 cargo run -- --php 8.5 install 8.5        # 装方案里的扩展
 cargo run -- --php 8.5 update             # 在记录的线内更新补丁
 ```
+
+gd 只在 PHP 8.5 下加载，且不在默认扩展集里；选中 gd 时使用
+`recipes/bundles/php8.5.toml` 的 `[ext_presets].gd`，自动带 JPEG/WebP/FreeType。
+PNG 由 libpng 固定提供，`avif` 默认关闭。`dep:jpeg[simd]` 需要宿主机有 `nasm`，
+不写就生成非 SIMD 的 libjpeg。
 
 `install` 必须指定 PHP；不带时报错并给出示例：
 
@@ -151,6 +160,13 @@ PHP：7.4 / 8.0 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
 | libcurl | 8.23 | 8.23.0 |
 | libxml2 | 2.15 | 2.15.4 |
 | nghttp2 | 1.64 | 1.64.0 |
+| zlib | 1.3 | 1.3.2（PHP 8.5 gd 要求 >= 1.2.11） |
+| libpng | 1.6 | 1.6.59 |
+| jpeg | 3.1 | 3.1.4.1（libjpeg-turbo） |
+| webp | 1.6 | 1.6.0（PHP 8.5 gd 要求 >= 0.2.0） |
+| aom | 3.12 | 3.12.1 |
+| avif | 1.3 | 1.3.0（PHP 8.5 gd 要求 >= 0.8.2） |
+| freetype | 2.13 | 2.13.3 |
 
 ## 状态文件
 
@@ -172,8 +188,10 @@ bundle 默认线不写进 `bindings`；显式 `version:` 会写入并保留。�
 
 - `install` 必须指定 PHP；`--php` 与 install 参数冲突时报错。
 - 扩展声明 `LINES` 时，线集合必须和 catalog 一致；dep 不允许声明 `LINES`/`PHP_LINES`。
-- `PHP_LINES` 必须覆盖所有 PHP 系列，引用的线必须存在于 catalog。
+- `PHP_LINES` 和 `PHP_DEP_LINES` 必须覆盖所有 PHP 系列，引用的线必须存在于 catalog。
 - 每条线必须支持当前 PHP；显式线不满足直接报错。
+- feature 的 `requires.commands` 会在选择 / state 校验时检查 PATH；缺命令时显式选择报错，
+  bundle 默认丢弃并提示。
 - 依赖线取交集；显式 pin 冲突报错，bundle 软默认只在唯一候选时自动切换。
 - 版本线不存在、组件没有版本表、`version:` 写成补丁号都会报错。
 - ext 契约：`link` 非空且默认值必须在 `link` 里；shared 必须有 `ini`；
@@ -182,8 +200,11 @@ bundle 默认线不写进 `bindings`；显式 `version:` 会写入并保留。�
   值必须是单个 `--without-*` / `--disable-*`。
 - bundle `[default_exts]` 是表（`link` / `features` / `deps`）；名字必须是内置扩展且有 recipe，
   不允许 `version:`；条件 feature 不满足时提示并丢弃。
-- `dep_configure` 的 key 必须在 `needs` 里；方括号里的 feature 必须在该 dep 的 `features` 里。
-- ext 的 `features` 只允许 `configure` / `requires`；`requires` 不满足时显式选择直接报错。
+- `[ext_presets]` 只提供选中扩展时的默认配置；`default_exts` 的 `ref` 必须是
+  `"ext_presets.<同名扩展>"`，不能和本地 `features`/`deps` 同时写。
+- `dep_configure` 的 key 必须在 `needs` 或某个 feature 的 `needs` 里；方括号里的 feature
+  必须在该 dep 的 `features` 里。
+- ext 的 `features` 只允许 `needs` / `configure` / `requires`；`requires` 不满足时显式选择直接报错。
 - `audit` 对照上游选项清单：扩展有未处置的选项、或 `ignored` 写了不存在的选项时退出码 1；
   处置规则和默认值判据见 [docs/FEATURES.md](docs/FEATURES.md)。
 - 下载缓存命中跳过；有 sha256 的文件按哈希判断，没有 sha256 时按远端大小判断。

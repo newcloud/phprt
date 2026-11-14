@@ -120,7 +120,9 @@ phprt install 8.5 --ext swoole --ext xdebug
     方案 = state.ext - --disable-default-ext + --ext
 ```
 
-- `[default_exts]` 是 `recipes/bundles/php<系列>.toml` 里的表：`link` / `features` / `deps`。
+- `[default_exts]` 是 `recipes/bundles/php<系列>.toml` 里的表：`link` / `features` / `deps`；
+  可用 `ref = "ext_presets.<同名扩展>"` 引用 `[ext_presets]`。
+- `[ext_presets]` 只提供 `--ext` / `ext add` 时的默认 feature，不会默认安装扩展。
 - 8.5 默认 `openssl` + `curl`（curl 带 ssl）+ `libxml`；其他系列暂时没有默认扩展。
 - `--disable-default-ext openssl` 从本次方案扣除；首次 install 成功后落盘。
 - 和 `--ext` 同名同时出现 → 报错。
@@ -231,9 +233,12 @@ spec := 名字
 7. `feature:[a,b]` 打开扩展自己的编译开关；开关可能在选中时额外引入一个依赖库
    （如 `swoole=feature:[cares]` 会编 `c-ares`）。必须带方括号；`feature:[[]]` 不合法，关闭全部 feature 写 `feature:[]`。
 8. `feature:` 可以出现多次，取并集；跨列表重复的 feature 会去重。
-9. 条件 feature（如 `argon2`）在版本不满足时直接报错，并说明缺哪一条。
-10. `version:线` 指定扩展自己的版本线；依赖库用 `--dep`。
-11. 同一个扩展只能出现一次；同一个依赖、同一个 version 只能出现一次。
+9. 条件 feature（如 `argon2` 或 jpeg 的 `simd`）在版本或宿主机命令不满足时直接报错，
+   并说明缺哪一条。
+10. 不写 `feature:` 时，首次选中的扩展使用 bundle 的 `[ext_presets]`；写了就覆盖 preset，
+   包括 `feature:[]` 清空。
+11. `version:线` 指定扩展自己的版本线；依赖库用 `--dep`。
+12. 同一个扩展只能出现一次；同一个依赖、同一个 version 只能出现一次。
 
 示例：
 
@@ -250,6 +255,21 @@ phprt install 8.5 --ext 'openssl=feature:[argon2]'
 # 已有 state 里默认开了 argon2，想关掉
 phprt install 8.5 --ext 'openssl=feature:[]'
 
+# gd：使用 [ext_presets].gd，自动带 JPEG/PNG/WebP/FreeType；gd 只在 8.5 加载
+phprt install 8.5 --ext gd
+
+# 显式清空预设，只保留 PNG
+phprt install 8.5 --ext 'gd=feature:[]'
+
+# 打开 libjpeg-turbo 的 SIMD；preset 仍然生效，需要 PATH 里有 nasm
+phprt install 8.5 --ext 'gd=dep:jpeg[simd]'
+
+# 打开 AVIF；显式 feature 会覆盖 preset，所以要写全
+phprt install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'
+
+# ext add 也使用 preset
+phprt --php 8.5 ext add gd
+
 # 只装 PHP：禁用 8.5 的三个默认扩展
 phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml
 ```
@@ -265,6 +285,7 @@ phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl --dis
 | feature 写法不对 | `ext:openssl 的 feature: 后面必须写方括号，例如 feature:[argon2]` |
 | feature 的 PHP 条件不满足 | `ext:openssl 的 feature argon2 需要 PHP 8.5, 8.6，当前 PHP 8.4` |
 | feature 的依赖线条件不满足 | `ext:openssl 的 feature argon2 需要 dep:openssl 3.5, 4.0，当前 3.0` |
+| feature 需要的命令不在 PATH | `dep:jpeg 的 feature simd 需要命令 nasm（Fedora: sudo dnf install nasm）` |
 | 内置扩展写版本线 | `ext:openssl 是内置扩展，没有自己的版本线；依赖库 openssl 的版本请用 --dep openssl=<线>` |
 | `--dep` 写了扩展名 | `--dep swoole 不是依赖库` |
 | 上游选项未处置 | `N 个上游选项还没处置：\n  ext:openssl --with-system-ciphers ...` |
@@ -276,6 +297,7 @@ phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl --dis
 | 禁用非默认扩展 | `--disable-default-ext swoole 不是 PHP 8.5 的默认扩展（默认：curl, libxml, openssl）` |
 | 同时启用和禁用 | `--ext 和 --disable-default-ext 同时指定了 openssl` |
 | 禁用参数用错命令 | `--disable-default-ext 只支持 install / update / plan` |
+| default_exts ref 写法不对 | `default_exts.gd 的 ref 不合法：ref 必须是 "ext_presets.<名字>"，例如 "ext_presets.gd"` |
 | 状态文件里有未知 feature | `state.json 里 dep:libcurl 没有 feature brotli` |
 | 移除不在方案里的扩展 | `ext:nope 不在构建方案里` |
 | 离线且缓存里没有源码包 | `离线模式，缓存里没有这个文件` |

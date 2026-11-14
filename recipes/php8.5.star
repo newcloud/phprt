@@ -83,6 +83,7 @@ BUILTIN_DISABLE = {
         "openssl": "--without-openssl",
         "curl": "--without-curl",
         "libxml": "--without-libxml",
+        "gd": "--disable-gd",
         "dom": "--disable-dom",
         "simplexml": "--disable-simplexml",
         "xml": "--disable-xml",

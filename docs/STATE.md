@@ -111,8 +111,12 @@ allowed = catalog 里该组件的线
 | `ext remove` | 是 | 是 | 删除条目 |
 
 第一次写状态时从当前 PHP 系列的 `bundle.default_exts` 补种；8.5 会写入
-`openssl` 和 `curl`（curl 带 ssl），其他系列暂时只记录 PHP。
-补种只发生一次；之后 `default_exts` 变化不影响已有 state。
+`openssl`、`curl`（curl 带 ssl）和 `libxml`；gd 不在默认集里，需要 `--ext` 显式选择。
+其他系列暂时只记录 PHP。补种只发生一次；之后 `default_exts` 变化不影响已有 state。
+
+`--ext gd` / `ext add gd` 首次把扩展写进 state 时，会把 `bundle.ext_presets.gd` 的
+features/deps 一起 materialize；之后即使 preset 变化，已有 state 也不改。
+如果 state 里该扩展的 features 已经为空，表示用户显式清空过，不再重新套 preset。
 
 `update` 只在 state 记录的线内重新从 catalog 取补丁，不自动换线。catalog 删掉了
 这条线时直接报错，不静默迁移。
@@ -121,11 +125,12 @@ allowed = catalog 里该组件的线
 
 - `ext add` / `install` / `update`：`deps.features` 取并集，只增不减。
 - 扩展自己的 `features` 以显式选择为准：CLI 写了 `feature:[...]`（包括 `feature:[]`）
-  就覆盖 state 里的值，没写就沿用 state。
+  就覆盖 state 里的值，没写就沿用 state；没有 state 时用 `[ext_presets]`。
 - `ext remove`：按剩余扩展的 dep 重新计算，允许收窄。
 - 状态里记录了每个扩展的 `deps` / `features`，所以 `ext add` 不会冲掉其他扩展之前的选择。
 - 状态里有、recipe 里没有的扩展或 feature → 报错，要求手工处理。
-- feature 的 `requires` 不满足（PHP 系列或依赖线变了）→ 报错并提示改 state 或换依赖线。
+- feature 的 `requires` 不满足（PHP 系列、依赖线或宿主机命令变了）→ 报错并提示改 state、
+  装缺少的命令或换依赖线。
 - 旧版本 state 里的 `sub` 字段会被当作 `deps` 读取，但里面的 key 需要手工迁移
   （`sub: curl` 已改名为 `dep: libcurl`）。
 

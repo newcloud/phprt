@@ -89,14 +89,22 @@ dep → 静态扩展（只贡献 PHP configure 参数） → php → 共享扩�
 | 工具 | 来源 |
 | --- | --- |
 | gcc / g++ / make / ar / ranlib / pkg-config / patchelf / m4 / perl | 系统 |
+| cmake | 系统；只在本次构建含 CMake 依赖时检查（jpeg/webp/aom/avif） |
+| nasm | 系统；libjpeg-turbo 的 `simd` feature 要求 nasm；libaom（AVIF）也接受 yasm |
 | autoconf | 源码构建，catalog 的 `[autoconf]`，作为 ext 的 `tools` |
 | 纯 Perl 模块 | 仓库 `vendor/perl`，构建时通过 `PERL5LIB` 注入 |
 
 Fedora 上系统工具可以一次装好：
 
 ```bash
-sudo dnf install gcc gcc-c++ make binutils pkgconf-pkg-config patchelf tar m4 perl
+sudo dnf install gcc gcc-c++ make cmake nasm binutils pkgconf-pkg-config patchelf tar m4 perl
 ```
+
+gd 的图片依赖靠 pkg-config 定位：PHP 8.5 的 `ext/gd/config.m4` 用
+`PKG_CHECK_MODULES` 查找 `libpng` / `libjpeg` / `libwebp` / `libavif` / `freetype2`，
+`zlib` 由 `PHP_SETUP_ZLIB` 要求 `>= 1.2.11`。v3 的 `PKG_CONFIG_PATH` 会按当前节点
+依赖闭包自动加上各 dep 的 `lib/pkgconfig` 和 `share/pkgconfig`，不需要在
+`--with-jpeg` 后面写路径。
 
 ## 8. 验收
 
@@ -116,6 +124,14 @@ cargo run -- install 8.5 --ext swoole --ext xdebug
 
 # curl 动态编译，并启用 SSL / nghttp2
 cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
+
+# gd：默认读取 [ext_presets].gd，自动带 JPEG/PNG/WebP/FreeType
+cargo run -- install 8.5 --ext gd
+cargo run -- install 8.5 --ext 'gd=feature:[]'          # 只保留 PNG
+cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'      # preset + JPEG SIMD
+cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'  # 加 AVIF
+./myphp -r 'var_export(gd_info());'
+grep -E 'SIMD extensions' build/logs/dep-jpeg-3.1.4.1.log
 
 # 只下载，不编译
 cargo run -- install 8.5 --downloads --offline

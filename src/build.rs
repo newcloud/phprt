@@ -27,7 +27,7 @@ pub fn run(
     features: &BTreeMap<String, Vec<String>>,
     opts: &Options<'_>,
 ) -> Result<()> {
-    need_commands()?;
+    need_commands(order, features)?;
 
     let root = fs::canonicalize(opts.root)
         .with_context(|| format!("读不到项目根 {}", opts.root.display()))?;
@@ -255,11 +255,7 @@ fn dep_commands(
 ) -> Result<Vec<Cmd>> {
     let mut commands = Vec::new();
     if !configure.is_empty() {
-        let program = if configure[0].starts_with("./") {
-            configure.remove(0)
-        } else {
-            "./configure".to_owned()
-        };
+        let program = configure.remove(0);
         commands.push(Cmd::Program {
             program,
             args: configure,
@@ -688,8 +684,8 @@ fn write_entry(root: &Path, tree: &Path, version: &str) -> Result<()> {
     Ok(())
 }
 
-fn need_commands() -> Result<()> {
-    let tools = [
+fn need_commands(order: &[&Target], features: &BTreeMap<String, Vec<String>>) -> Result<()> {
+    let mut required = vec![
         "gcc",
         "g++",
         "make",
@@ -701,7 +697,27 @@ fn need_commands() -> Result<()> {
         "perl",
         "sh",
     ];
-    let missing: Vec<&str> = tools
+
+    if order.iter().any(|t| t.kind == Kind::Dep && uses_cmake(t)) {
+        required.push("cmake");
+    }
+
+    let jpeg_in_order = order
+        .iter()
+        .any(|t| t.kind == Kind::Dep && t.name == "jpeg");
+    let needs_nasm = order.iter().any(|t| t.kind == Kind::Dep && t.name == "aom")
+        || (jpeg_in_order
+            && features
+                .get("jpeg")
+                .is_some_and(|enabled| enabled.iter().any(|f| f == "simd")));
+    if needs_nasm && !on_path("nasm") && !on_path("yasm") {
+        bail!(
+            "缺少构建工具: nasm 或 yasm（Fedora: sudo dnf install nasm；\
+             libjpeg-turbo SIMD 和 libaom 需要它）"
+        );
+    }
+
+    let missing: Vec<&str> = required
         .iter()
         .copied()
         .filter(|tool| !on_path(tool))
@@ -710,9 +726,20 @@ fn need_commands() -> Result<()> {
         return Ok(());
     }
     bail!(
-        "缺少构建工具: {}（Fedora: sudo dnf install gcc gcc-c++ make binutils pkgconf-pkg-config patchelf tar m4 perl）",
+        "缺少构建工具: {}（Fedora: sudo dnf install gcc gcc-c++ make cmake binutils pkgconf-pkg-config patchelf tar m4 perl）",
         missing.join(", ")
     )
+}
+
+fn uses_cmake(target: &Target) -> bool {
+    target
+        .configure
+        .first()
+        .is_some_and(|program| program == "cmake")
+        || target
+            .make
+            .iter()
+            .any(|line| line.trim_start().starts_with("cmake "))
 }
 
 fn on_path(name: &str) -> bool {

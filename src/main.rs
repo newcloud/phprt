@@ -292,6 +292,7 @@ fn run() -> Result<()> {
     )?;
 
     let default_sel = bundle::selection(&reg, &bundle, &series)?;
+    let preset_sel = bundle::presets(&reg, &bundle, &series)?;
     if seeded_defaults {
         for (name, spec) in &default_sel.per_ext {
             let Some(entry) = project.ext.get_mut(name) else {
@@ -325,14 +326,14 @@ fn run() -> Result<()> {
         Cmd::Graph => {
             let names = scheme_names(&project, &raw_exts, None);
             project.apply_scheme(&mut reg, &names)?;
-            let sel = project.effective_selection(&reg, &cli_sel, &names)?;
+            let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             let features = project.merged_features(sel.features(&reg));
             print!("{}", render::graph_text(&reg, &sel, &features)?);
         }
         Cmd::Plan { target, json } => {
             let names = scheme_names(&project, &raw_exts, None);
             project.apply_scheme(&mut reg, &names)?;
-            let sel = project.effective_selection(&reg, &cli_sel, &names)?;
+            let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             let features = project.merged_features(sel.features(&reg));
             let root = plan_root(&reg, &series, &php_version, target.as_deref())?;
             let order = plan::resolve(&reg, &root, &sel, &features)?;
@@ -352,7 +353,7 @@ fn run() -> Result<()> {
         Cmd::Install { download, .. } | Cmd::Update { download } => {
             let names = scheme_names(&project, &raw_exts, None);
             project.apply_scheme(&mut reg, &names)?;
-            let sel = project.effective_selection(&reg, &cli_sel, &names)?;
+            let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             let features = project.merged_features(sel.features(&reg));
             let order = plan::resolve(&reg, &php_id, &sel, &features)?;
             let sim = render::build(
@@ -468,10 +469,11 @@ fn run() -> Result<()> {
                 );
             }
             ExtCmd::Add { name } => {
-                let added = project.add_ext(&reg, &name)?;
+                let added =
+                    project.add_ext_with_preset(&reg, &name, preset_sel.per_ext.get(&name))?;
                 let names = scheme_names(&project, &raw_exts, None);
                 project.apply_scheme(&mut reg, &names)?;
-                let sel = project.effective_selection(&reg, &cli_sel, &names)?;
+                let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
                 let features = project.merged_features(sel.features(&reg));
                 let order = plan::resolve(&reg, &php_id, &sel, &features)?;
 
@@ -491,7 +493,7 @@ fn run() -> Result<()> {
                 // 已经在解析绑定前从 project.ext / selected 里移除。
                 let names = scheme_names(&project, &raw_exts, Some(&name));
                 project.apply_scheme(&mut reg, &names)?;
-                let mut sel = project.effective_selection(&reg, &cli_sel, &names)?;
+                let mut sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
                 sel.per_ext.remove(&name);
                 let features = sel.features(&reg);
                 let order = plan::resolve(&reg, &php_id, &sel, &features)?;

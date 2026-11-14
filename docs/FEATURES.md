@@ -38,9 +38,12 @@ ext:openssl
   --with-openssl-legacy-provider     ignored: 会改变默认 TLS 行为，需要单独验证
   --with-system-ciphers              ignored: 依赖系统 cipher 配置，构建不可复现
   feature argon2                   默认开  requires php 8.5/8.6，dep:openssl 3.5/4.0
+  feature jpeg                     预设开  --with-jpeg
 ```
 
 - 扩展 recipe 有「未处理」→ 命令失败（退出码 1）。
+- `默认开` 表示扩展默认安装时就启用；`预设开` 表示只在 `--ext 名字` / `ext add 名字`
+  时由 `[ext_presets]` 启用，不会让扩展默认安装。
 - 依赖库只报数量，不失败：库的绝大多数选项由 recipe 固定，不需要全部做成 feature。
 - `ignored` 里写了上游不存在的选项 → 也算未处理（防止拼写错误）。
 - 源码没解压时会提示先安装一次，不会假装通过。
@@ -93,10 +96,37 @@ ext:openssl
 | swoole asan / debug / debug-log / trace-log / coverage / dev / coro-time / thread | 调试或开发用 | 调试用途 |
 | xdebug `--with-xdebug-compression` | 少用 | 缺依赖（未排期）：zlib |
 | xdebug `--enable-xdebug-dev` | 开发用 | 调试用途 |
+| gd `--with-jpeg` | 常用 | feature `jpeg`，默认关；需要时显式打开 |
+| gd `--with-webp` | 常用 | feature `webp`，默认关 |
+| gd `--with-freetype` | 常用 | feature `freetype`，默认关 |
+| gd `--with-avif` | 常用但依赖较大 | feature `avif` + `needs=["aom","avif"]`，默认关 |
+| gd `--with-external-gd` / `--with-xpm` / `--enable-gd-jis-conv` | 少用 | ignored |
+| libjpeg-turbo `WITH_SIMD` | 常用（性能） | dep feature `simd`，默认关；`requires.commands=["nasm"]` |
+
+PNG 不是 feature：PHP 8.5 gd 强制依赖 libpng，`--enable-gd` 就带上。
+
+### 3.2 宿主机命令条件
+
+feature 可以要求 PATH 里存在某个命令：
+
+```python
+"simd": feature(
+    configure = ["-DWITH_SIMD=ON", "-DREQUIRE_SIMD=ON"],
+    disable = ["-DWITH_SIMD=OFF"],
+    requires = {"commands": ["nasm"]},
+)
+```
+
+- 显式选择不满足时在构建前报错，并提示安装哪个命令。
+- bundle 默认不满足时提示并丢弃，不中断安装。
+- `needs` 只用于 dep recipe，不能把 `nasm` 写进 `needs`。
 
 ## 4. 要不要默认开启
 
-默认值只写在 `bundles/php<系列>.toml` 的 `[default_exts]`，不写进 recipe。
+默认值只写在 `bundles/php<系列>.toml`，不写进 recipe：
+
+- `[default_exts]`：默认安装哪些扩展；
+- `[ext_presets]`：扩展被选中时默认开哪些 feature，不决定是否默认安装。
 
 四条判据，从强到弱：
 

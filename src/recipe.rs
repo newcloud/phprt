@@ -61,18 +61,21 @@ pub struct Feature {
     /// feature 未启用时应用的参数（关闭上游自动探测）。
     #[serde(default)]
     pub disable: Vec<String>,
-    /// ext feature 的可用条件；dep feature 不允许写。
+    /// feature 的可用条件；dep feature 只允许 commands。
     #[serde(default)]
     pub requires: Requires,
 }
 
-/// ext feature 的可用条件：允许的 PHP 系列、允许的依赖线。
+/// feature 的可用条件：允许的 PHP 系列、允许的依赖线、宿主机命令。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Requires {
     #[serde(default)]
     pub php: Vec<String>,
     #[serde(default)]
     pub dep: BTreeMap<String, Vec<String>>,
+    /// 需要出现在 PATH 里的宿主机命令，如 `nasm`。
+    #[serde(default)]
+    pub commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +108,7 @@ pub struct Target {
     #[serde(default)]
     pub link: Vec<String>,
     /// 依赖集成：依赖名 -> 选中该依赖时额外加给扩展的 configure 参数。
-    /// 出现即表示允许 dep:NAME；key 必须是 needs 里的依赖。
+    /// 出现即表示允许 dep:NAME；key 必须在 needs 或某个 feature 的 needs 里。
     #[serde(default)]
     pub dep_configure: BTreeMap<String, Vec<String>>,
     #[serde(default)]
@@ -186,7 +189,18 @@ impl Target {
                 }
                 for (name, f) in &self.features {
                     if !f.requires.php.is_empty() || !f.requires.dep.is_empty() {
-                        bail!("{at}: dep:{} 的 feature {name} 不允许 requires", self.name);
+                        bail!(
+                            "{at}: dep:{} 的 feature {name} 只允许 requires.commands",
+                            self.name
+                        );
+                    }
+                    for command in &f.requires.commands {
+                        if command.is_empty() {
+                            bail!(
+                                "{at}: dep:{} 的 feature {name} 的 requires.commands 里有空名字",
+                                self.name
+                            );
+                        }
                     }
                 }
                 self.check_ignored(&at)?;
@@ -260,10 +274,14 @@ impl Target {
                     if dep.is_empty() {
                         bail!("{at}: ext:{} 的 dep_configure 里有空名字", self.name);
                     }
-                    if !self.needs.iter().any(|n| n == dep) {
+                    let in_feature = self
+                        .features
+                        .values()
+                        .any(|f| f.needs.iter().any(|n| n == dep));
+                    if !self.needs.iter().any(|n| n == dep) && !in_feature {
                         bail!(
-                            "{at}: ext:{} 的 dep_configure 里有 dep:{dep}，但它不在 needs 里；\
-                             声明必需依赖用 needs",
+                            "{at}: ext:{} 的 dep_configure 里有 dep:{dep}，\
+                             但它不在 needs 或任何 feature 的 needs 里",
                             self.name
                         );
                     }
@@ -326,6 +344,14 @@ impl Target {
                                     self.name
                                 );
                             }
+                        }
+                    }
+                    for command in &f.requires.commands {
+                        if command.is_empty() {
+                            bail!(
+                                "{at}: ext:{} 的 feature {name} 的 requires.commands 里有空名字",
+                                self.name
+                            );
                         }
                     }
                 }
@@ -420,6 +446,8 @@ pub struct RecipeMeta {
     pub lines: BTreeMap<String, LineMeta>,
     /// PHP 系列 -> 该扩展允许的依赖线（builtin 扩展用，如 ext:openssl）。
     pub php_lines: BTreeMap<String, Vec<String>>,
+    /// PHP 系列 -> 依赖名 -> 允许的依赖线；用于没有同名依赖的 builtin 扩展（如 gd）。
+    pub php_dep_lines: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     /// php recipe 的内置扩展事实；其他 recipe 为空。
     pub builtin_exts: Vec<String>,
 }
@@ -704,6 +732,7 @@ fn parse_dep(reg: &Registry, ext: &Target, rest: &str) -> Result<(String, Vec<St
             if !dep.features.contains_key(f) {
                 bail!("dep:{} 契约没有 feature {f}", dep.name);
             }
+            feature_available(reg, dep, f)?;
             if !features.iter().any(|x| x == f) {
                 features.push(f.to_owned());
             }
@@ -756,26 +785,25 @@ pub(crate) fn feature_available(reg: &Registry, ext: &Target, name: &str) -> Res
         return Ok(());
     };
     let req = &def.requires;
-    if req.php.is_empty() && req.dep.is_empty() {
+    if req.php.is_empty() && req.dep.is_empty() && req.commands.is_empty() {
         return Ok(());
     }
 
-    let php = reg.php()?;
-    if !req.php.is_empty() && !req.php.iter().any(|s| s == &php.series) {
-        bail!(
-            "ext:{} 的 feature {name} 需要 PHP {}，当前 PHP {}",
-            ext.name,
-            req.php.join(", "),
-            php.series
-        );
+    if !req.php.is_empty() {
+        let php = reg.php()?;
+        if !req.php.iter().any(|s| s == &php.series) {
+            bail!(
+                "{} 的 feature {name} 需要 PHP {}，当前 PHP {}",
+                ext.id(),
+                req.php.join(", "),
+                php.series
+            );
+        }
     }
     for (dep_name, lines) in &req.dep {
-        let dep = reg.get(&format!("dep:{dep_name}")).ok_or_else(|| {
-            anyhow!(
-                "ext:{} 的 feature {name} 需要不存在的 dep:{dep_name}",
-                ext.name
-            )
-        })?;
+        let dep = reg
+            .get(&format!("dep:{dep_name}"))
+            .ok_or_else(|| anyhow!("{} 的 feature {name} 需要不存在的 dep:{dep_name}", ext.id()))?;
         if !lines.iter().any(|l| l == &dep.line) {
             let current = if dep.line.is_empty() {
                 "未绑定".to_owned()
@@ -783,13 +811,38 @@ pub(crate) fn feature_available(reg: &Registry, ext: &Target, name: &str) -> Res
                 dep.line.clone()
             };
             bail!(
-                "ext:{} 的 feature {name} 需要 dep:{dep_name} {}，当前 {current}",
-                ext.name,
+                "{} 的 feature {name} 需要 dep:{dep_name} {}，当前 {current}",
+                ext.id(),
                 lines.join(", ")
             );
         }
     }
+    for command in &req.commands {
+        if !command_available(command) {
+            bail!(
+                "{} 的 feature {name} 需要命令 {command}（Fedora: sudo dnf install {command}）",
+                ext.id()
+            );
+        }
+    }
     Ok(())
+}
+
+fn command_available(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        let candidate = dir.join(name);
+        candidate.is_file()
+            && candidate
+                .metadata()
+                .map(|m| {
+                    use std::os::unix::fs::PermissionsExt;
+                    m.permissions().mode() & 0o111 != 0
+                })
+                .unwrap_or(false)
+    })
 }
 
 fn split_top(s: &str, sep: char) -> Result<Vec<&str>> {
@@ -946,11 +999,19 @@ pub fn load_meta(dir: &Path, catalog: &Catalog) -> Result<Vec<RecipeMeta>> {
                 .with_context(|| format!("{}: PHP_LINES 不合法", path.display()))?,
             None => BTreeMap::new(),
         };
+        let php_dep_lines = match raw.php_dep_lines_json {
+            Some(value) => parse_php_dep_lines(value)
+                .with_context(|| format!("{}: PHP_DEP_LINES 不合法", path.display()))?,
+            None => BTreeMap::new(),
+        };
         if kind == Kind::Dep && (!lines.is_empty() || !php_lines.is_empty()) {
             bail!(
                 "{}: dep recipe 不能声明 LINES/PHP_LINES（库与 PHP 无关）",
                 path.display()
             );
+        }
+        if kind != Kind::Ext && !php_dep_lines.is_empty() {
+            bail!("{}: PHP_DEP_LINES 只用于 ext recipe", path.display());
         }
 
         let mut builtin_exts = Vec::new();
@@ -995,6 +1056,7 @@ pub fn load_meta(dir: &Path, catalog: &Catalog) -> Result<Vec<RecipeMeta>> {
             series,
             lines,
             php_lines,
+            php_dep_lines,
             builtin_exts,
         });
     }
@@ -1027,14 +1089,23 @@ pub fn load_targets(
             fs::read_to_string(&path).with_context(|| format!("读不到 {}", path.display()))?;
 
         let is_builtin = kind == Kind::Ext && builtin_exts.iter().any(|item| item == &name);
-        let mut ctx = base_ctx.clone();
-        ctx["is_builtin"] = serde_json::Value::Bool(is_builtin);
-        if kind != Kind::Php {
-            let self_value = base_ctx
+        let self_value = if kind == Kind::Php {
+            serde_json::Value::Null
+        } else {
+            base_ctx
                 .get("deps")
                 .and_then(|deps| deps.get(&name))
                 .cloned()
-                .unwrap_or(serde_json::Value::Null);
+                .unwrap_or(serde_json::Value::Null)
+        };
+        // 既不是当前 PHP 的内置扩展，也没有 catalog 记录的扩展在当前系列不可用。
+        // 例如 gd 只写进了 8.5 的 builtin_exts；其他系列不加载它的 recipe。
+        if kind == Kind::Ext && !is_builtin && self_value.is_null() {
+            continue;
+        }
+        let mut ctx = base_ctx.clone();
+        ctx["is_builtin"] = serde_json::Value::Bool(is_builtin);
+        if kind != Kind::Php {
             ctx["self"] = self_value;
         }
 
@@ -1158,6 +1229,7 @@ struct MetaRaw {
     target_json: Option<serde_json::Value>,
     lines_json: Option<serde_json::Value>,
     php_lines_json: Option<serde_json::Value>,
+    php_dep_lines_json: Option<serde_json::Value>,
     is_function: bool,
 }
 
@@ -1203,10 +1275,16 @@ fn eval_meta(
             .map(|value| value.to_json_value())
             .transpose()
             .with_context(|| format!("{name}: PHP_LINES 无法转成 JSON"))?;
+        let php_dep_lines_json = module
+            .get("PHP_DEP_LINES")
+            .map(|value| value.to_json_value())
+            .transpose()
+            .with_context(|| format!("{name}: PHP_DEP_LINES 无法转成 JSON"))?;
         Ok(MetaRaw {
             target_json,
             lines_json,
             php_lines_json,
+            php_dep_lines_json,
             is_function,
         })
     })
@@ -1277,6 +1355,43 @@ fn parse_php_lines(value: serde_json::Value) -> Result<BTreeMap<String, Vec<Stri
             bail!("PHP_LINES.{php} 不能为空");
         }
         out.insert(php.clone(), lines);
+    }
+    Ok(out)
+}
+
+fn parse_php_dep_lines(
+    value: serde_json::Value,
+) -> Result<BTreeMap<String, BTreeMap<String, Vec<String>>>> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| anyhow!("PHP_DEP_LINES 必须是 dict"))?;
+    let mut out = BTreeMap::new();
+    for (php, value) in obj {
+        let deps = value
+            .as_object()
+            .ok_or_else(|| anyhow!("PHP_DEP_LINES.{php} 必须是 dict"))?;
+        let mut parsed = BTreeMap::new();
+        for (dep, value) in deps {
+            let list = value
+                .as_array()
+                .ok_or_else(|| anyhow!("PHP_DEP_LINES.{php}.{dep} 必须是数组"))?;
+            let lines: Vec<String> = list
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| anyhow!("PHP_DEP_LINES.{php}.{dep} 里必须是字符串"))
+                })
+                .collect::<Result<_>>()?;
+            if lines.is_empty() {
+                bail!("PHP_DEP_LINES.{php}.{dep} 不能为空");
+            }
+            parsed.insert(dep.clone(), lines);
+        }
+        if parsed.is_empty() {
+            bail!("PHP_DEP_LINES.{php} 不能为空");
+        }
+        out.insert(php.clone(), parsed);
     }
     Ok(out)
 }
@@ -1376,31 +1491,74 @@ fn validate_meta_catalog(metas: &[RecipeMeta], catalog: &Catalog) -> Result<()> 
         if !meta.lines.is_empty() && !catalog.components.contains_key(&meta.name) {
             bail!("{} 声明了 LINES，但 catalog 没有同名组件", meta.name);
         }
-        if meta.php_lines.is_empty() {
+        if !meta.php_lines.is_empty() {
+            let Some(component) = catalog.lines(&meta.name) else {
+                bail!("{} 声明了 PHP_LINES，但 catalog 没有同名组件", meta.name);
+            };
+            for (php, allowed) in &meta.php_lines {
+                if !catalog_php.contains(php) {
+                    bail!("{} 的 PHP_LINES 里有未知 PHP {php}", meta.name);
+                }
+                if allowed.is_empty() {
+                    bail!("{} 的 PHP_LINES.{php} 不能为空", meta.name);
+                }
+                for line in allowed {
+                    if !component.contains_key(line) {
+                        bail!(
+                            "{} 的 PHP_LINES.{php} 引用了 catalog 里不存在的线 {line}",
+                            meta.name
+                        );
+                    }
+                }
+            }
+            for php in &catalog_php {
+                if !meta.php_lines.contains_key(php) {
+                    bail!("{} 的 PHP_LINES 缺少 PHP {php}", meta.name);
+                }
+            }
+        }
+        if meta.php_dep_lines.is_empty() {
             continue;
         }
-        let Some(component) = catalog.lines(&meta.name) else {
-            bail!("{} 声明了 PHP_LINES，但 catalog 没有同名组件", meta.name);
-        };
-        for (php, allowed) in &meta.php_lines {
+        if meta.kind != Kind::Ext {
+            bail!("{} 声明了 PHP_DEP_LINES，但只有 ext recipe 允许", meta.name);
+        }
+        for (php, deps) in &meta.php_dep_lines {
             if !catalog_php.contains(php) {
-                bail!("{} 的 PHP_LINES 里有未知 PHP {php}", meta.name);
+                bail!("{} 的 PHP_DEP_LINES 里有未知 PHP {php}", meta.name);
             }
-            if allowed.is_empty() {
-                bail!("{} 的 PHP_LINES.{php} 不能为空", meta.name);
-            }
-            for line in allowed {
-                if !component.contains_key(line) {
+            for (dep_name, allowed) in deps {
+                if allowed.is_empty() {
+                    bail!("{} 的 PHP_DEP_LINES.{php}.{dep_name} 不能为空", meta.name);
+                }
+                let is_dep = metas
+                    .iter()
+                    .any(|m| m.kind == Kind::Dep && m.name == *dep_name);
+                if !is_dep {
                     bail!(
-                        "{} 的 PHP_LINES.{php} 引用了 catalog 里不存在的线 {line}",
+                        "{} 的 PHP_DEP_LINES.{php}.{dep_name} 不是 dep recipe",
                         meta.name
                     );
+                }
+                let Some(component) = catalog.lines(dep_name) else {
+                    bail!(
+                        "{} 的 PHP_DEP_LINES 引用了 catalog 里不存在的 dep {dep_name}",
+                        meta.name
+                    );
+                };
+                for line in allowed {
+                    if !component.contains_key(line) {
+                        bail!(
+                            "{} 的 PHP_DEP_LINES.{php}.{dep_name} 引用了 catalog 里不存在的线 {line}",
+                            meta.name
+                        );
+                    }
                 }
             }
         }
         for php in &catalog_php {
-            if !meta.php_lines.contains_key(php) {
-                bail!("{} 的 PHP_LINES 缺少 PHP {php}", meta.name);
+            if !meta.php_dep_lines.contains_key(php) {
+                bail!("{} 的 PHP_DEP_LINES 缺少 PHP {php}", meta.name);
             }
         }
     }
@@ -1639,6 +1797,187 @@ mod tests {
         assert_eq!(raw.len(), 2);
         assert_eq!(raw[0].name, "curl");
         assert_eq!(raw[1].version.as_deref(), Some("4.0"));
+    }
+
+    #[test]
+    fn gd_preset_is_used_for_explicit_selection() {
+        let dir = dir();
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
+        let presets = crate::bundle::presets(&reg, &bundle, "8.5").unwrap();
+        assert_eq!(
+            presets.per_ext["gd"].features,
+            Some(BTreeSet::from([
+                "freetype".to_owned(),
+                "jpeg".to_owned(),
+                "webp".to_owned(),
+            ]))
+        );
+    }
+
+    #[test]
+    fn default_ext_ref_uses_preset_and_local_link() {
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("phprt-bundle-gd-ref-{}.toml", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"
+php = "8.5"
+[ext_presets]
+gd = { features = ["jpeg", "webp", "freetype"] }
+[default_exts]
+gd = { ref = "ext_presets.gd", link = "shared" }
+"#,
+        )
+        .unwrap();
+        let bundle = Bundle::load(&path).unwrap();
+        let sel = crate::bundle::selection(&reg, &bundle, "8.5").unwrap();
+        assert_eq!(
+            sel.per_ext["gd"].features,
+            Some(BTreeSet::from([
+                "freetype".to_owned(),
+                "jpeg".to_owned(),
+                "webp".to_owned(),
+            ]))
+        );
+        assert_eq!(sel.per_ext["gd"].link, Some(Mode::Shared));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn gd_is_only_loaded_for_php_8_5() {
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        assert!(reg.get("ext:gd").is_some());
+
+        let (reg, _) = load("8.2", &[], &[]).unwrap();
+        assert!(reg.get("ext:gd").is_none());
+    }
+
+    #[test]
+    fn gd_php_dep_lines_cover_every_php_series() {
+        let dir = dir();
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        let mut metas = load_meta(&dir, &catalog).unwrap();
+        let gd = metas
+            .iter()
+            .find(|m| m.kind == Kind::Ext && m.name == "gd")
+            .unwrap();
+        for php in catalog.php_series() {
+            assert!(
+                gd.php_dep_lines.contains_key(&php),
+                "gd 的 PHP_DEP_LINES 缺少 PHP {php}"
+            );
+        }
+        assert_eq!(gd.php_dep_lines["8.5"]["jpeg"], vec!["3.1".to_owned()]);
+
+        metas
+            .iter_mut()
+            .find(|m| m.kind == Kind::Ext && m.name == "gd")
+            .unwrap()
+            .php_dep_lines
+            .remove("8.6");
+        let err = validate_meta_catalog(&metas, &catalog)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("PHP_DEP_LINES 缺少 PHP 8.6"), "{err}");
+    }
+
+    #[test]
+    fn gd_php_dep_lines_reject_other_lines() {
+        let dir = dir();
+        let mut catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        catalog.components.get_mut("jpeg").unwrap().insert(
+            "4.0".into(),
+            crate::catalog::Artifact {
+                version: "4.0.0".into(),
+                url: "https://example.com/jpeg-4.0.0.tar.gz".into(),
+                sha256: String::new(),
+            },
+        );
+        let metas = load_meta(&dir, &catalog).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
+        let mut pins = BTreeMap::new();
+        pins.insert("jpeg".to_owned(), "4.0".to_owned());
+        let err = crate::bind::resolve(&catalog, &bundle, &metas, "8.5", &["gd".into()], &pins)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("jpeg 4.0 与当前 PHP/扩展选择冲突"), "{err}");
+    }
+
+    #[test]
+    fn gd_dependencies_are_bound_and_ordered() {
+        let (mut reg, bindings) = load("8.5", &["gd"], &[]).unwrap();
+        assert_eq!(bindings.lines["jpeg"], "3.1");
+        assert_eq!(bindings.lines["libpng"], "1.6");
+        assert_eq!(bindings.lines["freetype"], "2.13");
+
+        let sel = Selection::parse(&reg, &["gd=feature:[jpeg,webp,freetype]".into()]).unwrap();
+        let features = sel.features(&reg);
+        let php = reg.php().unwrap();
+        let php_id = format!("php:{}", php.version);
+        reg.targets.get_mut(&php_id).unwrap().exts = vec!["gd".into()];
+        let order = crate::plan::resolve(&reg, &php_id, &sel, &features).unwrap();
+        let ids: Vec<String> = order.iter().map(|t| t.id()).collect();
+        let pos = |id: &str| ids.iter().position(|x| x == id).unwrap();
+        assert!(pos("dep:zlib") < pos("dep:libpng"));
+        assert!(pos("dep:libpng") < pos("dep:freetype"));
+        assert!(pos("dep:libpng") < pos("dep:jpeg"));
+        assert!(pos("ext:gd") < pos("php:8.5.12"));
+        assert!(pos("dep:jpeg") < pos("ext:gd"));
+    }
+
+    #[test]
+    fn feature_commands_are_checked() {
+        let dir = dir();
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        let metas = load_meta(&dir, &catalog).unwrap();
+        let bindings = crate::bind::resolve(
+            &catalog,
+            &Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap(),
+            &metas,
+            "8.5",
+            &[],
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let php_version = catalog.php_version("8.5").unwrap().to_owned();
+        let ctx = crate::bind::context("8.5", &php_version, &bindings);
+        let builtin_exts = metas
+            .iter()
+            .find(|m| m.kind == Kind::Php && m.series.as_deref() == Some("8.5"))
+            .unwrap()
+            .builtin_exts
+            .clone();
+        let mut reg = load_targets(
+            &dir,
+            &catalog,
+            "8.5",
+            &metas,
+            &bindings.lines,
+            &ctx,
+            &builtin_exts,
+        )
+        .unwrap();
+        let id = "dep:jpeg".to_owned();
+        let dep = reg.targets.get_mut(&id).unwrap();
+        dep.features.insert(
+            "missing".into(),
+            Feature {
+                requires: Requires {
+                    commands: vec!["definitely-not-a-phprt-command".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let err = feature_available(&reg, reg.get(&id).unwrap(), "missing")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("需要命令 definitely-not-a-phprt-command"),
+            "{err}"
+        );
     }
 
     #[test]

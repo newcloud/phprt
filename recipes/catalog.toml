@@ -41,6 +41,31 @@
 [libxml2]
 "2.15" = { version = "2.15.4", url = "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz", sha256 = "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821" }
 
+[zlib]
+"1.3" = { version = "1.3.2", url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz", sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" }
+
+# libpng 1.7 还是 beta，稳定线锁 1.6。
+# download.sourceforge.net 会 301 到 downloads.sourceforge.net，再 302 到带临时
+# 签名的镜像；这里写稳定的发布路径。
+[libpng]
+"1.6" = { version = "1.6.59", url = "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.59/libpng-1.6.59.tar.xz", sha256 = "d80dd2a38a37f803cb9b6ac7b14bd6e74ddc3b654780a8380bdf93523fdb4389" }
+
+[jpeg]
+"3.1" = { version = "3.1.4.1", url = "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.4.1/libjpeg-turbo-3.1.4.1.tar.gz", sha256 = "ecae8008e2cc9ade2f2c1bb9d5e6d4fb73e7c433866a056bd82980741571a022" }
+
+[webp]
+"1.6" = { version = "1.6.0", url = "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz", sha256 = "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564" }
+
+[aom]
+"3.12" = { version = "3.12.1", url = "https://storage.googleapis.com/aom-releases/libaom-3.12.1.tar.gz", sha256 = "9e9775180dec7dfd61a79e00bda3809d43891aee6b2e331ff7f26986207ea22e" }
+
+# GitHub tag 归档会跳到 codeload；这里写稳定的 tag 地址。
+[avif]
+"1.3" = { version = "1.3.0", url = "https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.3.0.tar.gz", sha256 = "0a545e953cc049bf5bcf4ee467306a2f113a75110edf59e61248873101cd26c1" }
+
+[freetype]
+"2.13" = { version = "2.13.3", url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz", sha256 = "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289" }
+
 # 构建期工具：phpize 需要 autoconf。GNU FTP 直连，不套 GitHub 镜像。
 [autoconf]
 "2.72" = { version = "2.72", url = "https://ftp.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz", sha256 = "ba885c1319578d6c94d46e9b0dceb4014caafe2490e437a0dbca3f270a223f5a" }
