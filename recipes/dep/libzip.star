@@ -7,7 +7,17 @@ def target(ctx):
         url = self["url"],
         sha256 = self["sha256"],
         needs = ["zlib"],
-        # 只留 zlib：加密/压缩后端的可选项都关掉，避免探测系统库。
+        # 压缩后端只留 zlib；加密后端默认关，打开时用 PHP 自己编的 openssl。
+        features = {
+            "encryption": feature(
+                needs = ["openssl"],
+                configure = [
+                    "-DENABLE_OPENSSL=ON",
+                    "-DOPENSSL_ROOT_DIR={dep:openssl}",
+                ],
+                disable = ["-DENABLE_OPENSSL=OFF"],
+            ),
+        },
         configure = [
             "cmake",
             "-S", "{build}",
@@ -19,7 +29,9 @@ def target(ctx):
             "-DENABLE_LZMA=OFF",
             "-DENABLE_ZSTD=OFF",
             "-DENABLE_BZIP2=OFF",
-            "-DENABLE_OPENSSL=OFF",
+            "-DENABLE_GNUTLS=OFF",
+            "-DENABLE_COMMONCRYPTO=OFF",
+            "-DENABLE_WINDOWS_CRYPTO=OFF",
             "-DBUILD_TOOLS=OFF",
             "-DBUILD_REGRESS=OFF",
             "-DBUILD_EXAMPLES=OFF",

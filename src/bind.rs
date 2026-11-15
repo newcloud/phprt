@@ -202,9 +202,22 @@ pub fn resolve(
     };
     let mut notes = notes;
 
-    // 4. 收集被选扩展对依赖线的约束。
+    // 4. 收集被选扩展对依赖线的约束。内置扩展一定会加载（is_builtin），
+    //    即便不在本次方案里，它的 PHP_LINES / PHP_DEP_LINES 也要参与约束，
+    //    否则多线依赖库（如 libcurl）会留在未绑定状态。
+    let builtin_exts = metas
+        .iter()
+        .find(|meta| meta.kind == Kind::Php)
+        .map(|meta| meta.builtin_exts.clone())
+        .unwrap_or_default();
+    let mut considered: Vec<String> = selected_exts.to_vec();
+    for name in &builtin_exts {
+        if !considered.contains(name) {
+            considered.push(name.clone());
+        }
+    }
     let mut constraints: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
-    for ext_name in selected_exts {
+    for ext_name in &considered {
         let Some(meta) = ext_meta(metas, ext_name) else {
             bail!("未知扩展 ext:{ext_name}");
         };

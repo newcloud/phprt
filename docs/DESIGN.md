@@ -392,9 +392,9 @@ phprtv3/
 ├── vendor/perl/                # 构建期补系统 perl 的纯 Perl 模块
 ├── recipes/
 │   ├── catalog.toml
-│   ├── bundles/php{7.4,8.0,8.2,8.3,8.4,8.5,8.6}.toml
+│   ├── bundles/php{7.4,8.0,8.1,8.2,8.3,8.4,8.5,8.6}.toml
 │   ├── defs.star
-│   ├── php{7.4,8.0,8.2,8.3,8.4,8.5,8.6}.star
+│   ├── php{7.4,8.0,8.1,8.2,8.3,8.4,8.5,8.6}.star
 │   ├── dep/{openssl,libcurl,nghttp2,autoconf}.star
 │   ├── dep/{libyaml,libmemcached,imagemagick,libssh2,rabbitmq-c,librdkafka}.star
 │   ├── dep/{sqlite,libzip,libsodium,oniguruma}.star
@@ -512,7 +512,7 @@ cargo run -- install 8.5 --ext swoole --offline               # 下载+解压+�
 内置扩展事实与 `builtin_disable`、`--disable-default-ext` 冲突/范围、软默认自动切换、
 硬选择冲突、版本线不支持 PHP、builtin 扩展的 `PHP_LINES` / `PHP_DEP_LINES`、
 单线组件在不支持的系列下跳过、
-dep 不允许声明 PHP 关系、feature 的 `requires.commands`、8.3 / 8.4 / 8.5 加载 gd、
+dep 不允许声明 PHP 关系、feature 的 `requires.commands`、8.0 ~ 8.5 加载 gd、
 `--ext` 的 version 预解析、
 catalog PHP 版本解析、下载的 Range 分片/续传/镜像顺序/重试/校验，以及原有的
 依赖闭包/拓扑/契约测试，解压的四种格式、顶层提平、PECL 包提平、跳过、越界拒绝和

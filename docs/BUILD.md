@@ -120,6 +120,9 @@ cargo run -- install 8.5
 ./myphp -v
 ./myphp -m | grep -E '^(zlib|sqlite3|pdo_sqlite|mysqli|pdo_mysql|mbstring|zip|sodium|gettext|pcntl|posix|sockets|shmop|sysvmsg|sysvsem|sysvshm)$'
 
+# 官方测试用例（验收标准）：在源码目录跑 PHP 自带的 run-tests 全量套件
+make test TESTS="-j$(nproc)"
+
 # 只装 PHP 本体：禁用有依赖库的三个默认扩展
 cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml
 
@@ -142,6 +145,20 @@ grep -E 'SIMD extensions' build/logs/dep-jpeg-3.1.4.1.log
 cargo run -- install 8.5 --downloads --offline
 ```
 
+`make test` 在离线环境有两个注意点：
+
+- run-tests 跑完会向 qa.php.net 发报告，`fwrite()` 报 Bad file descriptor、`make`
+  返回非零；这是环境问题，验收只看 Tests passed / failed / skipped 计数。
+- 8.1 的 `run-tests.php` 有上游 bug：没编 php-cgi / phpdbg 时 `$php_cgi` / `$phpdbg`
+  仍被引用（`Undefined variable $php_cgi`），测试跑到 CGI 段就中断。8.2 起改成
+  `?? null`，8.1 分支 EOL 没有回填。recipe 不改上游源码，手动把
+  `build/php/php-8.1.34/run-tests.php` 第 1900 ~ 1906 行换成：
+
+```php
+    $php_cgi = $env['TEST_PHP_CGI_EXECUTABLE'] ?? null;
+    $phpdbg = $env['TEST_PHPDBG_EXECUTABLE'] ?? null;
+```
+
 依赖库应该从树内加载：
 
 ```bash
@@ -152,4 +169,4 @@ ldd .phprt/php-8.5.12/bin/php | grep libssl
 ## 9. 不在范围
 
 LTO、`--static-all`、lock 文件、多 PHP 并行构建、增量链接优化。
-其他 PHP 系列的 recipe 使用同一套流程，目前只在 8.3、8.4 和 8.5 上验收。
+其他 PHP 系列的 recipe 使用同一套流程，目前只在 8.0 ~ 8.5 上验收（8.6 未适配）。

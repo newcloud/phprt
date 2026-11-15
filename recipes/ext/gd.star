@@ -12,7 +12,7 @@ IMAGE_LINES = {
 # 新增 PHP 系列时必须补一条，否则加载 recipe 会失败。
 PHP_DEP_LINES = {
     series: IMAGE_LINES
-    for series in ["7.4", "8.0", "8.2", "8.3", "8.4", "8.5", "8.6"]
+    for series in ["7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"]
 }
 
 
@@ -44,7 +44,7 @@ def target(ctx):
             "avif": feature(
                 needs = ["aom", "avif"],
                 configure = ["--with-avif"],
-                requires = {"php": ["8.2", "8.3", "8.4", "8.5", "8.6"]},
+                requires = {"php": ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6"]},
             ),
         },
         ignored = {

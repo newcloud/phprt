@@ -123,7 +123,7 @@ PHP_DEP_LINES = {
 "3.5" = { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "..." }
 ```
 
-- `[php]` 必须有，key 是 PHP 系列（7.4 / 8.0 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6）。
+- `[php]` 必须有，key 是 PHP 系列（7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6）。
 - 每条线必须有 `version` 和 `url`。
 - `url` 写上游最终地址；跳转链路用注释记录，判定规则见 [ADD-RECIPE.md](ADD-RECIPE.md)。
 - 不写 PHP 兼容性、不写构建参数。
@@ -330,7 +330,7 @@ TARGET = php(
 - `version` / `url` / `sha256` 从 catalog 的 `[php]` 注入。
 - `builtin_exts`：该 PHP 版本的内置扩展名，和是否有 recipe 无关；非空、无重复。
 - `builtin_disable`：内置扩展名 → 单个关闭参数；key 必须在 `builtin_exts` 里。
-- 每个支持的系列一个 recipe；当前是 7.4 / 8.0 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
+- 每个支持的系列一个 recipe；当前是 7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
 
 ## 7. 占位符
 
@@ -366,6 +366,6 @@ TARGET = php(
 12. dep recipe 不声明 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`。
 13. `PHP_LINES` 覆盖所有 PHP 系列，引用的线都在 catalog 里。
 14. `PHP_DEP_LINES` 只用于 ext，覆盖所有 PHP 系列；内层名字是 dep recipe，引用的线都在 catalog 里。
-15. 既不是当前 PHP 内置扩展、也没有 catalog 记录的 ext recipe 不加载；例如 gd 只在声明了内置事实的 8.3 / 8.4 / 8.5 出现。
+15. 既不是当前 PHP 内置扩展、也没有 catalog 记录的 ext recipe 不加载；例如 gd 只在声明了内置事实的 8.0 ~ 8.5 出现。
 16. `[ext_presets]` 自己不能写 `ref`；`[default_exts]` 的 `ref` 必须是
     `"ext_presets.<同名扩展>"`，指向存在的 preset，且不能和本地 `features`/`deps` 同时写。

@@ -8,6 +8,7 @@
 [php]
 "7.4" = { version = "7.4.33", url = "https://www.php.net/distributions/php-7.4.33.tar.gz" }
 "8.0" = { version = "8.0.30", url = "https://www.php.net/distributions/php-8.0.30.tar.gz" }
+"8.1" = { version = "8.1.34", url = "https://www.php.net/distributions/php-8.1.34.tar.gz" }
 "8.2" = { version = "8.2.29", url = "https://www.php.net/distributions/php-8.2.29.tar.gz" }
 "8.3" = { version = "8.3.26", url = "https://www.php.net/distributions/php-8.3.26.tar.gz" }
 "8.4" = { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz" }
@@ -37,9 +38,17 @@
 [libcurl]
 "8.23" = { version = "8.23.0", url = "https://curl.se/download/curl-8.23.0.tar.xz", sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5" }
 
+# PHP 8.0 的 openssl 扩展编不过 OpenSSL 3.x，curl 只能用 7.88 线配 1.1.1。
+"7.88" = { version = "7.88.0", url = "https://curl.se/download/curl-7.88.0.tar.xz", sha256 = "fd17432cf28714a4cf39d89e26b8ace0d8901199fe5d01d75eb0ae3bbfcc731f" }
+
 # GNOME 下载站直接提供 tar.xz，不跳转；sha256 取自同目录的 .sha256sum。
 [libxml2]
 "2.15" = { version = "2.15.4", url = "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz", sha256 = "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821" }
+
+# libxml2 2.12 改了 xmlStructuredErrorFunc 的 const 签名并删掉了 xmlversion.h 里的
+# ATTRIBUTE_UNUSED 宏；PHP 8.0/7.4 分支 EOL 后没拿到上游修复，编不过 2.12+，
+# 只能钉在 2.11（php-src UPGRADING：8.0 要求 libxml >= 2.9.0）。
+"2.11" = { version = "2.11.9", url = "https://download.gnome.org/sources/libxml2/2.11/libxml2-2.11.9.tar.xz", sha256 = "780157a1efdb57188ec474dca87acaee67a3a839c2525b2214d318228451809f" }
 
 [zlib]
 "1.3" = { version = "1.3.2", url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz", sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" }

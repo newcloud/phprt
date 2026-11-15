@@ -40,7 +40,7 @@ phprt install php:8.5.12
 不带时直接报错：
 
 ```text
-error: 请指定 PHP 版本，例如：phprt install 8.5（可用：7.4, 8.0, 8.2, 8.3, 8.4, 8.5, 8.6）
+error: 请指定 PHP 版本，例如：phprt install 8.5（可用：7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6）
 ```
 
 其他命令用 `--php`：
@@ -123,7 +123,7 @@ phprt install 8.5 --ext swoole --ext xdebug
 - `[default_exts]` 是 `recipes/bundles/php<系列>.toml` 里的表：`link` / `features` / `deps`；
   可用 `ref = "ext_presets.<同名扩展>"` 引用 `[ext_presets]`。
 - `[ext_presets]` 只提供 `--ext` / `ext add` 时的默认 feature，不会默认安装扩展。
-- 8.3 / 8.4 / 8.5 默认启用 v2 那套常用内置扩展（openssl、curl、libxml、zlib、
+- 8.0 ~ 8.5 默认启用 v2 那套常用内置扩展（openssl、curl、libxml、zlib、
   sqlite3/pdo_sqlite、mysqli、pdo_mysql、mbstring、zip、sodium、gettext、pcntl、
   sockets、shmop、sysv*）；其他系列暂时没有默认扩展。
 - `--disable-default-ext openssl` 从本次方案扣除；首次 install 成功后落盘。
@@ -257,7 +257,7 @@ phprt install 8.5 --ext 'openssl=feature:[argon2]'
 # 已有 state 里默认开了 argon2，想关掉
 phprt install 8.5 --ext 'openssl=feature:[]'
 
-# gd：使用 [ext_presets].gd，自动带 JPEG/PNG/WebP/FreeType；gd 只在 8.3 / 8.4 / 8.5 加载
+# gd：使用 [ext_presets].gd，自动带 JPEG/PNG/WebP/FreeType；gd 只在 8.0 ~ 8.5 加载
 phprt install 8.5 --ext gd
 
 # 显式清空预设，只保留 PNG

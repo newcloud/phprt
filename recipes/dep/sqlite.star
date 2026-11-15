@@ -7,6 +7,12 @@ def target(ctx):
         url = self["url"],
         sha256 = self["sha256"],
         needs = [],
+        features = {
+            "column_metadata": feature(
+                configure = ["--column-metadata"],
+                disable = ["--disable-column-metadata"],
+            ),
+        },
         configure = [
             "./configure",
             "--prefix={prefix}",

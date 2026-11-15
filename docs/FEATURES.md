@@ -90,7 +90,8 @@ ext:openssl
 | openssl `--with-openssl-argon2` | 常用，依赖已在编 | feature，默认开 |
 | openssl `--with-openssl-legacy-provider` | 有需求（老证书、MD4/RC4/DES） | feature，默认关 |
 | openssl `--with-system-ciphers` | 少用 | ignored |
-| openssl `--with-kerberos`（仅 8.3） | 少用，需要系统 krb5 | ignored |
+| openssl `--with-kerberos`（8.0 ~ 8.3） | 少用，需要系统 krb5 | ignored |
+| openssl `--with-openssl-argon2` / `--with-openssl-legacy-provider` | 8.4 起才有 | feature，requires php 8.4+ |
 | pdo_mysql `--with-zlib-dir`（仅 8.3） | 少用，mysqlnd 压缩走 PHP 的 zlib | ignored |
 | swoole `--enable-cares` | 常用（异步 DNS） | feature + `needs=["c-ares"]`，默认关 |
 | swoole `--enable-brotli` | 有一定需求 | 缺依赖（未排期）：brotli |
@@ -107,6 +108,8 @@ ext:openssl
 | gd `--with-avif` | 常用但依赖较大 | feature `avif` + `needs=["aom","avif"]`，默认关 |
 | gd `--with-external-gd` / `--with-xpm` / `--enable-gd-jis-conv` | 少用 | ignored |
 | libjpeg-turbo `WITH_SIMD` | 常用（性能） | dep feature `simd`，默认关；`requires.commands=["nasm"]` |
+| libzip `ENABLE_OPENSSL` | 常用（读写 AES 加密的 zip） | dep feature `encryption` + `needs=["openssl"]`，默认开（`[ext_presets].zip`） |
+| sqlite `--column-metadata` | 常用（PDO `getColumnMeta()` 要这些 API） | dep feature `column_metadata`，默认开（`[ext_presets].sqlite3` / `.pdo_sqlite`） |
 | redis `--enable-redis-{igbinary,msgpack}` | 少用：要对应序列化扩展 | ignored，序列化用 redis 自带实现 |
 | redis `--enable-redis-{lz4,zstd}` / `--with-lib{lz4,zstd}` | 少用 | ignored，缺依赖（未排期） |
 | redis `--enable-redis-lzf` / `--with-liblzf` | 常用（压缩） | feature `lzf`，默认关（自带 liblzf） |

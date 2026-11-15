@@ -39,6 +39,9 @@ librdkafka = "2.16"
 [ext_presets]
 curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
+zip = { deps = { libzip = ["encryption"] } }
+sqlite3 = { deps = { sqlite = ["column_metadata"] } }
+pdo_sqlite = { deps = { sqlite = ["column_metadata"] } }
 
 # 默认启用的扩展。
 #
@@ -57,12 +60,12 @@ libxml = {}
 # v2 的默认集：框架和主流项目常用的内置扩展，全部静态编进 PHP。
 # 依赖库默认线在 [deps]；zlib/sqlite3/mbstring/zip/sodium 需要对应的 dep。
 zlib = {}
-sqlite3 = {}
-pdo_sqlite = {}
+sqlite3 = { ref = "ext_presets.sqlite3" }
+pdo_sqlite = { ref = "ext_presets.pdo_sqlite" }
 mysqli = {}
 pdo_mysql = {}
 mbstring = {}
-zip = {}
+zip = { ref = "ext_presets.zip" }
 sodium = {}
 gettext = {}
 pcntl = {}

@@ -244,9 +244,15 @@ libxml = {}
 
 ### 6.4 当前默认
 
-8.3 / 8.4 / 8.5 写了默认集，内容相同，只有 `php` 和 `swoole` 行不同，
-下面以 8.5 为例；8.3 没有 `openssl` 预设（8.3 的 openssl 没有 argon2 选项），
-`[default_exts]` 里写 `openssl = {}`。
+8.0 ~ 8.5 写了默认集，内容相同，只有 `php` / `swoole` / `openssl` 线不同，
+下面以 8.5 为例。8.0 ~ 8.3 没有 `openssl` 预设（argon2 / legacy-provider 是 8.4 才有的
+configure 选项），`[default_exts]` 里写 `openssl = {}`；8.0 的 `[deps]` 额外有三处差异：
+`openssl = "1.1.1"`（PHP 8.0 的 openssl 扩展编不过 OpenSSL 3.x）、
+`libcurl = "7.88"`（libcurl 8.23 要求 OpenSSL >= 3.0）和
+`libxml2 = "2.11"`（libxml2 2.12 改了错误回调签名并删掉 `ATTRIBUTE_UNUSED` 宏，
+PHP 8.0 分支没拿到上游修复）。另外 8.0 的 `configure` 末尾带着
+`CFLAGS=-O2 -std=gnu17 -Wno-error=incompatible-pointer-types`：GCC 15 默认 gnu23，
+`()` 旧式声明被当成零参数，8.0 的 scanf.c / pcntl.c 等旧式 C 直接编不过；7.4 同理。
 
 ```toml
 php = "8.5"
@@ -288,18 +294,21 @@ oniguruma = "6.9"
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
+zip = { deps = { libzip = ["encryption"] } }
+sqlite3 = { deps = { sqlite = ["column_metadata"] } }
+pdo_sqlite = { deps = { sqlite = ["column_metadata"] } }
 
 [default_exts]
 openssl = { ref = "ext_presets.openssl" }
 curl = { ref = "ext_presets.curl" }
 libxml = {}
 zlib = {}
-sqlite3 = {}
-pdo_sqlite = {}
+sqlite3 = { ref = "ext_presets.sqlite3" }
+pdo_sqlite = { ref = "ext_presets.pdo_sqlite" }
 mysqli = {}
 pdo_mysql = {}
 mbstring = {}
-zip = {}
+zip = { ref = "ext_presets.zip" }
 sodium = {}
 gettext = {}
 pcntl = {}

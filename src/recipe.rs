@@ -1112,6 +1112,11 @@ pub fn load_targets(
         if kind == Kind::Ext && !is_builtin && self_value.is_null() {
             continue;
         }
+        // 没绑定版本线的多线依赖库（如 catalog 里同时有 7.88 / 8.23 的 libcurl）
+        // 不加载；真实流程里消费它的扩展会把线约束进来，未绑定说明这次方案用不到它。
+        if kind == Kind::Dep && self_value.is_null() {
+            continue;
+        }
         let mut ctx = base_ctx.clone();
         ctx["is_builtin"] = serde_json::Value::Bool(is_builtin);
         if kind != Kind::Php {
@@ -1640,6 +1645,14 @@ mod tests {
             pin_map.insert((*name).to_owned(), (*line).to_owned());
         }
         let selected: Vec<String> = selected.iter().map(|s| (*s).to_owned()).collect();
+        // 测试直接调 bind::resolve；CLI 流程在这里之前会把 bundle 默认集 seed 进
+        // selected，这里同样补上，保证测试覆盖的是真实方案的约束。
+        let mut selected = selected;
+        for name in bundle.default_exts.keys() {
+            if !selected.contains(name) {
+                selected.push(name.clone());
+            }
+        }
         let bindings = bind::resolve(&catalog, &bundle, &metas, series, &selected, &pin_map)?;
         let php_version = catalog.php_version(series)?.to_owned();
         let ctx = bind::context(series, &php_version, &bindings);
@@ -1867,13 +1880,16 @@ gd = { ref = "ext_presets.gd", link = "shared" }
 
     #[test]
     fn gd_loads_for_series_with_builtin_facts() {
-        for series in ["8.3", "8.4", "8.5"] {
+        for series in ["8.0", "8.1", "8.2", "8.3", "8.4", "8.5"] {
             let (reg, _) = load(series, &[], &[]).unwrap();
             assert!(reg.get("ext:gd").is_some(), "{series} 应该加载 gd");
         }
 
-        let (reg, _) = load("8.2", &[], &[]).unwrap();
-        assert!(reg.get("ext:gd").is_none());
+        // 7.4 / 8.6 还没适配内置事实，gd 不加载。
+        for series in ["7.4", "8.6"] {
+            let (reg, _) = load(series, &[], &[]).unwrap();
+            assert!(reg.get("ext:gd").is_none(), "{series} 不该加载 gd");
+        }
     }
 
     #[test]

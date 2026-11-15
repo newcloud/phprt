@@ -89,7 +89,7 @@ cargo run -- install 8.5 --ext swoole             # bundle: swoole 6.2
 cargo run -- install 8.5 --ext gd                 # 使用 [ext_presets].gd
 cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'
 cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'
-cargo run -- install 8.2 --ext gd                  # 必须失败：gd 只在 8.3 / 8.4 / 8.5 加载
+cargo run -- install 8.6 --ext gd                  # 必须失败：gd 只在 8.0 ~ 8.5 加载（7.4 / 8.6 未适配）
 cargo run -- install 7.4 --ext swoole             # swoole 4.8 + openssl 1.1.1
 cargo run -- install 8.2 --ext swoole=version:6.0
 cargo run -- install 8.5 --ext swoole --dep openssl=4.0

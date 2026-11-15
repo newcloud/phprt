@@ -1,6 +1,6 @@
 PHP_DEP_LINES = {
     series: {"libzip": ["1.12"]}
-    for series in ["7.4", "8.0", "8.2", "8.3", "8.4", "8.5", "8.6"]
+    for series in ["7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"]
 }
 
 
@@ -13,6 +13,7 @@ def target(ctx):
         modules = ["zip"],
         link = ["static"],
         needs = ["libzip"],
+        dep_configure = {"libzip": []},
         configure = ["--with-zip={dep:libzip}"],
         version = ctx["php_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],
