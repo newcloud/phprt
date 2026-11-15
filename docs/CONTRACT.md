@@ -244,6 +244,8 @@ def target(ctx):
         version=ctx["php_version"] if ctx["is_builtin"] else self["version"],
         url="" if ctx["is_builtin"] else self["url"],
         sha256="" if ctx["is_builtin"] else self["sha256"],
+        # needs / configure 按 LINES[line] 推导，和兼容表同源（完整写法见
+        # recipes/ext/swoole.star）
         needs=["libcurl", "openssl"],
         tools=["autoconf"],
         dep_configure={"libcurl": ["--enable-swoole-curl"]},

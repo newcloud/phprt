@@ -94,18 +94,28 @@ LINES = {
     },
 }
 
+LINES = {
+    "6.2": {"php": ["8.4", "8.5", "8.6"], "openssl": ["1.1.1", "3.0", "3.5", "4.0"]},
+}
+
+
 def target(ctx):
     self = ctx["self"]
+    line = self["line"]
+    # needs 和 configure 都从同一张 LINES 表推导，兼容信息只有一份
+    needs = ["libcurl"]
+    configure = []
+    if "openssl" in LINES[line]:
+        needs = ["libcurl", "openssl"]
+        configure = ["--enable-swoole", "--with-openssl-dir={dep:openssl}", "--disable-brotli"]
     return ext(
         name="swoole",
-        version=ctx["php_version"] if ctx["is_builtin"] else self["version"],
-        url="" if ctx["is_builtin"] else self["url"],
-        sha256="" if ctx["is_builtin"] else self["sha256"],
         modules=["swoole"],
         link=["shared"],
-        needs=["libcurl", "openssl"],
+        needs=needs,
+        tools=["autoconf"],
         dep_configure={"libcurl": ["--enable-swoole-curl"]},
-        configure=["--enable-swoole", "--with-openssl-dir={dep:openssl}"],
+        configure=configure,
         ini="27-swoole.ini",
     )
 
