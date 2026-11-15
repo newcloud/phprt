@@ -474,6 +474,8 @@ phprt install 8.5 --ext openssl --dep openssl=4.0
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、ini、入口、验收 |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
+| [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
+| [GENERIC.md](GENERIC.md) | 产品/组件/依赖三层通用模型；`产品@系列` 单目标 CLI；nginx、CPython 走查与实现顺序 |
 
 ## 16. 验收
 
