@@ -77,6 +77,7 @@ def ext(
         needs = [],
         tools = [],
         dep_configure = {},
+        prepare = [],
         features = {},
         ignored = {},
         configure = [],
@@ -108,6 +109,9 @@ def ext(
     features 是扩展自己的开关：名字 -> feature(configure=[])。
     ignored 是「看过但决定不暴露」的上游选项：选项 -> 理由。
     两项都由 phprt audit 对照上游选项清单检查，避免漏掉或静默忽略。
+
+    prepare 是在 phpize 之前于源码目录执行的 shell 命令，用来给上游源码
+    打兼容补丁；写进 signature，命令变化会触发重编。
     """
     return {
         "kind": "ext",
@@ -118,6 +122,7 @@ def ext(
         "needs": needs,
         "tools": tools,
         "dep_configure": dep_configure,
+        "prepare": prepare,
         "features": features,
         "ignored": ignored,
         "configure": configure,

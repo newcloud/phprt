@@ -304,17 +304,27 @@ mod tests {
     fn default_exts_is_a_table_of_features_and_deps() {
         let bundle = Bundle::load(&dir().join("bundles/php8.5.toml")).unwrap();
         let openssl = &bundle.default_exts["openssl"];
-        assert_eq!(openssl.features, vec!["argon2".to_owned()]);
+        assert_eq!(openssl.reference, "ext_presets.openssl");
+        assert!(openssl.features.is_empty());
         assert!(openssl.deps.is_empty());
         assert_eq!(openssl.link, None);
 
         let curl = &bundle.default_exts["curl"];
+        assert_eq!(curl.reference, "ext_presets.curl");
         assert!(curl.features.is_empty());
-        assert_eq!(curl.deps["libcurl"], vec!["ssl".to_owned()]);
+        assert!(curl.deps.is_empty());
         assert_eq!(bundle.ext_lines["swoole"], "6.2");
         assert_eq!(bundle.dep_lines["openssl"], "3.5");
         assert!(!bundle.ext_lines.contains_key("openssl"));
 
+        assert_eq!(
+            bundle.ext_presets["openssl"].features,
+            vec!["argon2".to_owned()]
+        );
+        assert_eq!(
+            bundle.ext_presets["curl"].deps["libcurl"],
+            vec!["ssl".to_owned()]
+        );
         let gd = &bundle.ext_presets["gd"];
         assert_eq!(
             gd.features,

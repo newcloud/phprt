@@ -147,6 +147,8 @@ pub fn resolve(
     }
 
     // 3. 每一条已绑定的线都要满足它自己的 PHP 兼容表。
+    // skipped 记录「只有一条线但不支持当前系列」的组件，供第 4 步给出准确报错。
+    let mut skipped: BTreeMap<String, String> = BTreeMap::new();
     let notes = {
         let mut notes = Vec::new();
         for (name, choice) in choices.clone() {
@@ -166,6 +168,14 @@ pub fn resolve(
                     choice.line,
                     list(&allowed)
                 );
+            }
+            if choice.source == Source::Single {
+                // catalog 里只有一条线的组件会被自动绑定；如果这条线不支持当前
+                // 系列，就当作该系列没有这个扩展，不加载它的 recipe。
+                // （例如 protobuf 只有 5.36 一条线，最低要求 PHP 8.2。）
+                skipped.insert(name.clone(), choice.line.clone());
+                choices.remove(&name);
+                continue;
             }
             if choice.source == Source::Bundle && allowed.len() == 1 {
                 let line = allowed.iter().next().expect("刚刚判断只有一个").clone();
@@ -231,6 +241,9 @@ pub fn resolve(
         }
         if meta.lines.is_empty() {
             continue;
+        }
+        if let Some(line) = skipped.get(ext_name) {
+            bail!("ext:{ext_name} {line} 不支持 PHP {php_series}，该系列不加载这个扩展");
         }
         let Some(choice) = choices.get(ext_name) else {
             bail!(
@@ -444,5 +457,29 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("是扩展"), "{err}");
+    }
+
+    #[test]
+    fn single_line_ext_not_for_this_series_is_skipped() {
+        let (catalog, mut bundle, metas) = setup();
+        // 不走 bundle 默认线，让单线组件走「catalog 只有一条线」的自动绑定。
+        bundle.ext_lines.remove("protobuf");
+        bundle.ext_lines.remove("ssh2");
+        // protobuf 只有 5.36 一条线，最低支持 PHP 8.2；7.4 下直接不绑定。
+        let bindings = resolve(&catalog, &bundle, &metas, "7.4", &[], &BTreeMap::new())
+            .expect("7.4 加载成功，只是不绑定 protobuf");
+        assert!(!bindings.lines.contains_key("protobuf"));
+
+        let err = resolve(
+            &catalog,
+            &bundle,
+            &metas,
+            "7.4",
+            &["protobuf".to_owned()],
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("ext:protobuf 5.36 不支持 PHP 7.4"), "{err}");
     }
 }

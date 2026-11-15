@@ -30,10 +30,13 @@ CLI 显式 > state.bindings > bundle 默认 > 单线组件自动
 1. 如果显式指定了线，必须在 catalog 里。
 2. 否则使用 bundle：有独立版本线的扩展取顶层键，依赖库取 `[deps]`；
    bundle 没有且只有一条线时直接用它。
-3. 有自己版本线的扩展（swoole / xdebug）校验 `LINES[线].php` 包含当前 PHP 系列。
+3. 有自己版本线的扩展（swoole / xdebug / redis / …）校验 `LINES[线].php` 包含当前 PHP 系列。
    - 显式线不满足 → 报错。
    - bundle 线不满足、且只有一条候选 → 自动改用并打印提示。
    - 否则报错并列出候选。
+   - 只有一条 catalog 线的组件被自动绑定时不支持当前系列 → 直接跳过，
+     该系列不加载这个扩展（例如 protobuf 5.36 最低支持 PHP 8.2）；
+     显式 `--ext` 选中它时会报「不支持 PHP <系列>」。
 4. dep（openssl / libcurl / nghttp2）不声明 PHP 兼容性；它的线由 bundle、CLI
    或消费扩展的约束决定。
 

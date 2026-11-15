@@ -111,6 +111,9 @@ pub struct Target {
     /// 出现即表示允许 dep:NAME；key 必须在 needs 或某个 feature 的 needs 里。
     #[serde(default)]
     pub dep_configure: BTreeMap<String, Vec<String>>,
+    /// 构建前在源码目录执行的命令（如给上游源码打兼容补丁）；只有 ext 使用。
+    #[serde(default)]
+    pub prepare: Vec<String>,
     #[serde(default)]
     pub shared_from: String,
     #[serde(default)]
@@ -186,6 +189,9 @@ impl Target {
                 }
                 if !self.dep_configure.is_empty() {
                     bail!("{at}: dep:{} 不允许 dep_configure", self.name);
+                }
+                if !self.prepare.is_empty() {
+                    bail!("{at}: dep:{} 不允许 prepare", self.name);
                 }
                 for (name, f) in &self.features {
                     if !f.requires.php.is_empty() || !f.requires.dep.is_empty() {
@@ -357,6 +363,9 @@ impl Target {
                 }
             }
             Kind::Php => {
+                if !self.prepare.is_empty() {
+                    bail!("{at}: php:{} 不允许 prepare", self.name);
+                }
                 if self.builtin_exts.is_empty() {
                     bail!("{at}: php:{} 的 builtin_exts 不能为空", self.name);
                 }
@@ -1695,11 +1704,14 @@ mod tests {
         assert!(err.contains("需要 dep:openssl 3.5, 4.0，当前 3.0"), "{err}");
 
         // PHP 系列不满足。
-        let (reg, _) = load("8.4", &["openssl"], &[]).unwrap();
+        let (reg, _) = load("8.2", &["openssl"], &[]).unwrap();
         let err = Selection::parse(&reg, &["openssl=feature:[argon2]".into()])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("需要 PHP 8.5, 8.6，当前 PHP 8.4"), "{err}");
+        assert!(
+            err.contains("需要 PHP 8.4, 8.5, 8.6，当前 PHP 8.2"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1813,6 +1825,14 @@ mod tests {
                 "webp".to_owned(),
             ]))
         );
+        assert_eq!(
+            presets.per_ext["openssl"].features,
+            Some(BTreeSet::from(["argon2".to_owned()]))
+        );
+        assert_eq!(
+            presets.per_ext["curl"].deps["libcurl"],
+            vec!["ssl".to_owned()]
+        );
     }
 
     #[test]
@@ -1846,12 +1866,36 @@ gd = { ref = "ext_presets.gd", link = "shared" }
     }
 
     #[test]
-    fn gd_is_only_loaded_for_php_8_5() {
-        let (reg, _) = load("8.5", &[], &[]).unwrap();
-        assert!(reg.get("ext:gd").is_some());
+    fn gd_loads_for_series_with_builtin_facts() {
+        for series in ["8.3", "8.4", "8.5"] {
+            let (reg, _) = load(series, &[], &[]).unwrap();
+            assert!(reg.get("ext:gd").is_some(), "{series} 应该加载 gd");
+        }
 
         let (reg, _) = load("8.2", &[], &[]).unwrap();
         assert!(reg.get("ext:gd").is_none());
+    }
+
+    #[test]
+    fn default_exts_are_the_same_for_adapted_series() {
+        // 8.3 / 8.4 / 8.5 的默认集是同一份（只有 php / swoole 线不同）；
+        // 具体名单是 bundle 的配置，不在这里重复一份固定清单。
+        let dir = dir();
+        let mut keys: Option<BTreeSet<String>> = None;
+        for series in ["8.3", "8.4", "8.5"] {
+            let bundle = Bundle::load(&dir.join("bundles").join(format!("php{series}.toml")))
+                .unwrap_or_else(|e| panic!("{series} bundle: {e}"));
+            let this: BTreeSet<String> = bundle.default_exts.keys().cloned().collect();
+            match &keys {
+                None => keys = Some(this),
+                Some(first) => assert_eq!(
+                    first,
+                    &this,
+                    "{series} 的默认集和已验收系列不一致：{:?}",
+                    this.symmetric_difference(first).collect::<Vec<_>>()
+                ),
+            }
+        }
     }
 
     #[test]

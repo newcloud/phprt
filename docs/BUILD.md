@@ -32,7 +32,7 @@ dep → 静态扩展（只贡献 PHP configure 参数） → php → 共享扩�
 
 ## 3. 环境
 
-每次执行命令注入以下变量：
+每个节点执行命令时注入以下变量：
 
 | 变量 | 内容 |
 | --- | --- |
@@ -44,7 +44,7 @@ dep → 静态扩展（只贡献 PHP configure 参数） → php → 共享扩�
 | `CFLAGS` / `CXXFLAGS` | `-O2`，再接用户已有的值 |
 | `MAKEFLAGS` | `-j<nproc>` |
 | `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块） |
-| `PHP_AUTOCONF` / `PHP_AUTOHEADER` | 树内 autoconf 的路径 |
+| `PHP_AUTOCONF` / `PHP_AUTOHEADER` | 树内 autoconf 的路径；只在节点 `tools` 里有 `autoconf` 时注入 |
 
 构建阶段使用绝对路径；`plan` 的输出仍然用相对项目根的路径，便于阅读。
 
@@ -60,6 +60,10 @@ dep → 静态扩展（只贡献 PHP configure 参数） → php → 共享扩�
 
 签名一致且产物齐全时跳过。签名变化时先执行 `make distclean`（忽略失败），
 再重新 configure / make。源码目录在 `build/`，删除它即可强制重新开始。
+
+环境变量按节点裁剪，只放和这个节点产物有关的项。例如 `PHP_AUTOCONF` 只给
+`tools` 里声明了 `autoconf` 的节点，这样临时加一个 phpize 类扩展不会改变
+openssl / libcurl / PHP 等节点的签名。
 
 ## 5. 日志与失败
 
@@ -111,11 +115,12 @@ gd 的图片依赖靠 pkg-config 定位：PHP 8.5 的 `ext/gd/config.m4` 用
 ```bash
 rm -rf .phprt build
 
-# 8.5 默认 openssl + curl(ssl) + libxml
+# 8.5 默认集（v2 的常用内置扩展）
 cargo run -- install 8.5
 ./myphp -v
+./myphp -m | grep -E '^(zlib|sqlite3|pdo_sqlite|mysqli|pdo_mysql|mbstring|zip|sodium|gettext|pcntl|posix|sockets|shmop|sysvmsg|sysvsem|sysvshm)$'
 
-# 只装 PHP：禁用三个默认扩展
+# 只装 PHP 本体：禁用有依赖库的三个默认扩展
 cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml
 
 # 再显式加 swoole / xdebug
@@ -147,4 +152,4 @@ ldd .phprt/php-8.5.12/bin/php | grep libssl
 ## 9. 不在范围
 
 LTO、`--static-all`、lock 文件、多 PHP 并行构建、增量链接优化。
-其他 PHP 系列的 recipe 使用同一套流程，但只在 8.5 上验收。
+其他 PHP 系列的 recipe 使用同一套流程，目前只在 8.3、8.4 和 8.5 上验收。

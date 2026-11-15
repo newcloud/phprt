@@ -55,6 +55,9 @@
 - `target(ctx)` 只写构建参数，不判断兼容性。
 - 是否内置、内置扩展的关闭参数写在 `php<系列>.star` 的 `builtin_exts` / `builtin_disable`；
   ext recipe 不写 `origin`、`static_enable`、`static_disable`，用 `ctx["is_builtin"]`。
+- 上游源码要先改再编时（如删除已移除头文件的 include），ext recipe 用
+  `prepare = [...]` 写 shell 命令：phpize 之前执行、必须幂等、会进构建签名；
+  能用 configure 参数解决的事不要写 prepare。
 - 默认启用集合写在 bundle 的 `[default_exts]` 表：`link` / `features` / `deps`，
   不允许 `version:`；有依赖的内置扩展必须一起写，不做依赖展开。
 - 扩展被选中时的默认 feature 写在 `[ext_presets]`；`[default_exts]` 用
@@ -86,7 +89,7 @@ cargo run -- install 8.5 --ext swoole             # bundle: swoole 6.2
 cargo run -- install 8.5 --ext gd                 # 使用 [ext_presets].gd
 cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'
 cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'
-cargo run -- install 8.2 --ext gd                  # 必须失败：gd 只在 8.5 加载
+cargo run -- install 8.2 --ext gd                  # 必须失败：gd 只在 8.3 / 8.4 / 8.5 加载
 cargo run -- install 7.4 --ext swoole             # swoole 4.8 + openssl 1.1.1
 cargo run -- install 8.2 --ext swoole=version:6.0
 cargo run -- install 8.5 --ext swoole --dep openssl=4.0

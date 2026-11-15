@@ -92,6 +92,18 @@ BUILTIN_DISABLE = {
         "sqlite3": "--without-sqlite3",
         "pdo_sqlite": "--without-pdo-sqlite",
         "zlib": "--without-zlib",
+        "mbstring": "--disable-mbstring",
+        "zip": "--without-zip",
+        "sodium": "--without-sodium",
+        "mysqli": "--without-mysqli",
+        "pdo_mysql": "--without-pdo-mysql",
+        "gettext": "--without-gettext",
+        "pcntl": "--disable-pcntl",
+        "sockets": "--disable-sockets",
+        "shmop": "--disable-shmop",
+        "sysvmsg": "--disable-sysvmsg",
+        "sysvsem": "--disable-sysvsem",
+        "sysvshm": "--disable-sysvshm",
 }
 
 TARGET = php(

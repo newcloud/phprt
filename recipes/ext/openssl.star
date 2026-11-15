@@ -18,13 +18,13 @@ def target(ctx):
     else:
         flags = ["--with-openssl={dep:openssl}"]
 
-    # --with-openssl-argon2 是 PHP 8.5+ 的 configure 选项，要求 OpenSSL >= 3.2；
+    # --with-openssl-argon2 是 PHP 8.4+ 的 configure 选项，要求 OpenSSL >= 3.2；
     # 条件写在 requires 里，由 Rust 校验并给出可读的报错。
     features = {
         "argon2": feature(
             configure = ["--with-openssl-argon2"],
             requires = {
-                "php": ["8.5", "8.6"],
+                "php": ["8.4", "8.5", "8.6"],
                 "dep": {"openssl": ["3.5", "4.0"]},
             },
         ),
@@ -33,11 +33,19 @@ def target(ctx):
         "legacy-provider": feature(
             configure = ["--with-openssl-legacy-provider"],
             requires = {
-                "php": ["8.5", "8.6"],
+                "php": ["8.4", "8.5", "8.6"],
                 "dep": {"openssl": ["3.0", "3.5", "4.0"]},
             },
         ),
     }
+
+    # 上游选项里看过、但暂不暴露的开关。
+    ignored = {
+        "--with-system-ciphers": "少用：依赖系统 cipher 配置，构建不可复现",
+    }
+    # 只有 8.3 还有这个选项，8.4 起上游已删除。
+    if ctx["php_series"] == "8.3":
+        ignored["--with-kerberos"] = "少用：需要系统 krb5 库，只在对接 Kerberos 认证时用"
 
     return ext(
         name = "openssl",
@@ -49,9 +57,7 @@ def target(ctx):
         url = "" if builtin else self["url"],
         sha256 = "" if builtin else self["sha256"],
         features = features,
-        ignored = {
-            "--with-system-ciphers": "少用：依赖系统 cipher 配置，构建不可复现",
-        },
+        ignored = ignored,
         configure = flags,
         shared_from = "ext/openssl",
         ini = "20-openssl.ini",

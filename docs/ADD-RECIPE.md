@@ -135,6 +135,9 @@ def target(ctx):
 - `configure` 同时用于 PHP static 和扩展自己的 shared 构建。
 - 正向参数写在 ext；负向参数来自 php 版本的 `builtin_disable`。
 - 内置扩展支持 shared 时必须有 `shared_from`；非内置必须有 catalog 的 url/version。
+- 上游源码需要先改再编（如删除已移除头文件的 include）时，用 `prepare` 写 shell 命令；
+  命令在 phpize 之前于源码目录执行，幂等（重复执行无副作用），会进构建签名。
+  能用 configure 参数解决的事不要写 prepare。
 - 依赖的集成参数写 `dep_configure`，key 是 `needs` 里的依赖名，或某个 feature 的
   `needs` 里的条件依赖：
 
@@ -198,11 +201,13 @@ def target(ctx):
 
 ```toml
 [ext_presets]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
 
 [default_exts]
-openssl = { features = ["argon2"] }
-curl = { deps = { libcurl = ["ssl"] } }
+openssl = { ref = "ext_presets.openssl" }
+curl = { ref = "ext_presets.curl" }
 libxml = {}
 ```
 
@@ -224,8 +229,11 @@ libxml = {}
 - 有依赖的内置扩展必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里，例如：
 
   ```toml
-  [default_exts]
+  [ext_presets]
   curl = { deps = { libcurl = ["ssl"] } }
+
+  [default_exts]
+  curl = { ref = "ext_presets.curl" }
   libxml = {}
   ```
 
@@ -236,12 +244,25 @@ libxml = {}
 
 ### 6.4 当前默认
 
-只有 8.5 写了默认集：
+8.3 / 8.4 / 8.5 写了默认集，内容相同，只有 `php` 和 `swoole` 行不同，
+下面以 8.5 为例；8.3 没有 `openssl` 预设（8.3 的 openssl 没有 argon2 选项），
+`[default_exts]` 里写 `openssl = {}`。
 
 ```toml
 php = "8.5"
 swoole = "6.2"
 xdebug = "3.5"
+redis = "6.3"
+apcu = "5.1"
+igbinary = "3.2"
+msgpack = "3.0"
+protobuf = "5.36"
+yaml = "2.3"
+memcached = "3.4"
+imagick = "3.8"
+ssh2 = "1.5"
+amqp = "2.2"
+rdkafka = "6.0"
 
 [deps]
 openssl = "3.5"
@@ -252,19 +273,46 @@ webp = "1.6"
 aom = "3.12"
 avif = "1.3"
 freetype = "2.13"
+libyaml = "0.2"
+libmemcached = "1.1"
+imagemagick = "7.1"
+libssh2 = "1.11"
+rabbitmq-c = "0.18"
+librdkafka = "2.16"
+sqlite = "3.54"
+libzip = "1.12"
+libsodium = "1.0"
+oniguruma = "6.9"
 
 [ext_presets]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
 
 [default_exts]
-openssl = { features = ["argon2"] }
-curl = { deps = { libcurl = ["ssl"] } }
+openssl = { ref = "ext_presets.openssl" }
+curl = { ref = "ext_presets.curl" }
 libxml = {}
+zlib = {}
+sqlite3 = {}
+pdo_sqlite = {}
+mysqli = {}
+pdo_mysql = {}
+mbstring = {}
+zip = {}
+sodium = {}
+gettext = {}
+pcntl = {}
+sockets = {}
+shmop = {}
+sysvmsg = {}
+sysvsem = {}
+sysvshm = {}
 ```
 
 顶层是扩展默认线，`[deps]` 是依赖库默认线；内置扩展没有版本线，不能写顶层。
-`swoole` / `xdebug` / `gd` 不在默认集里，需要 `--ext` 显式选择；gd 选中时
-自动使用 `[ext_presets].gd`，不需要再写 `feature:[...]`。
+`swoole` / `xdebug` / `gd` / 11 个 PECL 扩展不在默认集里，需要 `--ext` 显式选择；
+openssl、curl、gd 选中时自动使用各自的 `[ext_presets]`，不需要再写 `feature:[...]`。
 默认集和 preset 都只在第一次写 state 时落盘；已有项目要开 argon2 就显式传
 `--ext 'openssl=feature:[argon2]'`。
 

@@ -80,13 +80,21 @@ pub fn run(
             .map(|dep| dep_prefix(&tree_path, dep))
             .collect();
 
+        // PHP_AUTOCONF / PHP_AUTOHEADER 只影响 phpize 类扩展的构建，
+        // 其他节点注入会污染签名、触发无关重编。
+        let node_autoconf = if target.tools.iter().any(|name| name == "autoconf") {
+            autoconf.as_deref()
+        } else {
+            None
+        };
+
         let env = build_env(
             &tree,
             &link_prefixes,
             &tool_prefixes,
             jobs,
             vendor.as_deref(),
-            autoconf.as_deref(),
+            node_autoconf,
         );
 
         let (commands, artifacts) = match target.kind {
@@ -124,20 +132,22 @@ pub fn run(
             }
             Kind::Ext => {
                 let ext_ctx = ctx(&tree, &work, &prefix);
+                let mut commands = Vec::new();
+                for line in &target.prepare {
+                    commands.push(Cmd::Shell(render::expand(line, &ext_ctx, reg)?));
+                }
                 let mut args = render::ext_configure(reg, target, sel, &ext_ctx)?;
                 args.insert(0, format!("--with-php-config={}/bin/php-config", tree));
-                let commands = vec![
-                    Cmd::Program {
-                        program: "phpize".to_owned(),
-                        args: Vec::new(),
-                    },
-                    Cmd::Program {
-                        program: "./configure".to_owned(),
-                        args,
-                    },
-                    Cmd::Shell("make".to_owned()),
-                    Cmd::Shell("make install".to_owned()),
-                ];
+                commands.push(Cmd::Program {
+                    program: "phpize".to_owned(),
+                    args: Vec::new(),
+                });
+                commands.push(Cmd::Program {
+                    program: "./configure".to_owned(),
+                    args,
+                });
+                commands.push(Cmd::Shell("make".to_owned()));
+                commands.push(Cmd::Shell("make install".to_owned()));
                 (commands, &target.artifacts)
             }
         };

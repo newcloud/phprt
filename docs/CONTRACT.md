@@ -143,13 +143,16 @@ openssl = "3.5"
 
 # 扩展被选中时的默认 feature；不决定是否默认安装
 [ext_presets]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
 
 # 默认启用的扩展；必须放在文件最后
 [default_exts]
-openssl = { features = ["argon2"] }
-curl = { deps = { libcurl = ["ssl"] } }
-# gd 默认安装时只引用预设，不重复 features
+openssl = { ref = "ext_presets.openssl" }
+curl = { ref = "ext_presets.curl" }
+libxml = {}
+# gd 默认安装时也只引用预设
 # gd = { ref = "ext_presets.gd" }
 ```
 
@@ -170,8 +173,9 @@ curl = { deps = { libcurl = ["ssl"] } }
 - 使用 `ref` 时不能再写本地 `features` / `deps`；需要不同配置时另建 preset。
 - 不写 `ref` 时只使用本地配置，不会隐式套同名 preset。
 - 不允许写 `version:`；`[default_exts]` / `[ext_presets]` 里的名字必须是当前 PHP 系列的 ext recipe。
-- 有依赖的内置扩展必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里
-  （如 `curl = { deps = { libcurl = ["ssl"] } }`）；不做依赖展开或校验，漏写时 PHP configure 会报错。
+- 有依赖的内置扩展必须在 preset 或 `default_exts` 里和依赖一起写，要转给依赖的 feature
+  显式列在 `deps` 里（如 `[ext_presets] curl = { deps = { libcurl = ["ssl"] } }`）；
+  不做依赖展开或校验，漏写时 PHP configure 会报错。
 - 默认 feature 在当前 PHP / 依赖线下不可用时，提示并丢弃，不中断命令。
 - 选中扩展时的 feature 优先级：CLI 显式 `feature:[...]`（含 `[]`） > state >
   `[ext_presets]` > 空。preset 只在扩展还没有 state 时生效，和默认集一样 materialize 一次。
@@ -259,6 +263,9 @@ TARGET = target
   非内置还要 `url` + `version`。
 - `tools` 是构建期工具依赖：参与构建顺序和 `PATH`，不参与 include/lib；
   每个名字必须是 `dep/*.star` 里的目标。
+- `prepare` 是在 phpize 之前于源码目录执行的 shell 命令列表，用来给上游源码
+  打兼容补丁（如删除已移除头文件的 include）。命令写进构建签名，变化会触发重编。
+  只有 ext 能用，dep / php 报错。
 - `configure` 是正向参数：编进 PHP 时交给 PHP 的 configure，编成 shared 时
   交给扩展自己的 configure。
 - 关闭参数不在 ext recipe 里，来自 php recipe 的 `builtin_disable`。
@@ -357,6 +364,6 @@ TARGET = php(
 12. dep recipe 不声明 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`。
 13. `PHP_LINES` 覆盖所有 PHP 系列，引用的线都在 catalog 里。
 14. `PHP_DEP_LINES` 只用于 ext，覆盖所有 PHP 系列；内层名字是 dep recipe，引用的线都在 catalog 里。
-15. 既不是当前 PHP 内置扩展、也没有 catalog 记录的 ext recipe 不加载；例如 gd 只在 8.5 出现。
+15. 既不是当前 PHP 内置扩展、也没有 catalog 记录的 ext recipe 不加载；例如 gd 只在声明了内置事实的 8.3 / 8.4 / 8.5 出现。
 16. `[ext_presets]` 自己不能写 `ref`；`[default_exts]` 的 `ref` 必须是
     `"ext_presets.<同名扩展>"`，指向存在的 preset，且不能和本地 `features`/`deps` 同时写。

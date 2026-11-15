@@ -12,7 +12,7 @@ phprt v3 的最小原型：**Starlark 写 recipe，Rust 做版本解析、求解
 版本和默认策略分成三层：
 
 ```text
-bundle       php8.5 扩展默认线 swoole 6.2，[deps] 里 openssl 库 3.5；默认启用 openssl + curl + libxml
+bundle       php8.5 扩展默认线 swoole 6.2，[deps] 里 openssl 库 3.5；默认启用 v2 那套常用内置扩展
 catalog      6.2 → 6.2.5 + 下载地址；3.5 → 3.5.9 + 下载地址
 recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
 ```
@@ -24,7 +24,10 @@ recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
 ## 快速开始
 
 ```bash
-cargo run -- install 8.5                 # 默认 openssl + curl(ssl) + libxml + PHP 8.5.12
+cargo run -- install 8.5                 # 默认集：PHP 8.5.12 + v2 那套常用内置扩展
+                                         # （openssl/curl/libxml/zlib/sqlite3/mysqli/
+                                         # pdo_mysql/mbstring/zip/sodium/gettext/pcntl/
+                                         # sockets/shmop/sysv*，posix 走 PHP 默认）
 ./myphp -v                               # 用项目自己的 PHP
 cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
 cargo run -- install 8.5 --downloads     # 只下载源码包
@@ -45,8 +48,8 @@ cargo run -- --php 8.5 install 8.5        # 装方案里的扩展
 cargo run -- --php 8.5 update             # 在记录的线内更新补丁
 ```
 
-gd 只在 PHP 8.5 下加载，且不在默认扩展集里；选中 gd 时使用
-`recipes/bundles/php8.5.toml` 的 `[ext_presets].gd`，自动带 JPEG/WebP/FreeType。
+gd 只在 PHP 8.3 / 8.4 / 8.5 下加载，且不在默认扩展集里；选中 gd 时使用
+`recipes/bundles/php8.4.toml` / `php8.5.toml` 的 `[ext_presets].gd`，自动带 JPEG/WebP/FreeType。
 PNG 由 libpng 固定提供，`avif` 默认关闭。`dep:jpeg[simd]` 需要宿主机有 `nasm`，
 不写就生成非 SIMD 的 libjpeg。
 
@@ -167,6 +170,27 @@ PHP：7.4 / 8.0 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
 | aom | 3.12 | 3.12.1 |
 | avif | 1.3 | 1.3.0（PHP 8.5 gd 要求 >= 0.8.2） |
 | freetype | 2.13 | 2.13.3 |
+| sqlite | 3.54 | 3.54.1 |
+| libzip | 1.12 | 1.12.1 |
+| libsodium | 1.0 | 1.0.22 |
+| oniguruma | 6.9 | 6.9.10 |
+| redis | 6.3 | 6.3.0（PECL） |
+| apcu | 5.1 | 5.1.28（PECL） |
+| igbinary | 3.2 | 3.2.16（PECL） |
+| msgpack | 3.0 | 3.0.1（PECL） |
+| protobuf | 5.36 | 5.36.2（PECL，最低 PHP 8.2） |
+| yaml | 2.3 | 2.3.0（PECL） |
+| memcached | 3.4 | 3.4.0（PECL） |
+| imagick | 3.8 | 3.8.1（PECL） |
+| ssh2 | 1.5 | 1.5.0（PECL，最低 PHP 8.0） |
+| amqp | 2.2 | 2.2.0（PECL） |
+| rdkafka | 6.0 | 6.0.5（PECL） |
+| libyaml | 0.2 | 0.2.5 |
+| libmemcached | 1.1 | 1.1.4 |
+| imagemagick | 7.1 | 7.1.2-35 |
+| libssh2 | 1.11 | 1.11.1 |
+| rabbitmq-c | 0.18 | 0.18.1 |
+| librdkafka | 2.16 | 2.16.0 |
 
 ## 状态文件
 

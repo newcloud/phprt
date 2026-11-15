@@ -455,6 +455,7 @@ mod tests {
             origin: "builtin".into(),
             link: vec![],
             dep_configure: Default::default(),
+            prepare: vec![],
             shared_from: String::new(),
             ini: String::new(),
             ini_lines: vec![],

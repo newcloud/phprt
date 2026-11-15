@@ -76,3 +76,83 @@
 # c-ares 发布在 GitHub Releases；c-ares.org/download 指向同一批文件。
 [c-ares]
 "1.34" = { version = "1.34.9", url = "https://github.com/c-ares/c-ares/releases/download/v1.34.9/c-ares-1.34.9.tar.gz" }
+
+# ---------------------------------------------------------------------------
+# 常用 PECL 扩展（8.3 / 8.4 / 8.5）
+# ---------------------------------------------------------------------------
+
+[redis]
+"6.3" = { version = "6.3.0", url = "https://pecl.php.net/get/redis-6.3.0.tgz", sha256 = "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5" }
+
+[apcu]
+"5.1" = { version = "5.1.28", url = "https://pecl.php.net/get/apcu-5.1.28.tgz", sha256 = "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf" }
+
+[igbinary]
+"3.2" = { version = "3.2.16", url = "https://pecl.php.net/get/igbinary-3.2.16.tgz", sha256 = "8bf25d465abc7973d9e2c9a3039a5f8eea635b23bc1477017ff3999ff95836da" }
+
+[msgpack]
+"3.0" = { version = "3.0.1", url = "https://pecl.php.net/get/msgpack-3.0.1.tgz", sha256 = "e30be355ab79aaea4568692fbd6073fd7c7f50ea8d3cf12edce40fc0c921d868" }
+
+[protobuf]
+"5.36" = { version = "5.36.2", url = "https://pecl.php.net/get/protobuf-5.36.2.tgz", sha256 = "f0a17c67de29df0fb0e5215a381df9b155125e1ace6252dd617bf16b4194dd5b" }
+
+[yaml]
+"2.3" = { version = "2.3.0", url = "https://pecl.php.net/get/yaml-2.3.0.tgz", sha256 = "bc8404807a3a4dc896b310af21a7f8063aa238424ff77f27eb6ffa88b5874b8a" }
+
+[memcached]
+"3.4" = { version = "3.4.0", url = "https://pecl.php.net/get/memcached-3.4.0.tgz", sha256 = "c163434eb0da97c8f45c7ad41d979d381f8b81c49402b1b90b063987fb37972e" }
+
+[imagick]
+"3.8" = { version = "3.8.1", url = "https://pecl.php.net/get/imagick-3.8.1.tgz", sha256 = "3a3587c0a524c17d0dad9673a160b90cd776e836838474e173b549ed864352ee" }
+
+[ssh2]
+"1.5" = { version = "1.5.0", url = "https://pecl.php.net/get/ssh2-1.5.0.tgz", sha256 = "a943427fae39a5503c813179018ae6c500323c8c9fb434e1a9a665fb32a4d7b4" }
+
+[amqp]
+"2.2" = { version = "2.2.0", url = "https://pecl.php.net/get/amqp-2.2.0.tgz", sha256 = "5ae624bd785e299523f6132c204bd562cc73066dd33a10a12aa96389f55a4de7" }
+
+[rdkafka]
+"6.0" = { version = "6.0.5", url = "https://pecl.php.net/get/rdkafka-6.0.5.tgz", sha256 = "0af6b665c963c8c7d1109cec738034378d9c8863cbf612c0bd3235e519a708f1" }
+
+# ---------------------------------------------------------------------------
+# 上面扩展用的依赖库
+# ---------------------------------------------------------------------------
+
+[libyaml]
+"0.2" = { version = "0.2.5", url = "https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz", sha256 = "c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4" }
+
+# GitHub tag 归档会跳到 codeload；这里写稳定的 tag 地址。
+[libmemcached]
+"1.1" = { version = "1.1.4", url = "https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz", sha256 = "c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a" }
+
+# ImageMagick 的 tag 是 7.1.2-35 这种带连字符的形式，版本比较工具只认纯数字，升级时手工改。
+[imagemagick]
+"7.1" = { version = "7.1.2-35", url = "https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-35.tar.gz", sha256 = "40b6fefa88fe16ca5a4b3d3db5133eaebfb0157f21f98530bde8aec5dd5b0776" }
+
+[libssh2]
+"1.11" = { version = "1.11.1", url = "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.gz", sha256 = "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7" }
+
+[rabbitmq-c]
+"0.18" = { version = "0.18.1", url = "https://github.com/alanxz/rabbitmq-c/archive/refs/tags/v0.18.1.tar.gz", sha256 = "0779bd4f00175ff2f722f9dc43b542bea3bc606ed079e7099fa8a18627c2ddc9" }
+
+[librdkafka]
+"2.16" = { version = "2.16.0", url = "https://github.com/confluentinc/librdkafka/archive/refs/tags/v2.16.0.tar.gz", sha256 = "e6b61de61d3282879a88e4ee3d9f634a8b05bf78a9198dfc25c4820c0c9ed231" }
+
+# ---------------------------------------------------------------------------
+# v2 默认内置扩展集需要的依赖库
+# ---------------------------------------------------------------------------
+
+# sqlite.org 的发布页只有版本目录；autoconf 包名是 sqlite-autoconf-<编号>，
+# 编号规则见 https://www.sqlite.org/changes.html（3.54.1 → 3540100）。
+[sqlite]
+"3.54" = { version = "3.54.1", url = "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz", sha256 = "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e" }
+
+[libzip]
+"1.12" = { version = "1.12.1", url = "https://libzip.org/download/libzip-1.12.1.tar.gz", sha256 = "3b66fe92cbc768d8d4d16e1427bfb7399e15d9c2795c2fc482e7b30a6332a422" }
+
+[libsodium]
+"1.0" = { version = "1.0.22", url = "https://download.libsodium.org/libsodium/releases/libsodium-1.0.22.tar.gz", sha256 = "adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349" }
+
+# oniguruma 的 release tag 是 onig-<版本> 形式（不是 v 前缀）。
+[oniguruma]
+"6.9" = { version = "6.9.10", url = "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz", sha256 = "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05" }

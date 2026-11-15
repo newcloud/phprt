@@ -120,6 +120,8 @@ CLI + state              本次覆盖哪条线 / 哪些扩展，以及要保留�
 - dep recipe 声明 `LINES` 或 `PHP_LINES` 在加载阶段直接报错；
 - 多线 dep（openssl 有 4 条线）不要求兼容表，只按传入的线选择构建参数；
 - 只装 PHP、不装消费扩展时，`--dep openssl=3.5` 不会因为 PHP 版本被拒：库本身不关心 PHP。
+- catalog 里只有一条线的组件会被自动绑定；这条线不支持当前系列时直接跳过，
+  该系列不加载这个扩展的 recipe（例如 protobuf 5.36 最低支持 PHP 8.2）。
 
 `PHP_LINES` 的语义是**允许集合**，不是默认值。它回答“哪些线可以”，不回答“默认用哪条”，
 默认由 bundle 决定。
@@ -226,6 +228,8 @@ allowed = catalog 里该库的所有线
 - 解压失败直接退出，不写状态；已完成的目录保留。
 - 支持 `.tar.gz` / `.tgz` / `.tar.xz` / `.txz` / `.tar.bz2` / `.zip`。
 - PECL 包的 `package.xml` + 单个源码目录会提平成源码根。
+- 解压与编译分成两段，不按节点穿插：解压是廉价预检，源码树要留给签名跳过，
+  合并既不省时间也不省磁盘。
 - 细节见 [EXTRACT.md](EXTRACT.md)。
 
 ### 5.8 编译与安装
@@ -392,7 +396,13 @@ phprtv3/
 │   ├── defs.star
 │   ├── php{7.4,8.0,8.2,8.3,8.4,8.5,8.6}.star
 │   ├── dep/{openssl,libcurl,nghttp2,autoconf}.star
+│   ├── dep/{libyaml,libmemcached,imagemagick,libssh2,rabbitmq-c,librdkafka}.star
+│   ├── dep/{sqlite,libzip,libsodium,oniguruma}.star
 │   └── ext/{openssl,curl,swoole,xdebug}.star
+│       + ext/{redis,apcu,igbinary,msgpack,protobuf,yaml,
+│              memcached,imagick,ssh2,amqp,rdkafka}.star
+│       + ext/{zlib,sqlite3,pdo_sqlite,mbstring,zip,sodium,gettext,
+│              pcntl,sockets,shmop,sysvmsg,sysvsem,sysvshm,mysqli,pdo_mysql}.star
 └── docs/
     ├── DESIGN.md
     ├── CONTRACT.md
@@ -501,7 +511,8 @@ cargo run -- install 8.5 --ext swoole --offline               # 下载+解压+�
 两次 materialize 语义、
 内置扩展事实与 `builtin_disable`、`--disable-default-ext` 冲突/范围、软默认自动切换、
 硬选择冲突、版本线不支持 PHP、builtin 扩展的 `PHP_LINES` / `PHP_DEP_LINES`、
-dep 不允许声明 PHP 关系、feature 的 `requires.commands`、只有 8.5 加载 gd、
+单线组件在不支持的系列下跳过、
+dep 不允许声明 PHP 关系、feature 的 `requires.commands`、8.3 / 8.4 / 8.5 加载 gd、
 `--ext` 的 version 预解析、
 catalog PHP 版本解析、下载的 Range 分片/续传/镜像顺序/重试/校验，以及原有的
 依赖闭包/拓扑/契约测试，解压的四种格式、顶层提平、PECL 包提平、跳过、越界拒绝和

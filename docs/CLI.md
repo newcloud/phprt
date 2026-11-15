@@ -123,7 +123,9 @@ phprt install 8.5 --ext swoole --ext xdebug
 - `[default_exts]` 是 `recipes/bundles/php<系列>.toml` 里的表：`link` / `features` / `deps`；
   可用 `ref = "ext_presets.<同名扩展>"` 引用 `[ext_presets]`。
 - `[ext_presets]` 只提供 `--ext` / `ext add` 时的默认 feature，不会默认安装扩展。
-- 8.5 默认 `openssl` + `curl`（curl 带 ssl）+ `libxml`；其他系列暂时没有默认扩展。
+- 8.3 / 8.4 / 8.5 默认启用 v2 那套常用内置扩展（openssl、curl、libxml、zlib、
+  sqlite3/pdo_sqlite、mysqli、pdo_mysql、mbstring、zip、sodium、gettext、pcntl、
+  sockets、shmop、sysv*）；其他系列暂时没有默认扩展。
 - `--disable-default-ext openssl` 从本次方案扣除；首次 install 成功后落盘。
 - 和 `--ext` 同名同时出现 → 报错。
 - 已经不在方案里的默认扩展 → 幂等跳过。
@@ -255,7 +257,7 @@ phprt install 8.5 --ext 'openssl=feature:[argon2]'
 # 已有 state 里默认开了 argon2，想关掉
 phprt install 8.5 --ext 'openssl=feature:[]'
 
-# gd：使用 [ext_presets].gd，自动带 JPEG/PNG/WebP/FreeType；gd 只在 8.5 加载
+# gd：使用 [ext_presets].gd，自动带 JPEG/PNG/WebP/FreeType；gd 只在 8.3 / 8.4 / 8.5 加载
 phprt install 8.5 --ext gd
 
 # 显式清空预设，只保留 PNG
@@ -283,7 +285,7 @@ phprt install 8.5 --disable-default-ext openssl --disable-default-ext curl --dis
 | 扩展没有这个依赖集成 | `ext:curl 没有依赖集成 nope（可写：libcurl）；需要在 recipe 的 dep_configure 里声明` |
 | 扩展没有这个 feature | `ext:openssl 没有 feature nope（可用：argon2）` |
 | feature 写法不对 | `ext:openssl 的 feature: 后面必须写方括号，例如 feature:[argon2]` |
-| feature 的 PHP 条件不满足 | `ext:openssl 的 feature argon2 需要 PHP 8.5, 8.6，当前 PHP 8.4` |
+| feature 的 PHP 条件不满足 | `ext:openssl 的 feature argon2 需要 PHP 8.4, 8.5, 8.6，当前 PHP 8.2` |
 | feature 的依赖线条件不满足 | `ext:openssl 的 feature argon2 需要 dep:openssl 3.5, 4.0，当前 3.0` |
 | feature 需要的命令不在 PATH | `dep:jpeg 的 feature simd 需要命令 nasm（Fedora: sudo dnf install nasm）` |
 | 内置扩展写版本线 | `ext:openssl 是内置扩展，没有自己的版本线；依赖库 openssl 的版本请用 --dep openssl=<线>` |

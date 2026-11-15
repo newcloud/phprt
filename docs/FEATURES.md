@@ -46,6 +46,9 @@ ext:openssl
   时由 `[ext_presets]` 启用，不会让扩展默认安装。
 - 依赖库只报数量，不失败：库的绝大多数选项由 recipe 固定，不需要全部做成 feature。
 - `ignored` 里写了上游不存在的选项 → 也算未处理（防止拼写错误）。
+- 同一个 ext recipe 覆盖多个版本线（或 PHP 系列）时，上游选项会增删：只在某条线上
+  存在的选项按 `line` / `php_series` 拼进 `ignored`，不要写进所有版本共用的表，
+  否则另一条线的 `audit` 会报「ignored 但上游没有这个选项」。
 - 源码没解压时会提示先安装一次，不会假装通过。
 
 ## 2. 扩展 feature 与依赖 feature 的区别
@@ -87,6 +90,8 @@ ext:openssl
 | openssl `--with-openssl-argon2` | 常用，依赖已在编 | feature，默认开 |
 | openssl `--with-openssl-legacy-provider` | 有需求（老证书、MD4/RC4/DES） | feature，默认关 |
 | openssl `--with-system-ciphers` | 少用 | ignored |
+| openssl `--with-kerberos`（仅 8.3） | 少用，需要系统 krb5 | ignored |
+| pdo_mysql `--with-zlib-dir`（仅 8.3） | 少用，mysqlnd 压缩走 PHP 的 zlib | ignored |
 | swoole `--enable-cares` | 常用（异步 DNS） | feature + `needs=["c-ares"]`，默认关 |
 | swoole `--enable-brotli` | 有一定需求 | 缺依赖（未排期）：brotli |
 | swoole `--enable-zstd` | 较新、较少 | 缺依赖（未排期）：zstd |
@@ -102,6 +107,19 @@ ext:openssl
 | gd `--with-avif` | 常用但依赖较大 | feature `avif` + `needs=["aom","avif"]`，默认关 |
 | gd `--with-external-gd` / `--with-xpm` / `--enable-gd-jis-conv` | 少用 | ignored |
 | libjpeg-turbo `WITH_SIMD` | 常用（性能） | dep feature `simd`，默认关；`requires.commands=["nasm"]` |
+| redis `--enable-redis-{igbinary,msgpack}` | 少用：要对应序列化扩展 | ignored，序列化用 redis 自带实现 |
+| redis `--enable-redis-{lz4,zstd}` / `--with-lib{lz4,zstd}` | 少用 | ignored，缺依赖（未排期） |
+| redis `--enable-redis-lzf` / `--with-liblzf` | 常用（压缩） | feature `lzf`，默认关（自带 liblzf） |
+| apcu `--enable-apcu-{debug,clear-signal,mmap,rwlocks,spinlocks}` / `--enable-{coverage,valgrind-checks}` | 调试或默认行为切换 | ignored |
+| memcached `--enable-memcached-{igbinary,msgpack}` | 少用：要对应序列化扩展 | ignored |
+| memcached `--enable-memcached-protocol` / `--with-system-fastlz` / `--with-zstd` / `--enable-debug` | 少用 / 调试 / 缺依赖 | ignored |
+| memcached `--enable-memcached-{session,json}` / `--disable-memcached-sasl` | 常用 | configure 固定 |
+| imagick `ac_cv_func_omp_pause_resource_all=no` | 必需 | configure 固定；ImageMagick 关了 OpenMP，不链接 libgomp |
+| igbinary `--with-igbinary` | 旧写法（config.m4 里的注释模板） | ignored |
+| ssh2 / amqp / rdkafka / yaml / msgpack / protobuf | 只有正向开关 | configure 固定，无 ignored |
+| mysqli `--with-mysql-sock` | 少用：mysqlnd 用编译期默认 socket | ignored |
+| mbstring `--enable-mbregex` | 常用（multibyte 正则） | configure 固定开，oniguruma 在树内 |
+| zlib / sqlite3 / pdo_sqlite / zip / sodium / gettext / pcntl / sockets / shmop / sysv* / pdo_mysql | 只有正向开关 | configure 固定 |
 
 PNG 不是 feature：PHP 8.5 gd 强制依赖 libpng，`--enable-gd` 就带上。
 
@@ -133,7 +151,8 @@ feature 可以要求 PATH 里存在某个命令：
 1. **不增加新依赖、不改变行为，只是多一个可用能力 → 默认开。**
    例：openssl 的 `argon2`，OpenSSL 已经在编，只是多一个 KDF。
 2. **依赖已经在默认集里 → 默认开，并且必须和依赖一起写。**
-   例：`curl = { deps = { libcurl = ["ssl"] } }`，libcurl 本来就要编，ssl 不额外增加组件。
+   例：`[ext_presets] curl = { deps = { libcurl = ["ssl"] } }`，libcurl 本来就要编，
+   ssl 不额外增加组件。
 3. **改变默认行为或安全边界 → 默认关。**
    例：`--with-openssl-legacy-provider`。
 4. **上游默认关闭、只在特定场景用 → 默认关。**
