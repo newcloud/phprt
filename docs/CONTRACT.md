@@ -379,58 +379,34 @@ TARGET = product(
 - `needs` / `deps`：产品链接需要的依赖库，以及要转给它们的 feature。
 - `bundled`：该产品源码包内自带的组件名，和是否有 recipe 无关；不要求非空。
 - `bundled_disable`：bundled 组件名 → 单个关闭参数；key 必须在 `bundled` 里。
-- `profile` 是 `product_profile(...)`：
+- `profile` 是 `product_profile(...)`，同产品的系列共用
+  `products/<产品>/_profile.star` 里的 `PROFILE`：
 
   ```python
   PROFILE = product_profile(
-      tools = [
-          tool("gcc", min = "9"),
-          tool("make", min = "4.0"),
-          "ar",
-          "ranlib",
-          tool("patchelf", min = "0.13"),
-          "sh",
-      ],
+      tools = [tool("gcc", min = "9"), "sh"],
       modes = {
           "static": mode(strategy="fold"),
           "shared": mode(
               strategy="standalone",
-              steps = [
-                  "phpize",
-                  "./configure --with-php-config={tree}/bin/php-config {flags}",
-                  "make",
-                  "make install",
-              ],
+              steps = ["phpize", "./configure --with-php-config={tree}/bin/php-config {flags}",
+                       "make", "make install"],
               artifacts = ["lib/php/extensions/*/{name}.so"],
           ),
       },
       defaults = {"bundled": "static", "external": "shared"},
-      bundled_path = "ext/{name}",
-      runtime = runtime(
-          lib_dir = "lib/phprt",
-          rpath = {
-              "bin/*": "$ORIGIN/../lib/phprt",
-              "lib/php/extensions/*/*.so": "$ORIGIN/../../../phprt",
-          },
-      ),
-      register = {"shared": "php-ini"},
       post_install = [
           ensure_dir("etc/conf.d"),
-          write_file("etc/php.ini", PHP_INI, if_missing = True),
-          copy_ca_bundle("etc/ssl/cert.pem", ["/etc/ssl/certs/ca-certificates.crt"]),
           write_component_ini("etc/conf.d", register = "php-ini"),
       ],
       verify = ["{tree}/bin/php", "-v"],
-      verify_modules = "{tree}/bin/php -m",
       entry = "myphp-{series}",
       entry_template = "entry.sh",
-      env = {
-          "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
-          "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
-      },
-      audit = "php-config-m4",
   )
   ```
+
+  完整字段和 PHP 的实际 profile 见 [PRODUCT.md](PRODUCT.md) §2；系列的
+  `extend_profile` 覆盖规则见 §3。字段含义：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -440,7 +416,7 @@ TARGET = product(
 | `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |
 | `runtime.lib_dir` | 依赖库统一运行目录，相对安装树；空表示不整理 |
 | `runtime.rpath` | 安装树内相对 glob → rpath |
-| `register` | 挂载方式 → 登记动作；目前只有 `php-ini` |
+| `register` | 挂载方式 → 登记动作名；要和 `post_install` 里 `write_component_ini` 的 `register` 一致 |
 | `post_install` | 安装后动作列表：`ensure_dir` / `write_file` / `copy_ca_bundle` / `write_component_ini` |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 用来检查组件模块 |
 | `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件名（如 `entry.sh`） |

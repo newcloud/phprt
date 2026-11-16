@@ -164,7 +164,7 @@ PHP 的 `modules` / `ini` / `origin` 不再是通用字段：
 | CPython | `native` | CPython 构建完成后，用产品自己的解释器编 C 扩展，装进 `site-packages` |
 
 所以 profile 不能只写“static/shared”，而要声明**策略**和**步骤模板**。下面是 PHP 的
-profile（节选）：
+`products/php/_profile.star`（节选，完整内容见 [PRODUCT.md](PRODUCT.md) §2）：
 
 ```python
 PROFILE = product_profile(
@@ -213,6 +213,8 @@ PROFILE = product_profile(
     entry = "myphp-{series}",
     entry_template = "entry.sh",
     env = {
+        "CC": "gcc",
+        "CXX": "g++",
         "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
         "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
     },
@@ -230,7 +232,8 @@ PROFILE = product_profile(
 nginx 的 profile 只是换一套模式和步骤，不需要改主流程：
 
 ```python
-nginx_profile = product_profile(
+# products/nginx/_profile.star
+PROFILE = product_profile(
     modes = {
         "builtin": mode(
             strategy = "fold",
@@ -252,6 +255,10 @@ nginx_profile = product_profile(
     ),
     verify = ["{tree}/sbin/nginx", "-V"],
     entry = "",
+    env = {
+        "CC": "gcc",
+        "CXX": "g++",
+    },
     audit = "none",
 )
 ```
@@ -268,13 +275,12 @@ profile 字段的含义：
 | `modes.*.artifacts` | 独立构建的产物模式 |
 | `defaults` | 组件来源（bundled / external）→ 默认挂载方式 |
 | `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |
-| `register` | 组件装好后怎么让产品看见它，如写 ini、装到 `site-packages`、改 nginx 配置 |
+| `register` | 组件装好后怎么让产品看见它：登记动作名，与 `post_install` 的 `write_component_ini(register=...)` 对应 |
 | `runtime` | 运行时库目录和 rpath 模板 |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 可以检查组件是否真的加载 |
 | `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件（如 `entry.sh`）；PHP 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；nginx 不生成，CPython 可以是 `python3.5` |
 | `env` | 产品专用环境变量；PHP 的 `PHP_AUTOCONF` 不再污染其他节点 |
 | `audit` | 选项清单来源：`php-config-m4` / `configure-help` / `none` |
-| `config` | 安装后配置动作：PHP 用 `php`，其他产品留空 |
 
 profile 只声明，不执行命令；步骤仍然由 `crates/build` 执行，签名和日志规则不变。
 
@@ -999,8 +1005,8 @@ CPython 仍未实现，只保留为模型示例。
 - 产品 `needs` / `deps` 进入链接闭包；
 - `{source:名字}` 占位符；
 - 产品级 `LINES` 约束依赖线；
-- profile 的 `modes` / `defaults` / `bundled_path` / `runtime` / `register` /
-  `verify` / `entry` / `env` / `audit` / `config`。
+- profile 的 `tools` / `modes` / `defaults` / `bundled_path` / `runtime` /
+  `register` / `post_install` / `verify` / `entry` / `env` / `audit`。
 
 ### 第 5 步：nginx
 

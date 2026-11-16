@@ -82,9 +82,12 @@
 - 宿主机命令写在产品 profile 的 `tools` 里，可带最低版本：
   `tool("gcc", min = "9", probe = ["-dumpfullversion"])`。只有部分依赖需要的命令
   （cmake、nasm）写在该 dep / component 的 `host_tools`，不写死进 Rust。
+  检查集合是产品 `tools` 与闭包内 `host_tools` 的并集，同名按最严的一条
+  （有 min 优先，min 更高优先）。
 - 安装后行为写在产品 profile 的 `post_install`：`ensure_dir` / `write_file` /
   `copy_ca_bundle` / `write_component_ini`。不往 Rust 里加产品专用分支，也不使用
-  任意 shell；需要改上游源码的命令仍写在组件的 `prepare`。
+  任意 shell；需要改上游源码的命令仍写在组件的 `prepare`。组件 ini 的目录由
+  `write_component_ini` 声明，Rust 不写死 `etc/conf.d`。
 - 入口模板放在 `products/<产品>/` 下，用 `entry_template = "entry.sh"` 引用。
 
 ## 5. 验收

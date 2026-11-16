@@ -33,5 +33,9 @@ PROFILE = product_profile(
     ),
     verify = ["{tree}/sbin/nginx", "-V"],
     entry = "",
+    env = {
+        "CC": "gcc",
+        "CXX": "g++",
+    },
     audit = "none",
 )

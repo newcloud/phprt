@@ -1,9 +1,9 @@
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
-use crate::recipe::{Action, Kind, Registry, Selection, Target};
+use crate::recipe::{Action, Kind, Registry, Selection, Target, check_relative};
 
 /// 按 product.profile.post_install 执行安装后动作。
 pub fn run(reg: &Registry, product: &Target, sel: &Selection, tree: &Path) -> Result<()> {
@@ -90,18 +90,8 @@ fn write_component_ini(
 }
 
 fn safe_path(tree: &Path, relative: &str) -> Result<PathBuf> {
-    if relative.is_empty() {
-        bail!("安装后动作的路径不能为空");
-    }
-    let path = Path::new(relative);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|part| !matches!(part, Component::Normal(_)))
-    {
-        bail!("安装后动作的路径 {relative} 必须是安装树内的相对路径");
-    }
-    Ok(tree.join(path))
+    check_relative(relative, "安装后动作的路径")?;
+    Ok(tree.join(relative))
 }
 
 #[cfg(test)]

@@ -54,6 +54,7 @@ PROFILE = product_profile(
     post_install = [
         ensure_dir("etc/conf.d"),
         write_file("etc/php.ini", PHP_INI, if_missing = True),
+        ensure_dir("etc/ssl"),
         copy_ca_bundle("etc/ssl/cert.pem", [
             "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
             "/etc/ssl/certs/ca-certificates.crt",

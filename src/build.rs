@@ -259,12 +259,18 @@ pub fn disable_component(
     component: &Target,
     mode: &str,
 ) -> Result<()> {
-    if register_action(product, mode) != Some("php-ini") || component.ini.is_empty() {
+    let Some(register) = register_action(product, mode) else {
+        return Ok(());
+    };
+    let Some(dir) = product.profile.register_dir(register) else {
+        return Ok(());
+    };
+    if component.ini.is_empty() {
         return Ok(());
     }
     let path = root
         .join(format!(".phprt/{}-{}", product.name, product.version))
-        .join("etc/conf.d")
+        .join(dir)
         .join(&component.ini);
     if path.exists() {
         fs::remove_file(&path).with_context(|| format!("删不了 {}", path.display()))?;
@@ -773,9 +779,6 @@ fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
 fn write_entry(root: &Path, product: &Target, recipes: &Path, target: &str) -> Result<()> {
     if product.profile.entry.is_empty() {
         return Ok(());
-    }
-    if product.profile.entry_template.is_empty() {
-        bail!("产品 {} 设置了 entry，但没有 entry_template", product.name);
     }
     let template_path = recipes
         .join("products")

@@ -38,6 +38,7 @@ pub struct Node {
     pub make: Vec<String>,
     pub artifacts: Vec<String>,
     pub ini: String,
+    pub ini_dir: String,
     pub ini_lines: Vec<String>,
     pub source_path: String,
 }
@@ -170,6 +171,7 @@ pub fn build(
         let mut steps = Vec::new();
         let mut artifacts = t.artifacts.clone();
         let mut ini = String::new();
+        let mut ini_dir = String::new();
         let mut ini_lines = t.ini_lines.clone();
 
         match (t.kind, strategy) {
@@ -203,8 +205,12 @@ pub fn build(
                         .map(|pattern| pattern.replace("{name}", &t.name))
                         .collect();
                 }
-                if register_action(product, &mode_name) == Some("php-ini") && !t.ini.is_empty() {
+                if let Some(dir) = register_action(product, &mode_name)
+                    .and_then(|register| product.profile.register_dir(register))
+                    && !t.ini.is_empty()
+                {
                     ini = t.ini.clone();
+                    ini_dir = dir.to_owned();
                     if ini_lines.is_empty() {
                         ini_lines = vec![format!("extension={}.so", t.name)];
                     }
@@ -273,6 +279,7 @@ pub fn build(
             make,
             artifacts,
             ini,
+            ini_dir,
             ini_lines,
             source_path: t.source_path.clone(),
         });
@@ -552,7 +559,12 @@ pub fn to_text(sim: &Sim) -> String {
             }
         }
         if !n.ini.is_empty() {
-            out.push_str(&format!("  ini        etc/conf.d/{}\n", n.ini));
+            let path = if n.ini_dir.is_empty() {
+                n.ini.clone()
+            } else {
+                format!("{}/{}", n.ini_dir, n.ini)
+            };
+            out.push_str(&format!("  ini        {path}\n"));
             for line in &n.ini_lines {
                 out.push_str(&format!("             {}\n", line));
             }

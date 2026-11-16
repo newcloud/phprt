@@ -54,7 +54,7 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 | `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块） |
 
 产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX` / `PHP_AUTOCONF` /
-`PHP_AUTOHEADER`；8.0 的 `CFLAGS`）；引用了不在本次构建里的工具时跳过。fold 组件的
+`PHP_AUTOHEADER`；8.0 / 7.4 的 `CFLAGS`）；引用了不在本次构建里的工具时跳过。fold 组件的
 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_INC` / `LUAJIT_LIB`）。
 
 构建阶段使用绝对路径；`plan` 的输出仍然用相对项目根的路径，便于阅读。
@@ -108,10 +108,12 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 | 来源 | 内容 |
 | --- | --- |
 | 产品 profile 的 `tools` | 这个产品总是需要的命令，可带最低版本，如 `tool("gcc", min = "9")` |
-| dep / component 的 `host_tools` | 只有本次构建包含它时才需要的命令，如 cmake、nasm |
+| dep / component 的 `host_tools` | 只有本次构建包含它时才需要的命令，如 cmake、nasm；并集按名字取最严的一条 |
 | feature 的 `requires.commands` | 选中 feature 时检查的命令 |
 | autoconf | 源码构建，catalog 的 `[autoconf]`，作为组件的 `tools`（dep 包，不是宿主机命令） |
 | 纯 Perl 模块 | 仓库 `vendor/perl`，构建时通过 `PERL5LIB` 注入 |
+
+libaom 的 configure 也接受 yasm，但 phprt 只检查 nasm（yasm 已停止维护）。
 
 检查在下载源码之前执行；`--downloads` 不检查。版本探测和比较见
 [PRODUCT.md](PRODUCT.md)。

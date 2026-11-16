@@ -128,7 +128,7 @@ pub struct Profile {
     pub bundled_path: String,
     #[serde(default)]
     pub runtime: Runtime,
-    /// 挂载方式 -> 登记动作（目前支持 `php-ini`）。
+    /// 挂载方式 -> 登记动作名；由 post_install 的 write_component_ini 消费。
     #[serde(default)]
     pub register: BTreeMap<String, String>,
     #[serde(default)]
@@ -241,7 +241,7 @@ impl Action {
     }
 }
 
-fn check_relative(path: &str, field: &str) -> Result<()> {
+pub(crate) fn check_relative(path: &str, field: &str) -> Result<()> {
     if path.is_empty() {
         bail!("{field} 不能为空");
     }
@@ -287,6 +287,16 @@ fn validate_tools(tools: &[ToolSpec], at: &str) -> Result<()> {
 }
 
 impl Profile {
+    /// 某个登记动作写 ini 的目录，来自 post_install 的 write_component_ini。
+    pub fn register_dir(&self, register: &str) -> Option<&str> {
+        self.post_install.iter().find_map(|action| match action {
+            Action::WriteComponentIni { dir, register: reg } if reg == register => {
+                Some(dir.as_str())
+            }
+            _ => None,
+        })
+    }
+
     /// 组件 / 依赖不允许带任何产品 profile 内容。
     fn is_empty(&self) -> bool {
         self.modes.is_empty()
@@ -2415,6 +2425,8 @@ mod tests {
         assert!(!product.profile.post_install.is_empty());
         assert_eq!(product.profile.entry_template, "entry.sh");
         assert_eq!(product.profile.env["CC"], "gcc");
+        assert_eq!(product.profile.register_dir("php-ini"), Some("etc/conf.d"));
+        assert_eq!(product.profile.register_dir("site-packages"), None);
 
         let (reg, _) = load("8.0", &[], &[]).unwrap();
         let product = reg.product_any().unwrap();

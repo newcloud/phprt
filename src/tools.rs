@@ -10,11 +10,11 @@ use crate::recipe::{Target, ToolSpec};
 pub fn check(product: &Target, order: &[&Target]) -> Result<()> {
     let mut wanted: BTreeMap<String, ToolSpec> = BTreeMap::new();
     for tool in &product.profile.tools {
-        wanted.insert(tool.name.clone(), tool.clone());
+        add_tool(&mut wanted, tool);
     }
     for node in order {
         for tool in &node.host_tools {
-            wanted.insert(tool.name.clone(), tool.clone());
+            add_tool(&mut wanted, tool);
         }
     }
 
@@ -38,20 +38,25 @@ pub fn check(product: &Target, order: &[&Target]) -> Result<()> {
     bail!("缺少构建工具: {}", missing.join(", "))
 }
 
+/// 并集按名字取最严的一条：有 min 的优先，两条都有 min 时留更高的。
+fn add_tool(wanted: &mut BTreeMap<String, ToolSpec>, tool: &ToolSpec) {
+    let Some(old) = wanted.get(&tool.name) else {
+        wanted.insert(tool.name.clone(), tool.clone());
+        return;
+    };
+    let stricter =
+        !tool.min.is_empty() && (old.min.is_empty() || compare_versions(&tool.min, &old.min) > 0);
+    if stricter {
+        wanted.insert(tool.name.clone(), tool.clone());
+    }
+}
+
 fn probe_version(tool: &ToolSpec) -> Result<String> {
     let output = Command::new(&tool.name)
         .args(&tool.probe)
         .env("LC_ALL", "C")
         .output()
         .with_context(|| format!("跑不起来 {} 的版本探测", tool.name))?;
-    if !output.status.success() {
-        bail!(
-            "拿不到 {} 版本（命令: {} {}）",
-            tool.name,
-            tool.name,
-            tool.probe.join(" ")
-        );
-    }
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push('\n');
     text.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -138,6 +143,32 @@ mod tests {
         );
         assert_eq!(find_version("v5.38.2").as_deref(), Some("5.38.2"));
         assert_eq!(find_version("no version here"), None);
+    }
+
+    fn spec(name: &str, min: &str) -> ToolSpec {
+        ToolSpec {
+            name: name.to_owned(),
+            min: min.to_owned(),
+            probe: vec!["--version".to_owned()],
+        }
+    }
+
+    #[test]
+    fn union_keeps_the_strictest_requirement() {
+        let mut wanted = BTreeMap::new();
+        add_tool(&mut wanted, &spec("nasm", "2.13"));
+        add_tool(&mut wanted, &spec("nasm", ""));
+        assert_eq!(wanted["nasm"].min, "2.13");
+
+        let mut wanted = BTreeMap::new();
+        add_tool(&mut wanted, &spec("nasm", ""));
+        add_tool(&mut wanted, &spec("nasm", "2.13"));
+        assert_eq!(wanted["nasm"].min, "2.13");
+
+        let mut wanted = BTreeMap::new();
+        add_tool(&mut wanted, &spec("gcc", "9"));
+        add_tool(&mut wanted, &spec("gcc", "11"));
+        assert_eq!(wanted["gcc"].min, "11");
     }
 
     #[test]

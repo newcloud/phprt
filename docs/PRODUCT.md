@@ -126,7 +126,8 @@ TARGET = product(
 
 ## 3. 系列差异：`extend_profile`
 
-需要按系列改工具或编译参数时，用 `extend_profile(PROFILE, ...)`：
+需要按系列改工具或编译参数时，用 `extend_profile(PROFILE, ...)`。例：PHP 8.0 只追加
+`CFLAGS`，其余工具要求沿用共享 profile：
 
 ```python
 # recipes/products/php/8.0.star
@@ -136,10 +137,6 @@ TARGET = product(
     ...
     profile = extend_profile(
         PROFILE,
-        tools = [
-            tool("gcc", min = "11"),
-            tool("g++", min = "11"),
-        ],
         env = {
             "CFLAGS": "-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
         },
@@ -147,11 +144,15 @@ TARGET = product(
 )
 ```
 
+需要提高工具要求时在同一个调用里加 `tools`，例如
+`tools = [tool("gcc", min = "11"), tool("g++", min = "11")]`；同名的会替换
+profile 里的那一条。
+
 合并规则固定：
 
 | 字段 | 规则 |
 | --- | --- |
-| `tools` | 按名字合并；同名时后面的覆盖前面的；可以新增 |
+| `tools` | 按名字合并；同名时后面的替换前面的；可以新增 |
 | `env` | 按 key 合并；后面的覆盖前面的 |
 | `modes` / `defaults` / `runtime` / `register` / `post_install` / `verify` / `verify_modules` / `entry` / `entry_template` / `audit` / `bundled_path` | 传了才替换，没传沿用 base |
 
@@ -187,7 +188,7 @@ tool("perl", min = "5.20", probe = ["-e", "print $^V"])
 ```text
 需要 gcc >= 11，当前 9.3.1
 拿不到 gcc 版本（命令: gcc -dumpfullversion）
-缺少构建工具: nasm（Fedora: sudo dnf install nasm）
+缺少构建工具: nasm
 ```
 
 工具检查在下载源码之前执行；`--downloads` 不做工具检查。
@@ -231,6 +232,9 @@ dep(
 ∪ 本次构建闭包里每个节点的 host_tools
 ```
 
+同一个命令出现多次时取最严的一条：有 `min` 的优先，两条都有 `min` 时留更高的；
+`host_tools` 里的 `"nasm"` 不会抹掉别处声明的 `tool("nasm", min = "2.13")`。
+
 被选中 feature 的 `requires.commands` 由选择阶段检查，不进入这个集合。
 
 ## 5. 安装后动作
@@ -249,7 +253,8 @@ dep(
 - 路径必须相对安装树，拒绝绝对路径、`..` 和空路径。
 - `write_file` 的 `content` 按原样写入，不做占位符展开，避免破坏 `php.ini` 里的
   `${SSL_CERT_FILE}` 等 shell 变量。
-- `copy_ca_bundle` 目标已存在时跳过。
+- `copy_ca_bundle` 目标已存在时跳过；目标目录不存在时需要先用 `ensure_dir` 建好
+  （PHP 的 `post_install` 在复制 CA 之前 `ensure_dir("etc/ssl")`）。
 - `write_component_ini` 使用组件 recipe 的 `ini` / `ini_lines`；没有 `ini` 的组件忽略。
 - 动作没有任意 shell 逃生口；需要改上游源码的命令仍然写在组件的 `prepare` 里。
 
