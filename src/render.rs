@@ -575,25 +575,33 @@ pub fn to_text(sim: &Sim) -> String {
 
 pub fn graph_text(
     reg: &Registry,
+    order: &[&Target],
     sel: &Selection,
     features: &BTreeMap<String, Vec<String>>,
 ) -> Result<String> {
+    let reachable: BTreeSet<String> = order.iter().map(|t| t.id()).collect();
     let mut out = String::new();
     for t in reg.targets.values() {
+        let from = t.id();
+        if !reachable.contains(&from) {
+            continue;
+        }
         match t.kind {
             Kind::Dep => {
                 for dep in &t.needs {
-                    out.push_str(&format!("{} -> dep:{}\n", t.id(), dep));
+                    edge(&mut out, &reachable, &from, &format!("dep:{dep}"), "");
                 }
                 if let Some(enabled) = features.get(&t.name) {
                     for name in enabled {
                         if let Some(f) = t.features.get(name) {
                             for need in &f.needs {
-                                out.push_str(&format!(
-                                    "{} -> dep:{}  (feature {name})\n",
-                                    t.id(),
-                                    need
-                                ));
+                                edge(
+                                    &mut out,
+                                    &reachable,
+                                    &from,
+                                    &format!("dep:{need}"),
+                                    &format!("  (feature {name})"),
+                                );
                             }
                         }
                     }
@@ -601,20 +609,27 @@ pub fn graph_text(
             }
             Kind::Component => {
                 for dep in &t.needs {
-                    out.push_str(&format!("{} -> dep:{}\n", t.id(), dep));
-                }
-                for tool in &t.tools {
-                    out.push_str(&format!("{} -> dep:{}  (tool)\n", t.id(), tool));
+                    edge(&mut out, &reachable, &from, &format!("dep:{dep}"), "");
                 }
                 let mode = sel.mode_of(t);
-                if reg.product_mode(t, &mode)?.strategy_kind()? == Strategy::Standalone
-                    && let Some(product) = reg.get(&format!(
+                if reg.product_mode(t, &mode)?.strategy_kind()? == Strategy::Standalone {
+                    // fold 组件不单独构建，也不使用这些工具。
+                    for tool in &t.tools {
+                        edge(
+                            &mut out,
+                            &reachable,
+                            &from,
+                            &format!("dep:{tool}"),
+                            "  (tool)",
+                        );
+                    }
+                    if let Some(product) = reg.get(&format!(
                         "product:{}@{}",
                         t.product,
                         reg.product_any()?.version
-                    ))
-                {
-                    out.push_str(&format!("{} -> {}  (standalone)\n", t.id(), product.id()));
+                    )) {
+                        edge(&mut out, &reachable, &from, &product.id(), "  (standalone)");
+                    }
                 }
             }
             Kind::Product => {
@@ -622,13 +637,26 @@ pub fn graph_text(
                     let component = reg.component(name)?;
                     let mode = sel.mode_of(component);
                     if reg.product_mode(component, &mode)?.strategy_kind()? == Strategy::Fold {
-                        out.push_str(&format!("{} -> component:{}\n", t.id(), name));
+                        edge(
+                            &mut out,
+                            &reachable,
+                            &from,
+                            &format!("component:{name}"),
+                            "",
+                        );
                     }
                 }
             }
         }
     }
     Ok(out)
+}
+
+/// 只打印本次构建闭包内的边，避免把其它产品的依赖混进来。
+fn edge(out: &mut String, reachable: &BTreeSet<String>, from: &str, to: &str, note: &str) {
+    if reachable.contains(from) && reachable.contains(to) {
+        out.push_str(&format!("{from} -> {to}{note}\n"));
+    }
 }
 
 pub fn component_list_text(
@@ -865,6 +893,46 @@ mod tests {
         let args = product_configure_flags(&reg, product_target, &sel, &ctx).unwrap();
         assert!(args.contains(&"--with-openssl=/t/deps/openssl-3.5.9".to_owned()));
         assert!(!args.contains(&"--without-openssl".to_owned()));
+    }
+
+    #[test]
+    fn graph_only_shows_the_current_closure() {
+        let unrelated = Target {
+            kind: Kind::Dep,
+            name: "luajit".into(),
+            version: "2.1".into(),
+            ..blank()
+        };
+        let resty = Target {
+            kind: Kind::Dep,
+            name: "lua-resty-core".into(),
+            version: "0.1".into(),
+            needs: vec!["luajit".into()],
+            ..blank()
+        };
+        let autoconf = Target {
+            kind: Kind::Dep,
+            name: "autoconf".into(),
+            version: "2.72".into(),
+            ..blank()
+        };
+        let mut component = openssl_component();
+        component.tools = vec!["autoconf".into()];
+        let mut prod = product(&["openssl"]);
+        prod.needs = vec!["autoconf".into()];
+        let reg =
+            Registry::from_targets(vec![openssl(), component, prod, autoconf, resty, unrelated])
+                .unwrap();
+        let sel = Selection::default();
+        let features = BTreeMap::new();
+        let order = crate::plan::resolve(&reg, "product:php@8.5.12", &sel, &features).unwrap();
+        let text = graph_text(&reg, &order, &sel, &features).unwrap();
+
+        assert!(text.contains("component:openssl -> dep:openssl"));
+        assert!(text.contains("product:php@8.5.12 -> component:openssl"));
+        assert!(!text.contains("component:openssl -> dep:autoconf"));
+        assert!(!text.contains("lua-resty-core"));
+        assert!(!text.contains("luajit"));
     }
 
     #[test]

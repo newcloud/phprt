@@ -42,7 +42,7 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | --- | --- | --- |
 | `list` | 扫描 `.phprt/*/state.json`，列出已安装的产品 | 否 |
 | `list <产品>@<系列> [--installed\|--pending]` | 列出该产品的组件及状态 | 否 |
-| `graph <产品>@<系列>` | 按当前方案打印依赖边 | 否 |
+| `graph <产品>@<系列>` | 按当前方案打印依赖边，只包含本次构建闭包内的节点 | 否 |
 | `plan <产品>@<系列> [目标] [--json]` | 求解并输出构建计划 | 否 |
 | `install <产品>@<系列> [--downloads]` | 下载、解压、编译并安装；只接受一个产品 | 默认是，`--downloads` 否 |
 | `update <产品>@<系列> [--downloads]` | 在该产品线上重新解析补丁并构建 | 默认是，`--downloads` 否 |

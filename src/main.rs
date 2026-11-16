@@ -445,7 +445,8 @@ fn run() -> Result<()> {
             project.apply_scheme(&mut reg, &names)?;
             let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             let features = reg_features(&reg, &sel, &project);
-            print!("{}", render::graph_text(&reg, &sel, &features)?);
+            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
+            print!("{}", render::graph_text(&reg, &order, &sel, &features)?);
         }
         Cmd::Plan { .. } => {
             let names = scheme_names(&project, &raw, None);
