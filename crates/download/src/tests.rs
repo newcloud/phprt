@@ -35,6 +35,11 @@ struct Server {
 
 impl Server {
     fn start(payload: Vec<u8>) -> Self {
+        Self::start_with_resets(payload, 0)
+    }
+
+    /// 前 `resets` 个请求直接回 RST，用来测连接被重置后的重试。
+    fn start_with_resets(payload: Vec<u8>, resets: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("绑定测试端口");
         let port = listener.local_addr().expect("取测试端口").port();
         listener.set_nonblocking(true).expect("设置非阻塞");
@@ -42,6 +47,7 @@ impl Server {
         let hits = Arc::new(Mutex::new(Vec::new()));
         let payload = Arc::new(payload);
         let flaky = Arc::new(AtomicBool::new(true));
+        let resets = Arc::new(AtomicUsize::new(resets));
         let stop_thread = stop.clone();
         let hits_thread = hits.clone();
         let join = std::thread::spawn(move || {
@@ -51,8 +57,9 @@ impl Server {
                         let payload = payload.clone();
                         let hits = hits_thread.clone();
                         let flaky = flaky.clone();
+                        let resets = resets.clone();
                         std::thread::spawn(move || {
-                            let _ = serve(stream, &payload, &hits, &flaky);
+                            let _ = serve(stream, &payload, &hits, &flaky, &resets);
                         });
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -93,6 +100,7 @@ fn serve(
     payload: &[u8],
     hits: &Mutex<Vec<Hit>>,
     flaky: &AtomicBool,
+    resets: &AtomicUsize,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -150,6 +158,20 @@ fn serve(
             }
         }
         "/norange" => serve_file(&mut stream, payload, range.as_deref(), false),
+        "/reset" => {
+            if resets
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                    left.checked_sub(1)
+                })
+                .is_err()
+            {
+                serve_file(&mut stream, payload, range.as_deref(), true)
+            } else {
+                reset_connection(&stream);
+                drop(stream);
+                Ok(())
+            }
+        }
         _ => serve_file(&mut stream, payload, range.as_deref(), true),
     }
 }
@@ -185,6 +207,31 @@ fn serve_file(
         ],
         payload,
     )
+}
+
+/// SO_LINGER=0 后关闭连接，让客户端读到 RST 而不是 FIN。
+fn reset_connection(stream: &TcpStream) {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        // SAFETY: fd 来自仍然打开的 TcpStream，参数长度与类型正确。
+        unsafe {
+            libc::setsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                (&linger as *const libc::linger).cast(),
+                std::mem::size_of::<libc::linger>() as libc::socklen_t,
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = stream;
 }
 
 fn respond(
@@ -403,6 +450,32 @@ fn follows_redirects_with_range() {
             .any(|hit| hit.path == "/file" && hit.range.as_deref() == Some("bytes=0-0")),
         "跳转后应该保留 Range 探测: {hits:?}"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn retries_after_connection_reset() {
+    let data = payload(120_000);
+    let server = Server::start_with_resets(data.clone(), 2);
+    let dir = temp_dir("reset");
+    let sha = sha_hex(&data);
+    let (outcome, file) = run(item(&server.url("/reset"), Some(&sha), &dir, "r.bin"));
+
+    assert!(matches!(outcome, Outcome::Done(_)), "{outcome:?}");
+    assert_eq!(fs::read(&file).unwrap(), data);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn connection_reset_retries_are_capped() {
+    let data = payload(120_000);
+    let server = Server::start_with_resets(data.clone(), 1000);
+    let dir = temp_dir("reset-cap");
+    let (outcome, file) = run(item(&server.url("/reset"), None, &dir, "c.bin"));
+
+    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+    assert!(!file.exists());
+    assert_eq!(server.hits().len(), 4, "1 次普通尝试 + 3 次重置重试");
     let _ = fs::remove_dir_all(&dir);
 }
 

@@ -21,6 +21,8 @@ const MIN_CHUNK: u64 = 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_REDIRECTS: usize = 6;
+/// 连接被对方重置（RST）后额外重试的次数。不算进候选地址的常规尝试次数。
+const RESET_RETRIES: usize = 3;
 
 /// 服务端在探测时声称支持 Range，但实际返回 200。
 #[derive(Debug)]
@@ -119,27 +121,45 @@ fn fetch_inner(
         .into_iter()
         .enumerate()
     {
+        let direct_candidate = position == 0 && is_github;
         // GitHub 直连只给短超时；失败或太慢时尽快换镜像。
-        let agent = if position == 0 && is_github {
+        let agent = if direct_candidate {
             &agents.direct
         } else {
             &agents.normal
         };
         // GitHub 直连只试一次，尽快让位给镜像。
-        let attempts = if is_github && position == 0 { 1 } else { 2 };
-        for attempt in 0..attempts {
+        let attempts = if direct_candidate { 1 } else { 2 };
+
+        let mut used = 0;
+        let mut reset_tries = 0;
+        loop {
             match transfer_once(agent, item, &candidate, opts, ui, index) {
                 Ok(_) => match verify_and_finish(item) {
                     Ok(()) => return Ok(Fetched::Done(store::size(&item.archive))),
                     Err(err) => {
                         store::cleanup(&item.archive);
                         last = Some(err);
-                        if attempt == 0 {
-                            continue;
-                        }
                     }
                 },
                 Err(err) => last = Some(err),
+            }
+
+            if last.as_ref().is_some_and(is_connection_reset) {
+                if reset_tries >= RESET_RETRIES {
+                    break;
+                }
+                reset_tries += 1;
+                ui.line(&format!(
+                    "{} 连接被重置，重试（{reset_tries}/{RESET_RETRIES}）",
+                    source_label(item)
+                ));
+                continue;
+            }
+
+            used += 1;
+            if used >= attempts {
+                break;
             }
         }
     }
@@ -605,6 +625,24 @@ fn source_label(item: &Source) -> String {
     phprt_ui::tag(&item.label, &item.name, &item.version)
 }
 
+/// 是不是“连接被对方重置”（RST）。ureq 只在连接阶段（refused/unreachable）
+/// 自动换下一个地址；TLS 握手和正文传输中的 RST 会直接抛出来。
+fn is_connection_reset(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        // ureq::Error 的 source() 是空的，Io 变体里的 io::Error 只能直接取。
+        if let Some(ureq::Error::Io(io)) = cause.downcast_ref::<ureq::Error>() {
+            return is_reset_io(io);
+        }
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(is_reset_io)
+    })
+}
+
+fn is_reset_io(io: &std::io::Error) -> bool {
+    io.kind() == std::io::ErrorKind::ConnectionReset || io.raw_os_error() == Some(104)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -617,6 +655,17 @@ mod tests {
         for pair in parts.windows(2) {
             assert_eq!(pair[0].1 + 1, pair[1].0);
         }
+    }
+
+    #[test]
+    fn connection_reset_is_recognized_through_context() {
+        let reset = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::ConnectionReset))
+            .context("请求失败: https://example.com/x");
+        assert!(is_connection_reset(&reset));
+
+        let timeout = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::TimedOut))
+            .context("请求失败: https://example.com/x");
+        assert!(!is_connection_reset(&timeout));
     }
 
     #[test]
