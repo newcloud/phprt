@@ -41,15 +41,6 @@ pub fn run(
         .map(|n| n.get())
         .unwrap_or(4);
     let vendor = fs::canonicalize(opts.recipes.join("../vendor/perl")).ok();
-    let tool_names: BTreeSet<String> = reg
-        .of_kind(Kind::Component)
-        .flat_map(|component| component.tools.iter().cloned())
-        .collect();
-
-    let autoconf = order
-        .iter()
-        .find(|t| t.kind == Kind::Dep && t.name == "autoconf")
-        .map(|t| dep_prefix(&tree_path, t).join("bin"));
 
     let mut steps = Vec::new();
     for target in order {
@@ -74,7 +65,6 @@ pub fn run(
         let deps = link_closure(reg, sel, features, target)?;
         let link_prefixes: Vec<PathBuf> = deps
             .iter()
-            .filter(|name| !tool_names.contains(*name))
             .filter_map(|name| reg.get(&format!("dep:{name}")))
             .map(|dep| dep_prefix(&tree_path, dep))
             .collect();
@@ -85,21 +75,13 @@ pub fn run(
             .map(|dep| dep_prefix(&tree_path, dep))
             .collect();
 
-        // PHP_AUTOCONF / PHP_AUTOHEADER 只影响 phpize 类组件的构建，
-        // 其他节点注入会污染签名、触发无关重编。
-        let node_autoconf = if target.tools.iter().any(|name| name == "autoconf") {
-            autoconf.as_deref()
-        } else {
-            None
-        };
-
         let mut env = build_env(
             &tree,
+            &product.profile.runtime.lib_dir,
             &link_prefixes,
             &tool_prefixes,
             jobs,
             vendor.as_deref(),
-            node_autoconf,
         );
         let node_ctx = ctx(&tree, &work, &prefix);
         if target.kind != Kind::Dep {
@@ -244,7 +226,7 @@ pub fn run(
     phprt_build::run(&steps, &phprt_build::Options { ui: opts.ui })?;
 
     let tree = PathBuf::from(&tree);
-    deploy_libs(product, order, &tree)?;
+    deploy_libs(reg, sel, features, product, order, &tree)?;
     actions::run(reg, product, sel, &tree)?;
     verify(reg, product, &tree)?;
     let target = format!("{}@{}", product.name, product.series);
@@ -440,17 +422,20 @@ fn walk_dep(
 
 fn build_env(
     tree: &str,
+    runtime_lib_dir: &str,
     deps: &[PathBuf],
     tools: &[PathBuf],
     jobs: usize,
     vendor: Option<&Path>,
-    autoconf: Option<&Path>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let mut cpp = String::new();
     let mut ld = String::new();
     let mut pc: Vec<String> = Vec::new();
-    let mut lib_path: Vec<String> = vec![format!("{tree}/lib/phprt")];
+    let mut lib_path: Vec<String> = Vec::new();
+    if !runtime_lib_dir.is_empty() {
+        lib_path.push(Path::new(tree).join(runtime_lib_dir).display().to_string());
+    }
     for dep in deps {
         cpp.push_str(&format!("-I{}/include ", dep.display()));
         ld.push_str(&format!("-L{}/lib ", dep.display()));
@@ -491,22 +476,12 @@ fn build_env(
         }
         env.insert("PERL5LIB".to_owned(), perl);
     }
-    if let Some(bin) = autoconf {
-        env.insert(
-            "PHP_AUTOCONF".to_owned(),
-            bin.join("autoconf").display().to_string(),
-        );
-        env.insert(
-            "PHP_AUTOHEADER".to_owned(),
-            bin.join("autoheader").display().to_string(),
-        );
-    }
     env
 }
 
 /// 产品 profile 声明的环境变量；引用了不在本次构建里的工具时跳过。
-/// 产品 profile 的环境变量只注入真正用到对应工具的节点：
-/// PHP 的 PHP_AUTOCONF 只给 tools 里有 autoconf 的 phpize 类组件。
+/// 同一个变量只注入 `tools` 里包含对应工具 dep 的节点，
+/// 例如 PHP profile 的 `{tool:autoconf}` 不会进 nginx 或 dep 节点。
 fn profile_env(
     product: &Target,
     node: &Target,
@@ -575,7 +550,14 @@ fn append_env(key: &str, base: &str) -> String {
     }
 }
 
-fn deploy_libs(product: &Target, order: &[&Target], tree: &Path) -> Result<()> {
+fn deploy_libs(
+    reg: &Registry,
+    sel: &Selection,
+    features: &BTreeMap<String, Vec<String>>,
+    product: &Target,
+    order: &[&Target],
+    tree: &Path,
+) -> Result<()> {
     let lib_dir = &product.profile.runtime.lib_dir;
     if lib_dir.is_empty() {
         return Ok(());
@@ -586,8 +568,12 @@ fn deploy_libs(product: &Target, order: &[&Target], tree: &Path) -> Result<()> {
     }
     fs::create_dir_all(&flat).with_context(|| format!("建不了 {}", flat.display()))?;
 
+    let runtime = runtime_deps(reg, sel, features, order)?;
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
-    for target in order.iter().filter(|t| t.kind == Kind::Dep) {
+    for target in order
+        .iter()
+        .filter(|t| t.kind == Kind::Dep && runtime.contains(&t.name))
+    {
         let prefix = dep_prefix(tree, target);
         for dir in [prefix.join("lib"), prefix.join("lib64")] {
             let Ok(entries) = fs::read_dir(&dir) else {
@@ -638,6 +624,21 @@ fn deploy_libs(product: &Target, order: &[&Target], tree: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// 产品运行时依赖：只沿 `needs` / 已启用 feature 的 `needs` 求闭包，
+/// `tools` 这类构建期依赖不进入运行时库收集。
+fn runtime_deps(
+    reg: &Registry,
+    sel: &Selection,
+    features: &BTreeMap<String, Vec<String>>,
+    order: &[&Target],
+) -> Result<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    for target in order.iter().filter(|t| t.kind != Kind::Dep) {
+        out.extend(link_closure(reg, sel, features, target)?);
+    }
+    Ok(out)
 }
 
 /// 在安装树里展开 `bin/*`、`lib/php/extensions/*/*.so` 这类相对 glob。
@@ -825,4 +826,211 @@ fn only_series(root: &Path, product: &Target) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recipe::{Profile, ProfileMode};
+
+    fn blank() -> Target {
+        Target {
+            kind: Kind::Dep,
+            name: String::new(),
+            version: String::new(),
+            url: String::new(),
+            sha256: String::new(),
+            needs: vec![],
+            tools: vec![],
+            host_tools: vec![],
+            bundled: vec![],
+            bundled_disable: Default::default(),
+            components: vec![],
+            deps: Default::default(),
+            profile: Default::default(),
+            product: String::new(),
+            source: String::new(),
+            modes: vec![],
+            default_mode: String::new(),
+            source_path: String::new(),
+            modules: vec![],
+            ini: String::new(),
+            ini_lines: vec![],
+            env: Default::default(),
+            dep_configure: Default::default(),
+            prepare: vec![],
+            features: Default::default(),
+            ignored: Default::default(),
+            configure: vec![],
+            make: vec![],
+            artifacts: vec![],
+            desc: String::new(),
+            line: String::new(),
+            series: String::new(),
+        }
+    }
+
+    fn dep(name: &str, needs: &[&str]) -> Target {
+        Target {
+            kind: Kind::Dep,
+            name: name.into(),
+            version: "1".into(),
+            url: format!("https://example.com/{name}.tar.gz"),
+            needs: needs.iter().map(|s| s.to_string()).collect(),
+            ..blank()
+        }
+    }
+
+    fn bundled(name: &str, needs: &[&str], tools: &[&str]) -> Target {
+        Target {
+            kind: Kind::Component,
+            name: name.into(),
+            product: "php".into(),
+            source: "bundled".into(),
+            modes: vec!["static".into(), "shared".into()],
+            default_mode: "static".into(),
+            needs: needs.iter().map(|s| s.to_string()).collect(),
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            modules: vec![name.into()],
+            ini: format!("20-{name}.ini"),
+            ..blank()
+        }
+    }
+
+    fn external(name: &str, needs: &[&str], tools: &[&str]) -> Target {
+        Target {
+            kind: Kind::Component,
+            name: name.into(),
+            product: "php".into(),
+            source: "external".into(),
+            modes: vec!["shared".into()],
+            default_mode: "shared".into(),
+            version: "1.0".into(),
+            url: format!("https://pecl.php.net/get/{name}-1.0.tgz"),
+            needs: needs.iter().map(|s| s.to_string()).collect(),
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            modules: vec![name.into()],
+            ini: format!("20-{name}.ini"),
+            ..blank()
+        }
+    }
+
+    fn profile() -> Profile {
+        let mut profile = Profile::default();
+        profile.modes.insert(
+            "static".into(),
+            ProfileMode {
+                strategy: "fold".into(),
+                ..Default::default()
+            },
+        );
+        profile.modes.insert(
+            "shared".into(),
+            ProfileMode {
+                strategy: "standalone".into(),
+                ..Default::default()
+            },
+        );
+        profile.defaults.insert("bundled".into(), "static".into());
+        profile.defaults.insert("external".into(), "shared".into());
+        profile
+    }
+
+    fn product(components: &[&str]) -> Target {
+        Target {
+            kind: Kind::Product,
+            name: "php".into(),
+            version: "8.5.12".into(),
+            url: "https://example.com/php.tar.gz".into(),
+            series: "8.5".into(),
+            bundled: vec!["curl".into()],
+            components: components.iter().map(|s| s.to_string()).collect(),
+            profile: profile(),
+            ..blank()
+        }
+    }
+
+    fn fixture() -> Registry {
+        Registry::from_targets(vec![
+            dep("openssl", &[]),
+            dep("libcurl", &["openssl"]),
+            dep("pcre2", &[]),
+            dep("autoconf", &[]),
+            bundled("curl", &["libcurl"], &[]),
+            external("swoole", &["pcre2"], &["autoconf"]),
+            product(&["curl", "swoole"]),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn build_env_uses_profile_runtime_lib_dir() {
+        let env = build_env("/tree", "lib/custom", &[], &[], 4, None);
+        assert_eq!(
+            env["LD_LIBRARY_PATH"].split(':').next(),
+            Some("/tree/lib/custom")
+        );
+        assert_eq!(env["MAKEFLAGS"], "-j4");
+        assert!(!env.contains_key("PHP_AUTOCONF"));
+        assert!(!env.contains_key("PHP_AUTOHEADER"));
+
+        let deps = vec![PathBuf::from("/deps/zlib")];
+        let env = build_env("/tree", "", &deps, &[], 4, None);
+        assert!(!env["LD_LIBRARY_PATH"].contains("/tree/"));
+        assert!(env["LD_LIBRARY_PATH"].starts_with("/deps/zlib/lib"));
+    }
+
+    #[test]
+    fn runtime_deps_follow_needs_but_not_tools() {
+        let reg = fixture();
+        let sel = Selection::default();
+        let features = BTreeMap::new();
+        let order: Vec<&Target> = [
+            "dep:openssl",
+            "dep:libcurl",
+            "dep:pcre2",
+            "dep:autoconf",
+            "component:swoole",
+            "product:php@8.5.12",
+        ]
+        .iter()
+        .map(|id| reg.get(id).unwrap())
+        .collect();
+
+        let runtime = runtime_deps(&reg, &sel, &features, &order).unwrap();
+        let expected: BTreeSet<String> = ["libcurl", "openssl", "pcre2"]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(runtime, expected);
+        assert!(order.iter().any(|target| target.name == "autoconf"));
+        assert!(!runtime.contains("autoconf"));
+    }
+
+    #[test]
+    fn profile_env_tool_vars_follow_node_tools() {
+        let mut product = product(&[]);
+        product
+            .profile
+            .env
+            .insert("PHP_AUTOCONF".into(), "{tool:autoconf}/bin/autoconf".into());
+        let autoconf = dep("autoconf", &[]);
+        let order = vec![&autoconf];
+        let ctx = Ctx {
+            tree: "/tree",
+            build: "/build".into(),
+            prefix: "/tree".into(),
+        };
+
+        let mut node = external("swoole", &[], &["autoconf"]);
+        let env = profile_env(&product, &node, &ctx, &order).unwrap();
+        assert_eq!(
+            env.get("PHP_AUTOCONF").map(String::as_str),
+            Some("/tree/deps/autoconf-1/bin/autoconf")
+        );
+
+        node.tools.clear();
+        let env = profile_env(&product, &node, &ctx, &order).unwrap();
+        assert!(!env.contains_key("PHP_AUTOCONF"));
+    }
 }

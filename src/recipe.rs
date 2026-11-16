@@ -2447,6 +2447,31 @@ mod tests {
     }
 
     #[test]
+    fn php_bundled_extensions_declare_config_m4_prepare() {
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        for name in ["openssl", "zlib"] {
+            let component = reg.component(name).unwrap();
+            assert!(
+                component
+                    .prepare
+                    .iter()
+                    .any(|line| line.contains("config0.m4") && line.contains("config.m4")),
+                "{name}: {:?}",
+                component.prepare
+            );
+        }
+
+        let (reg, _) = load_product("nginx", "1.29", &[], &[]).unwrap();
+        let component = reg.component("lua-nginx-module").unwrap();
+        assert!(
+            !component
+                .prepare
+                .iter()
+                .any(|line| line.contains("config0.m4"))
+        );
+    }
+
+    #[test]
     fn default_selection_comes_from_the_bundle_table() {
         let dir = dir();
         let bundle = Bundle::load(&dir.join("bundles/php/8.5.toml")).unwrap();

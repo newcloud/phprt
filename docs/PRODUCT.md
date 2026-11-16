@@ -159,6 +159,10 @@ profile 里的那一条。
 系列里的 `env` 会覆盖 profile 的 `env`，所以 8.0 可以在共享 `CC` / `CXX` /
 `PHP_AUTOCONF` 的基础上只加 `CFLAGS`。
 
+`env` 里的 `{tool:NAME}` 只在当前构建节点的 `tools` 含该工具 dep 时展开，所以
+`PHP_AUTOCONF` 只进 phpize 类组件，nginx 不会拿到 PHP 专用变量。`runtime.lib_dir`
+同时作为构建时 `LD_LIBRARY_PATH` 的首项和运行时收库目录。
+
 最低版本只用于“明显编不了”的检查；编译器太新带来的行为变化（例如 GCC 15 默认
 `gnu23`）必须由系列 recipe 的 `env` / `configure` 显式处理，不能根据版本号自动推导。
 

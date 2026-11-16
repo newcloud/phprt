@@ -47,7 +47,7 @@ Sim { root, tree, order: [Node] }
 | --- | --- |
 | 安装树 | `.phprt/<产品>-<产品版本>` |
 | 项目入口（PHP） | `<root>/myphp-<系列>`；只有一个 PHP 系列时额外写 `<root>/myphp` |
-| 依赖库 | `{tree}/lib/phprt` |
+| 依赖库 | `{tree}/<产品 profile 的 runtime.lib_dir>`；PHP / nginx 当前是 `{tree}/lib/phprt` |
 | dep 前缀 | `{tree}/deps/<name>-<version>` |
 | 源码缓存 | `<root>/.phprt/downloads/<URL 最后一段>` |
 | 解压目录 | `build/<目标名>/<源码目录名>` |

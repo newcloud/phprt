@@ -48,6 +48,14 @@ def target(ctx):
     if ctx["product_series"] in ("8.0", "8.1", "8.2", "8.3"):
         ignored["--with-kerberos"] = "少用：需要系统 krb5 库，只在对接 Kerberos 认证时用"
 
+    # PHP 源码里的 ext/openssl 只有 config0.m4，phpize 只认 config.m4。
+    # 这是 PHP recipe 的源码准备动作，通用构建执行器不再按文件名自动处理。
+    prepare = (
+        ["test -f config.m4 || cp config0.m4 config.m4"]
+        if builtin
+        else []
+    )
+
     return component(
         product = "php",
         name = "openssl",
@@ -55,6 +63,7 @@ def target(ctx):
         modes = ["static", "shared"],
         needs = ["openssl"],
         tools = ["autoconf"],
+        prepare = prepare,
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],
         sha256 = "" if builtin else self["sha256"],

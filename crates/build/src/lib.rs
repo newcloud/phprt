@@ -38,7 +38,7 @@ impl Cmd {
 pub struct Step {
     pub tag: String,
     pub cwd: PathBuf,
-    /// builtin shared 扩展从 PHP 源码树拷到 cwd。
+    /// 工作目录不存在时，从这个源码目录拷到 cwd。
     pub copy_from: Option<PathBuf>,
     pub commands: Vec<Cmd>,
     pub env: BTreeMap<String, String>,
@@ -107,23 +107,13 @@ fn run_one(step: &Step, index: usize, ui: &Tracker) -> Result<bool> {
     if !step.cwd.is_dir() {
         match &step.copy_from {
             Some(source) if source.is_dir() => {
-                ui.start(index, "拷贝", Some("PHP 源码"));
+                ui.start(index, "拷贝", Some("源码"));
                 fs::create_dir_all(&step.cwd)
                     .with_context(|| format!("建不了 {}", step.cwd.display()))?;
                 copy_dir(source, &step.cwd)?;
             }
             Some(source) => bail!("{} 的源码目录不存在: {}", step.tag, source.display()),
             None => bail!("{} 的源码目录不存在: {}", step.tag, step.cwd.display()),
-        }
-    }
-
-    // PHP 源码里有些 builtin 扩展只有 config0.m4，phpize 只认 config.m4。
-    if step.copy_from.is_some() {
-        let config = step.cwd.join("config.m4");
-        let config0 = step.cwd.join("config0.m4");
-        if !config.exists() && config0.is_file() {
-            fs::copy(&config0, &config)
-                .with_context(|| format!("复制不了 {}", config0.display()))?;
         }
     }
 

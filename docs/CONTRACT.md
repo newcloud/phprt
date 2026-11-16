@@ -305,12 +305,15 @@ TARGET = target
 - `modes` 非空，值由产品 profile 定义；默认挂载方式由 profile 的 `defaults` 按 source 推导。
 - `modules` 是产品启动后应看到的模块名，由产品 profile 的 `verify_modules` 使用。
 - `ini` / `ini_lines` 是安装后的登记文件，只有 profile 的 `register` 动作为 `php-ini` 时使用。
-- `tools` 是构建期工具依赖：参与构建顺序和 `PATH`，不参与 include/lib；
-  每个名字必须是 `dep/*.star` 里的目标。
+- `tools` 是构建期工具依赖：参与构建顺序和 `PATH`，不参与 include/lib，
+  也不进入产品运行时库收集；每个名字必须是 `dep/*.star` 里的目标。
 - `host_tools` 是构建期宿主机命令要求，如 `["cmake"]` / `[tool("nasm", min = "2.13")]`。
 - `prepare` 是在 standalone 构建之前于源码目录执行的 shell 命令列表，用来给上游源码
-  打兼容补丁（如删除已移除头文件的 include）。命令写进构建签名，变化会触发重编。
-  只有 component 能用，dep / product 报错。
+  打兼容补丁（如删除已移除头文件的 include），也可以做显式的源码文件准备，例如把只有
+  `config0.m4` 的 PHP 扩展准备成 `config.m4`。命令写进构建签名，变化会触发重编。
+  只有 component 能用，dep / product 报错；通用执行器不会按文件名自动处理。
+- `needs` 是链接和运行时需要的依赖库；产品运行时只收集它的闭包和已启用 feature 的
+  `needs`，不会收集 `tools` 指向的构建工具。
 - `env` 是组件自己的环境变量；fold 时合并进产品节点，standalone 时用于自己的构建节点。
 - `configure` 是正向参数：fold 时交给产品的 configure，standalone 时交给组件自己的
   （或 profile 步骤里的）configure。
@@ -376,7 +379,7 @@ TARGET = product(
 - 同一产品的所有系列共用 `products/<产品>/_profile.star` 里的 `PROFILE`；
   系列差异用 `extend_profile(PROFILE, ...)` 覆盖，详见 [PRODUCT.md](PRODUCT.md)。
 - `version` / `url` / `sha256` 从 catalog 的同名产品注入。
-- `needs` / `deps`：产品链接需要的依赖库，以及要转给它们的 feature。
+- `needs` / `deps`：产品链接和运行时需要的依赖库，以及要转给它们的 feature。
 - `bundled`：该产品源码包内自带的组件名，和是否有 recipe 无关；不要求非空。
 - `bundled_disable`：bundled 组件名 → 单个关闭参数；key 必须在 `bundled` 里。
 - `profile` 是 `product_profile(...)`，同产品的系列共用
@@ -414,7 +417,7 @@ TARGET = product(
 | `modes` | 挂载方式 → `mode(strategy, steps, artifacts, configure)` |
 | `defaults` | 组件来源（bundled / external）→ 默认挂载方式 |
 | `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |
-| `runtime.lib_dir` | 依赖库统一运行目录，相对安装树；空表示不整理 |
+| `runtime.lib_dir` | 依赖库统一运行目录，相对安装树；同时作为构建时 `LD_LIBRARY_PATH` 的首项；空表示不整理 |
 | `runtime.rpath` | 安装树内相对 glob → rpath |
 | `register` | 挂载方式 → 登记动作名；要和 `post_install` 里 `write_component_ini` 的 `register` 一致 |
 | `post_install` | 安装后动作列表：`ensure_dir` / `write_file` / `copy_ca_bundle` / `write_component_ini` |

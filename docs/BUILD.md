@@ -20,7 +20,7 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
   组件使用产品 recipe `bundled_disable` 里的关闭参数。同一个组件只出现一组参数。
 - standalone 组件在产品之后构建：PHP 需要 `php-config`、`phpize` 和产品源码里的组件目录；
   nginx dynamic 模块是 fold，不单独构建。
-- `tools`（如 autoconf）作为 dep 节点参与顺序，只进 `PATH`，不参与链接。
+- `tools`（如 autoconf）作为 dep 节点参与顺序，只进 `PATH`，不参与链接和运行时收库。
 
 ## 2. 每个节点
 
@@ -28,7 +28,7 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 | --- | --- | --- |
 | dep | `build/<名字>/<补丁>` | recipe 的 configure + make |
 | product | `build/<产品>/<补丁>` | `./configure <全部参数>` + make |
-| bundled standalone 组件 | `build/<名字>/<产品>-<产品版本>` | 从产品源码的 `source_path` 拷贝 → profile 的 steps |
+| bundled standalone 组件 | `build/<名字>/<产品>-<产品版本>` | 从产品源码的 `source_path` 拷贝 → 组件 `prepare` → profile 的 steps |
 | external standalone 组件 | `build/<名字>/<补丁>` | profile 的 steps |
 | fold 组件 | 不执行 | 只贡献源码路径和 configure 参数 |
 
@@ -47,15 +47,16 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 | `CPPFLAGS` | 当前节点依赖闭包的 `-I<dep>/include` |
 | `LDFLAGS` | 当前节点依赖闭包的 `-L<dep>/lib` |
 | `PKG_CONFIG_PATH` | 依赖的 `lib/pkgconfig` 和 `share/pkgconfig` |
-| `LD_LIBRARY_PATH` | `{tree}/lib/phprt` 和依赖的 `lib` / `lib64` |
+| `LD_LIBRARY_PATH` | 产品 profile 的 `runtime.lib_dir`（非空时）和依赖的 `lib` / `lib64` |
 | `PATH` | `{tree}/bin`、工具 dep 的 `bin`，再接原有 PATH |
 | `CFLAGS` / `CXXFLAGS` | `-O2`，再接用户已有的值 |
 | `MAKEFLAGS` | `-j<nproc>` |
 | `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块） |
 
 产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX` / `PHP_AUTOCONF` /
-`PHP_AUTOHEADER`；8.0 / 7.4 的 `CFLAGS`）；引用了不在本次构建里的工具时跳过。fold 组件的
-`env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_INC` / `LUAJIT_LIB`）。
+`PHP_AUTOHEADER`；8.0 / 7.4 的 `CFLAGS`）。`{tool:NAME}` 只在当前节点的 `tools` 含该工具
+dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的
+`LUAJIT_INC` / `LUAJIT_LIB`）。
 
 构建阶段使用绝对路径；`plan` 的输出仍然用相对项目根的路径，便于阅读。
 
@@ -72,8 +73,8 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 签名一致且产物齐全时跳过。签名变化时先执行 `make distclean`（忽略失败），
 再重新 configure / make。源码目录在 `build/`，删除它即可强制重新开始。
 
-环境变量按节点裁剪，只放和这个节点产物有关的项。例如 `PHP_AUTOCONF` 只给产品节点和
-组件节点，dep 节点不会因为加了一个 phpize 类组件而重编。
+环境变量按节点裁剪，只放和这个节点产物有关的项。例如 `PHP_AUTOCONF` 只给
+`tools` 里有 autoconf 的 standalone 组件节点，dep 节点不会因为加了一个 phpize 类组件而重编。
 
 ## 5. 日志与失败
 
@@ -85,7 +86,8 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 
 所有构建完成后，按产品 profile 处理：
 
-1. `runtime.lib_dir` 非空时，把各 dep 的 `lib/*.so*`（含软链）复制到 `{tree}/lib/phprt`。
+1. `runtime.lib_dir` 非空时，把运行时依赖（`needs` / 已启用 feature 的 `needs` 闭包，
+   不含 `tools`）的 `lib/*.so*`（含软链）复制到 `{tree}/<runtime.lib_dir>`。
 2. 用 `patchelf --force-rpath` 按 `runtime.rpath` 设置安装树内的 rpath：
    - PHP：`bin/*` → `$ORIGIN/../lib/phprt`；
      `lib/php/extensions/*/*.so` → `$ORIGIN/../../../phprt`。

@@ -57,9 +57,10 @@
 - 是否 bundled、bundled 组件的关闭参数写在 `products/php/<系列>.star` 的
   `bundled` / `bundled_disable`；component recipe 不写 `origin`、`static_enable`、
   `static_disable`，用 `ctx["is_bundled"]`。
-- 上游源码要先改再编时（如删除已移除头文件的 include），component recipe 用
+- 上游源码要先改再编时（如删除已移除头文件的 include），或需要把只有 `config0.m4`
+  的扩展准备成 `config.m4` 时，component recipe 用
   `prepare = [...]` 写 shell 命令：standalone 构建之前执行、必须幂等、会进构建签名；
-  能用 configure 参数解决的事不要写 prepare。
+  能用 configure 参数解决的事不要写 prepare；通用构建执行器不按文件名自动处理。
 - 默认启用集合写在 bundle 的 `[default_components]` 表：`mode` / `features` / `deps`，
   不允许 `version:`；有依赖的 bundled 组件必须一起写，不做依赖展开。
 - 组件被选中时的默认 feature 写在 `[component_presets]`；`[default_components]` 用
