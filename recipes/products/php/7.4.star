@@ -1,6 +1,13 @@
 TARGET = product(
     name = "php",
-    profile = php_profile(),
+    # GCC 15 默认 gnu23，() 旧式声明被当成零参数；incompatible-pointer-types
+    # 默认升级为错误。7.4 的 pcntl / scanf 等还是旧式 C，上游 EOL 没修。
+    profile = extend_profile(
+        PROFILE,
+        env = {
+            "CFLAGS": "-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
+        },
+    ),
     series = "7.4",
     # 该系列还没完整适配：先只声明当前有 recipe 的内置扩展，
     # 其余内置事实等适配该系列时再补全。
@@ -35,9 +42,6 @@ TARGET = product(
         "--disable-xml",
         "--disable-xmlreader",
         "--disable-xmlwriter",
-        # 同 8.0：GCC 15 默认 gnu23，() 旧式声明被当成零参数；incompatible-pointer-types
-        # 默认升级为错误。7.4 的 pcntl / scanf 等还是旧式 C，上游 EOL 没修。
-        "CFLAGS=-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
     ],
     make = ["make", "make install"],
     artifacts = ["bin/php"],

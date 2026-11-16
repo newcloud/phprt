@@ -1,6 +1,6 @@
 TARGET = product(
     name = "php",
-    profile = php_profile(),
+    profile = PROFILE,
     series = "8.6",
     # 该系列还没完整适配：先只声明当前有 recipe 的内置扩展，
     # 其余内置事实等适配该系列时再补全。

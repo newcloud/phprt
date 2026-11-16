@@ -280,6 +280,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | --- | --- |
 | [CLI.md](CLI.md) | 子命令、`产品@系列`、`--component`、`--dep`、错误与退出码 |
 | [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle |
+| [PRODUCT.md](PRODUCT.md) | 产品共享 profile、工具最低版本、安装后动作、入口模板 |
 | [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、feature 并集 |
 | [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |
 | [STATE.md](STATE.md) | state.json、bindings、line/version |

@@ -20,7 +20,8 @@
 
 本文是通用化的完整走查。PHP 和 nginx 已经按此落地；CPython 仍是示例，用来验证
 产品模型不依赖 autoconf/make 的固定组合。字段和命令以 [CONTRACT.md](CONTRACT.md)、
-[CLI.md](CLI.md) 为准。
+[CLI.md](CLI.md)、[PRODUCT.md](PRODUCT.md) 为准；产品级工具和安装后动作以
+PRODUCT.md 为准。
 
 ## 1. 现在哪些地方是 PHP 专用的
 
@@ -166,7 +167,15 @@ PHP 的 `modules` / `ini` / `origin` 不再是通用字段：
 profile（节选）：
 
 ```python
-php_profile = product_profile(
+PROFILE = product_profile(
+    tools = [
+        tool("gcc", min = "9"),
+        tool("make", min = "4.0"),
+        "ar",
+        "ranlib",
+        tool("patchelf", min = "0.13"),
+        "sh",
+    ],
     modes = {
         # 折叠进产品 configure：组件不单独执行构建命令
         "static": mode(strategy = "fold"),
@@ -202,13 +211,19 @@ php_profile = product_profile(
     verify = ["{tree}/bin/php", "-v"],
     verify_modules = "{tree}/bin/php -m",
     entry = "myphp-{series}",
-    entry_template = "myphp",
+    entry_template = "entry.sh",
     env = {
         "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
         "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
     },
+    post_install = [
+        ensure_dir("etc/conf.d"),
+        write_file("etc/php.ini", PHP_INI, if_missing = True),
+        copy_ca_bundle("etc/ssl/cert.pem", [ ... ]),
+        write_file("etc/conf.d/00-ssl.ini", SSL_INI),
+        write_component_ini("etc/conf.d", register = "php-ini"),
+    ],
     audit = "php-config-m4",
-    config = "php",
 )
 ```
 
@@ -245,6 +260,8 @@ profile 字段的含义：
 
 | 字段 | 说明 |
 | --- | --- |
+| `tools` | 产品总是需要的宿主机命令；可带最低版本，详见 [PRODUCT.md](PRODUCT.md) |
+| `post_install` | 安装后动作：`ensure_dir` / `write_file` / `copy_ca_bundle` / `write_component_ini` |
 | `modes` | 产品支持的挂载方式 → `mode(strategy, steps, artifacts, configure)`；`fold` 表示组件只贡献参数/源码，`standalone` 表示产品之后单独构建 |
 | `modes.*.configure` | fold 时追加到产品 `configure` 的参数模板；`{component_source}` 是组件源码根 |
 | `modes.*.steps` | standalone 的步骤模板；`{flags}` 是组件的 configure 参数，`{name}` 是组件名 |
@@ -254,7 +271,7 @@ profile 字段的含义：
 | `register` | 组件装好后怎么让产品看见它，如写 ini、装到 `site-packages`、改 nginx 配置 |
 | `runtime` | 运行时库目录和 rpath 模板 |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 可以检查组件是否真的加载 |
-| `entry` / `entry_template` | 项目入口文件名模板和内置模板；PHP 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；nginx 不生成，CPython 可以是 `python3.5` |
+| `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件（如 `entry.sh`）；PHP 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；nginx 不生成，CPython 可以是 `python3.5` |
 | `env` | 产品专用环境变量；PHP 的 `PHP_AUTOCONF` 不再污染其他节点 |
 | `audit` | 选项清单来源：`php-config-m4` / `configure-help` / `none` |
 | `config` | 安装后配置动作：PHP 用 `php`，其他产品留空 |
@@ -713,7 +730,7 @@ profile 的 `fold` / `standalone`：
 | 现在 | 通用化 |
 | --- | --- |
 | `deploy_libs()` 固定收进 `{tree}/lib/phprt`，rpath 固定 `$ORIGIN` / `$ORIGIN/../lib/phprt` / `$ORIGIN/../../../phprt` | profile `runtime.lib_dir` + `runtime.rpath` 模板；默认值保持 PHP 现状 |
-| `write_tree_config()` 写 `php.ini`、`00-ssl.ini`、复制 CA | profile `config` / `post_install`；PHP profile 保留这些动作 |
+| `write_tree_config()` 写 `php.ini`、`00-ssl.ini`、复制 CA、写 ini | profile `post_install` 的 `write_file` / `copy_ca_bundle` / `write_component_ini`；内容在 PHP `_profile.star` |
 | `verify()` 跑 `php -v` / `php -m` | profile `verify` / `verify_modules`；PHP profile 保留模块名检查 |
 | `write_entry()` 写 `myphp` 和 `.phprt/current` | profile `entry`；入口名带系列，不再写全局 `.phprt/current`；默认不生成入口 |
 | `log` 名字按 kind 拼 | 不变；`product` / `component` 只是新的 kind 名 |

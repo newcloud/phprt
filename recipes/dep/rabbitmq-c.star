@@ -6,6 +6,7 @@ def target(ctx):
         version = self["version"],
         url = self["url"],
         sha256 = self["sha256"],
+        host_tools = ["cmake"],
         needs = ["openssl"],
         configure = [
             "cmake",

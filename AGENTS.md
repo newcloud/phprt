@@ -27,6 +27,7 @@
 | 下载、缓存、镜像、分片续传、进度 UI | `docs/DOWNLOAD.md` |
 | 解压顺序、目录、格式、跳过与安全 | `docs/EXTRACT.md` |
 | 构建顺序、环境、签名跳过、日志、rpath、ini、入口 | `docs/BUILD.md` |
+| 产品共享 profile、工具最低版本、安装后动作、入口模板 | `docs/PRODUCT.md` |
 | 模块职责、数据流、关键决策、目录 | `docs/DESIGN.md` |
 
 ## 2. 不开发没明确要求的使用方式
@@ -75,6 +76,16 @@
   `LINES`/`PRODUCT_LINES`/`PRODUCT_DEP_LINES`，必要时改 bundle。
 - 每个产品系列必须有对应的 `bundles/<产品>/<系列>.toml` 和
   `products/<产品>/<系列>.star`。
+- 产品共享 profile 写在 `products/<产品>/_profile.star`，只定义 `PROFILE`；
+  系列 recipe 用 `profile = PROFILE`，差异用 `extend_profile(PROFILE, ...)` 覆盖
+  （tools 按名字合并、env 按 key 合并，其他字段传了才替换）。
+- 宿主机命令写在产品 profile 的 `tools` 里，可带最低版本：
+  `tool("gcc", min = "9", probe = ["-dumpfullversion"])`。只有部分依赖需要的命令
+  （cmake、nasm）写在该 dep / component 的 `host_tools`，不写死进 Rust。
+- 安装后行为写在产品 profile 的 `post_install`：`ensure_dir` / `write_file` /
+  `copy_ca_bundle` / `write_component_ini`。不往 Rust 里加产品专用分支，也不使用
+  任意 shell；需要改上游源码的命令仍写在组件的 `prepare`。
+- 入口模板放在 `products/<产品>/` 下，用 `entry_template = "entry.sh"` 引用。
 
 ## 5. 验收
 

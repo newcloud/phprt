@@ -105,7 +105,7 @@ BUILTIN_DISABLE = {
 
 TARGET = product(
     name = "php",
-    profile = php_profile(),
+    profile = PROFILE,
     series = "8.4",
     bundled = BUILTIN_EXTS,
     bundled_disable = BUILTIN_DISABLE,

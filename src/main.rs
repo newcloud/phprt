@@ -1,3 +1,4 @@
+mod actions;
 mod audit;
 mod bind;
 mod build;
@@ -10,6 +11,7 @@ mod recipe;
 mod render;
 mod sources;
 mod state;
+mod tools;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -488,6 +490,9 @@ fn run() -> Result<()> {
             print!("{}", render::to_text(&sim));
 
             let download = download.expect("install/update 一定有下载参数");
+            if !download.downloads {
+                tools::check(reg.product_any()?, &order)?;
+            }
             let cache = cli.root.join(".phprt").join("downloads");
             let sources = sources::collect(&order, &cli.root, &cache)?;
             let config = config::Config::load(&cli.recipes.join(config::FILE_NAME))?;

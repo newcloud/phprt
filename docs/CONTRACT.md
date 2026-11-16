@@ -248,6 +248,8 @@ TARGET = target
 - `version` / `url` / `sha256` 由 ctx 注入。
 - 安装前缀是 `.phprt/<产品>-<产品版本>/deps/<name>-<version>`。
 - 禁止产品 / 组件字段。
+- `host_tools` 是这个依赖构建时需要的宿主机命令，如 `["cmake"]` 或
+  `[tool("nasm", min = "2.13")]`；只在本次闭包包含它时检查。
 - `features` 由组件的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
   `disable` 参数（用来关掉上游的自动探测），没有 `disable` 就不传。
 - dep 的 feature 允许写 `requires.commands`（宿主机命令）；不允许 `requires.product` /
@@ -305,6 +307,7 @@ TARGET = target
 - `ini` / `ini_lines` 是安装后的登记文件，只有 profile 的 `register` 动作为 `php-ini` 时使用。
 - `tools` 是构建期工具依赖：参与构建顺序和 `PATH`，不参与 include/lib；
   每个名字必须是 `dep/*.star` 里的目标。
+- `host_tools` 是构建期宿主机命令要求，如 `["cmake"]` / `[tool("nasm", min = "2.13")]`。
 - `prepare` 是在 standalone 构建之前于源码目录执行的 shell 命令列表，用来给上游源码
   打兼容补丁（如删除已移除头文件的 include）。命令写进构建签名，变化会触发重编。
   只有 component 能用，dep / product 报错。
@@ -364,12 +367,14 @@ TARGET = product(
     configure=["--prefix={tree}", "--with-config-file-scan-dir={tree}/etc/conf.d"],
     make=["make", "make install"],
     artifacts=["bin/php"],
-    profile=php_profile,
+    profile=PROFILE,
     desc="PHP 8.5 本体",
 )
 ```
 
 - 路径是 `products/<产品>/<系列>.star`；`series` 必须和文件名一致。
+- 同一产品的所有系列共用 `products/<产品>/_profile.star` 里的 `PROFILE`；
+  系列差异用 `extend_profile(PROFILE, ...)` 覆盖，详见 [PRODUCT.md](PRODUCT.md)。
 - `version` / `url` / `sha256` 从 catalog 的同名产品注入。
 - `needs` / `deps`：产品链接需要的依赖库，以及要转给它们的 feature。
 - `bundled`：该产品源码包内自带的组件名，和是否有 recipe 无关；不要求非空。
@@ -377,7 +382,15 @@ TARGET = product(
 - `profile` 是 `product_profile(...)`：
 
   ```python
-  profile = product_profile(
+  PROFILE = product_profile(
+      tools = [
+          tool("gcc", min = "9"),
+          tool("make", min = "4.0"),
+          "ar",
+          "ranlib",
+          tool("patchelf", min = "0.13"),
+          "sh",
+      ],
       modes = {
           "static": mode(strategy="fold"),
           "shared": mode(
@@ -401,32 +414,38 @@ TARGET = product(
           },
       ),
       register = {"shared": "php-ini"},
+      post_install = [
+          ensure_dir("etc/conf.d"),
+          write_file("etc/php.ini", PHP_INI, if_missing = True),
+          copy_ca_bundle("etc/ssl/cert.pem", ["/etc/ssl/certs/ca-certificates.crt"]),
+          write_component_ini("etc/conf.d", register = "php-ini"),
+      ],
       verify = ["{tree}/bin/php", "-v"],
       verify_modules = "{tree}/bin/php -m",
       entry = "myphp-{series}",
-      entry_template = "myphp",
+      entry_template = "entry.sh",
       env = {
           "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
           "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
       },
       audit = "php-config-m4",
-      config = "php",
   )
   ```
 
 | 字段 | 说明 |
 | --- | --- |
+| `tools` | 产品总是需要的宿主机命令；`tool(name, min, probe)` 或字符串，详见 [PRODUCT.md](PRODUCT.md) |
 | `modes` | 挂载方式 → `mode(strategy, steps, artifacts, configure)` |
 | `defaults` | 组件来源（bundled / external）→ 默认挂载方式 |
 | `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |
 | `runtime.lib_dir` | 依赖库统一运行目录，相对安装树；空表示不整理 |
 | `runtime.rpath` | 安装树内相对 glob → rpath |
 | `register` | 挂载方式 → 登记动作；目前只有 `php-ini` |
+| `post_install` | 安装后动作列表：`ensure_dir` / `write_file` / `copy_ca_bundle` / `write_component_ini` |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 用来检查组件模块 |
-| `entry` / `entry_template` | 项目入口文件名模板和内置模板名（`myphp`） |
+| `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件名（如 `entry.sh`） |
 | `env` | 产品专用环境变量，支持 `{tree}`、`{tool:<dep>}` |
 | `audit` | 选项来源：`php-config-m4` / `configure-help` / `none` |
-| `config` | 安装后配置动作：`php` 或空 |
 
 `mode(strategy=...)`：
 

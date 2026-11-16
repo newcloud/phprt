@@ -14,7 +14,7 @@
 | 新增组件 / 改构建参数 | `recipes/components/<产品>/<名字>.star` |
 | 新增 bundled 组件事实 | `recipes/products/<产品>/<系列>.star` 的 `bundled` / `bundled_disable` |
 | 默认启用的组件集合 | `recipes/bundles/<产品>/<系列>.toml` 的 `default_components` |
-| 新产品 | `recipes/catalog.toml` + `recipes/products/<产品>/<系列>.star` + `recipes/bundles/<产品>/<系列>.toml` |
+| 新产品 | `recipes/catalog.toml` + `recipes/products/<产品>/_profile.star` + `recipes/products/<产品>/<系列>.star` + `recipes/bundles/<产品>/<系列>.toml` |
 
 补丁号只写在 `recipes/catalog.toml`。recipe、bundle、state 都不写补丁号。
 
@@ -92,7 +92,11 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 
 ### 6.1 产品 recipe
 
-路径是 `recipes/products/<产品>/<系列>.star`。`TARGET` 必须是 `product(...)` dict：
+路径是 `recipes/products/<产品>/<系列>.star`。`TARGET` 必须是 `product(...)` dict。
+
+产品级共享 profile 放在 `recipes/products/<产品>/_profile.star`，只定义 `PROFILE`；
+系列 recipe 用 `profile = PROFILE`。需要按系列改工具或编译参数时用
+`extend_profile(PROFILE, ...)`，规则见 [PRODUCT.md](PRODUCT.md)。
 
 ```python
 TARGET = product(
@@ -102,7 +106,7 @@ TARGET = product(
     configure = ["./configure", "--prefix={tree}", ...],
     make = ["make", "make install"],
     artifacts = ["sbin/nginx"],
-    profile = nginx_profile(),
+    profile = PROFILE,
     desc = "nginx 1.29 本体",
 )
 ```
@@ -111,6 +115,8 @@ TARGET = product(
 - `version` / `url` / `sha256` 由 catalog 注入，不要写死。
 - `bundled` / `bundled_disable` 是“产品源码包里自带哪些组件、没选中时怎么关闭”。
 - `profile` 定义组件怎么挂到产品上，见 [CONTRACT.md](CONTRACT.md) 第 6 节。
+- `_profile.star` 里的 `tools` 声明宿主机命令和最低版本；`post_install` 声明安装后
+  写哪些文件、复制 CA、写组件 ini。
 - 产品自己的 `LINES[系列]` 可以约束依赖线。
 
 ### 6.2 组件 recipe

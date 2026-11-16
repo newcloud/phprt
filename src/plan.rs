@@ -231,6 +231,7 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
+            host_tools: vec![],
             bundled: vec![],
             bundled_disable: Default::default(),
             components: vec![],

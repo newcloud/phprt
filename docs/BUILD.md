@@ -8,6 +8,10 @@
 
 ```text
 dep → fold 组件（只贡献产品 configure 参数） → product → standalone 组件
+  → runtime（收库、rpath）
+  → post_install（目录、文件、CA、ini）
+  → verify
+  → entry
 ```
 
 - 拓扑序由求解器决定，构建阶段不再排序。
@@ -49,9 +53,9 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 | `MAKEFLAGS` | `-j<nproc>` |
 | `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块） |
 
-产品 profile 的 `env` 再追加产品专用变量（PHP 的 `PHP_AUTOCONF` /
-`PHP_AUTOHEADER`）；引用了不在本次构建里的工具时跳过。fold 组件的 `env` 合并进产品节点
-（如 lua-nginx-module 的 `LUAJIT_INC` / `LUAJIT_LIB`）。
+产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX` / `PHP_AUTOCONF` /
+`PHP_AUTOHEADER`；8.0 的 `CFLAGS`）；引用了不在本次构建里的工具时跳过。fold 组件的
+`env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_INC` / `LUAJIT_LIB`）。
 
 构建阶段使用绝对路径；`plan` 的输出仍然用相对项目根的路径，便于阅读。
 
@@ -86,11 +90,12 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
    - PHP：`bin/*` → `$ORIGIN/../lib/phprt`；
      `lib/php/extensions/*/*.so` → `$ORIGIN/../../../phprt`。
    - nginx：`sbin/nginx` / `modules/*.so` → `$ORIGIN/../lib/phprt`。
-3. `config = "php"` 时写 `{tree}/etc/php.ini`（不存在时）、shared 组件的 `conf.d` ini，
-   复制系统 CA 到 `{tree}/etc/ssl/cert.pem`，写 `conf.d/00-ssl.ini`。
+3. 按 profile 的 `post_install` 执行动作：`ensure_dir` / `write_file` /
+   `copy_ca_bundle` / `write_component_ini`。PHP 的 `php.ini`、`00-ssl.ini`、CA 和
+   shared 组件 ini 都在这里生成；动作内容见 [PRODUCT.md](PRODUCT.md)。
 4. 运行 profile 的 `verify`；有 `verify_modules` 时再逐个校验组件的 `modules`。
-5. 按 profile 的 `entry` 写项目入口。PHP 写 `myphp-<系列>`；项目里只有一个 PHP 系列时
-   再写 `myphp`。nginx 不生成入口。
+5. 按 profile 的 `entry` / `entry_template` 写项目入口。PHP 写 `myphp-<系列>`；
+   项目里只有一个 PHP 系列时再写 `myphp`。nginx 不生成入口。
 
 `myphp-<系列>` 会设置 `PHPRC`、`PHP_INI_SCAN_DIR`、`SSL_CERT_FILE`、`PATH` 和
 `extension_dir`，所以整棵树搬走后仍能用；入口里写死安装树目录，不需要
@@ -98,13 +103,18 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 
 ## 7. 构建工具
 
-| 工具 | 来源 |
+工具清单来自 recipe，不写死在 Rust：
+
+| 来源 | 内容 |
 | --- | --- |
-| gcc / g++ / make / ar / ranlib / pkg-config / patchelf / m4 / perl | 系统 |
-| cmake | 系统；只在本次构建含 CMake 依赖时检查（jpeg/webp/aom/avif/libzip 等） |
-| nasm | 系统；libjpeg-turbo 的 `simd` feature 要求 nasm；libaom（AVIF）也接受 yasm |
-| autoconf | 源码构建，catalog 的 `[autoconf]`，作为组件的 `tools` |
+| 产品 profile 的 `tools` | 这个产品总是需要的命令，可带最低版本，如 `tool("gcc", min = "9")` |
+| dep / component 的 `host_tools` | 只有本次构建包含它时才需要的命令，如 cmake、nasm |
+| feature 的 `requires.commands` | 选中 feature 时检查的命令 |
+| autoconf | 源码构建，catalog 的 `[autoconf]`，作为组件的 `tools`（dep 包，不是宿主机命令） |
 | 纯 Perl 模块 | 仓库 `vendor/perl`，构建时通过 `PERL5LIB` 注入 |
+
+检查在下载源码之前执行；`--downloads` 不检查。版本探测和比较见
+[PRODUCT.md](PRODUCT.md)。
 
 Fedora 上系统工具可以一次装好：
 

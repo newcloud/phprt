@@ -114,6 +114,12 @@ impl Strategy {
 pub struct Profile {
     #[serde(default)]
     pub modes: BTreeMap<String, ProfileMode>,
+    /// 产品构建总是需要的宿主机工具。
+    #[serde(default)]
+    pub tools: Vec<ToolSpec>,
+    /// 安装后动作，按顺序执行。
+    #[serde(default)]
+    pub post_install: Vec<Action>,
     /// 组件来源 -> 默认挂载方式，如 `{ bundled = "static", external = "shared" }`。
     #[serde(default)]
     pub defaults: BTreeMap<String, String>,
@@ -132,7 +138,7 @@ pub struct Profile {
     /// 入口名模板，如 `myphp-{series}`；空表示不生成入口。
     #[serde(default)]
     pub entry: String,
-    /// 入口内容的内置模板名，如 `myphp`。
+    /// 入口模板文件，相对产品 recipe 目录，如 `entry.sh`。
     #[serde(default)]
     pub entry_template: String,
     #[serde(default)]
@@ -140,12 +146,190 @@ pub struct Profile {
     /// 选项来源：`php-config-m4` / `configure-help` / `none`。
     #[serde(default)]
     pub audit: String,
-    /// 安装后配置动作：`php` 或空。
+}
+
+/// 一个宿主机工具要求：字符串缩写只检查存在，带 min 时检查版本。
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSpec {
+    pub name: String,
     #[serde(default)]
-    pub config: String,
+    pub min: String,
+    #[serde(default = "default_probe")]
+    pub probe: Vec<String>,
+}
+
+fn default_probe() -> Vec<String> {
+    vec!["--version".to_owned()]
+}
+
+impl<'de> Deserialize<'de> for ToolSpec {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Name(String),
+            Spec {
+                name: String,
+                #[serde(default)]
+                min: String,
+                #[serde(default = "default_probe")]
+                probe: Vec<String>,
+            },
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Name(name) => Ok(Self {
+                name,
+                min: String::new(),
+                probe: default_probe(),
+            }),
+            Raw::Spec { name, min, probe } => Ok(Self { name, min, probe }),
+        }
+    }
+}
+
+/// 安装后动作；只允许固定原语，不执行任意 shell。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Action {
+    EnsureDir {
+        path: String,
+    },
+    WriteFile {
+        path: String,
+        content: String,
+        #[serde(default)]
+        if_missing: bool,
+    },
+    CopyCaBundle {
+        to: String,
+        candidates: Vec<String>,
+    },
+    WriteComponentIni {
+        dir: String,
+        register: String,
+    },
+}
+
+impl Action {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Action::EnsureDir { path } => check_relative(path, "ensure-dir.path"),
+            Action::WriteFile { path, .. } => check_relative(path, "write-file.path"),
+            Action::CopyCaBundle { to, candidates } => {
+                check_relative(to, "copy-ca-bundle.to")?;
+                if candidates.is_empty() {
+                    bail!("copy-ca-bundle.candidates 不能为空");
+                }
+                for candidate in candidates {
+                    if candidate.is_empty() {
+                        bail!("copy-ca-bundle.candidates 里有空路径");
+                    }
+                }
+                Ok(())
+            }
+            Action::WriteComponentIni { dir, register } => {
+                check_relative(dir, "write-component-ini.dir")?;
+                if register.is_empty() {
+                    bail!("write-component-ini.register 不能为空");
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn check_relative(path: &str, field: &str) -> Result<()> {
+    if path.is_empty() {
+        bail!("{field} 不能为空");
+    }
+    let path = Path::new(path);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        bail!("{field}={} 必须是安装树内的相对路径", path.display());
+    }
+    Ok(())
+}
+
+fn validate_tools(tools: &[ToolSpec], at: &str) -> Result<()> {
+    for tool in tools {
+        if tool.name.is_empty() {
+            bail!("{at}: tools 里有空名字");
+        }
+        if !tool.min.is_empty() {
+            if tool.probe.is_empty() {
+                bail!("{at}: tool {} 设置了 min，但 probe 为空", tool.name);
+            }
+            if tool
+                .min
+                .split('.')
+                .any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()))
+            {
+                bail!(
+                    "{at}: tool {} 的 min={} 不是数字点分版本",
+                    tool.name,
+                    tool.min
+                );
+            }
+        }
+        for arg in &tool.probe {
+            if arg.is_empty() {
+                bail!("{at}: tool {} 的 probe 里有空参数", tool.name);
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Profile {
+    /// 组件 / 依赖不允许带任何产品 profile 内容。
+    fn is_empty(&self) -> bool {
+        self.modes.is_empty()
+            && self.defaults.is_empty()
+            && self.bundled_path.is_empty()
+            && self.runtime.lib_dir.is_empty()
+            && self.runtime.rpath.is_empty()
+            && self.register.is_empty()
+            && self.tools.is_empty()
+            && self.post_install.is_empty()
+            && self.verify.is_empty()
+            && self.verify_modules.is_empty()
+            && self.entry.is_empty()
+            && self.entry_template.is_empty()
+            && self.env.is_empty()
+            && self.audit.is_empty()
+    }
+
+    fn validate(&self, at: &str) -> Result<()> {
+        validate_tools(&self.tools, at)?;
+        for action in &self.post_install {
+            action.validate()?;
+        }
+        if !self.entry_template.is_empty() {
+            let path = Path::new(&self.entry_template);
+            if path.components().count() != 1
+                || !matches!(
+                    path.components().next(),
+                    Some(std::path::Component::Normal(_))
+                )
+            {
+                bail!(
+                    "{at}: entry_template={} 必须是产品目录下的文件名",
+                    self.entry_template
+                );
+            }
+        }
+        if !self.entry.is_empty() && self.entry_template.is_empty() {
+            bail!("{at}: 设置了 entry，但没有 entry_template");
+        }
+        Ok(())
+    }
+
     pub fn strategy(&self, mode: &str) -> Result<Strategy> {
         let def = self
             .modes
@@ -174,6 +358,9 @@ pub struct Target {
     /// 构建期工具依赖（dep）；参与构建顺序和 PATH，不参与链接。
     #[serde(default)]
     pub tools: Vec<String>,
+    /// 构建期宿主机命令要求（dep / component 使用）。
+    #[serde(default)]
+    pub host_tools: Vec<ToolSpec>,
     /// 产品：源码包内自带的组件名。
     #[serde(default)]
     pub bundled: Vec<String>,
@@ -265,6 +452,7 @@ impl Target {
                     bail!("{at}: dep:{} 缺少 url", self.name);
                 }
                 self.reject_product_fields(&at)?;
+                validate_tools(&self.host_tools, &at.to_string())?;
                 if !self.dep_configure.is_empty() {
                     bail!("{at}: dep:{} 不允许 dep_configure", self.name);
                 }
@@ -324,12 +512,13 @@ impl Target {
                 }
                 if !self.bundled.is_empty()
                     || !self.bundled_disable.is_empty()
-                    || !self.profile.modes.is_empty()
+                    || !self.profile.is_empty()
                     || !self.components.is_empty()
                     || !self.series.is_empty()
                 {
                     bail!("{at}: component:{} 不允许产品字段", self.name);
                 }
+                validate_tools(&self.host_tools, &at.to_string())?;
                 for tool in &self.tools {
                     if tool.is_empty() {
                         bail!("{at}: component:{} 的 tools 里有空名字", self.name);
@@ -456,6 +645,13 @@ impl Target {
                 if self.url.is_empty() {
                     bail!("{at}: product:{} 缺少 url", self.name);
                 }
+                if !self.host_tools.is_empty() {
+                    bail!(
+                        "{at}: product:{} 不允许 host_tools（用 profile.tools）",
+                        self.name
+                    );
+                }
+                self.profile.validate(&at.to_string())?;
                 if self.profile.modes.is_empty() {
                     bail!("{at}: product:{} 的 profile.modes 不能为空", self.name);
                 }
@@ -539,7 +735,7 @@ impl Target {
         if !self.bundled.is_empty() || !self.bundled_disable.is_empty() {
             bail!("{at}: dep:{} 不允许 bundled/bundled_disable", self.name);
         }
-        if !self.components.is_empty() || !self.profile.modes.is_empty() {
+        if !self.components.is_empty() || !self.profile.is_empty() {
             bail!("{at}: dep:{} 不允许产品字段", self.name);
         }
         if !self.modes.is_empty() || !self.source.is_empty() || !self.product.is_empty() {
@@ -1237,7 +1433,15 @@ pub fn load_meta(dir: &Path, catalog: &Catalog) -> Result<Vec<RecipeMeta>> {
     for file in recipe_files(dir)? {
         let src = fs::read_to_string(&file.path)
             .with_context(|| format!("读不到 {}", file.path.display()))?;
-        let raw = eval_meta(&file.path, &defs, &src, &globals, &dialect)?;
+        let prelude = read_prelude(&file.path)?;
+        let raw = eval_meta(
+            &file.path,
+            &defs,
+            prelude.as_deref(),
+            &src,
+            &globals,
+            &dialect,
+        )?;
         let lines = match raw.lines_json {
             Some(value) => parse_lines(value)
                 .with_context(|| format!("{}: LINES 不合法", file.path.display()))?,
@@ -1374,9 +1578,18 @@ pub fn load_targets(
     }) {
         let src = fs::read_to_string(&file.path)
             .with_context(|| format!("读不到 {}", file.path.display()))?;
+        let prelude = read_prelude(&file.path)?;
         let mut ctx = base_ctx.clone();
         ctx["is_bundled"] = serde_json::Value::Bool(false);
-        let json = eval_target(&file.path, &defs, &src, &globals, &dialect, &ctx)?;
+        let json = eval_target(
+            &file.path,
+            &defs,
+            prelude.as_deref(),
+            &src,
+            &globals,
+            &dialect,
+            &ctx,
+        )?;
         let mut target: Target = serde_json::from_value(json)
             .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
         if target.kind != Kind::Product {
@@ -1412,10 +1625,19 @@ pub fn load_targets(
         if self_value.is_null() {
             continue;
         }
+        let prelude = read_prelude(&file.path)?;
         let mut ctx = base_ctx.clone();
         ctx["is_bundled"] = serde_json::Value::Bool(false);
         ctx["self"] = self_value;
-        let json = eval_target(&file.path, &defs, &src, &globals, &dialect, &ctx)?;
+        let json = eval_target(
+            &file.path,
+            &defs,
+            prelude.as_deref(),
+            &src,
+            &globals,
+            &dialect,
+            &ctx,
+        )?;
         let mut target: Target = serde_json::from_value(json)
             .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
         if target.kind != Kind::Dep {
@@ -1453,10 +1675,19 @@ pub fn load_targets(
         if !is_bundled && self_value.is_null() {
             continue;
         }
+        let prelude = read_prelude(&file.path)?;
         let mut ctx = base_ctx.clone();
         ctx["is_bundled"] = serde_json::Value::Bool(is_bundled);
         ctx["self"] = self_value;
-        let json = eval_target(&file.path, &defs, &src, &globals, &dialect, &ctx)?;
+        let json = eval_target(
+            &file.path,
+            &defs,
+            prelude.as_deref(),
+            &src,
+            &globals,
+            &dialect,
+            &ctx,
+        )?;
         let mut target: Target = serde_json::from_value(json)
             .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
         if target.kind != Kind::Component {
@@ -1567,6 +1798,13 @@ fn recipe_files(dir: &Path) -> Result<Vec<RecipeFile>> {
                 continue;
             }
             for file in star_files(&product_dir)? {
+                let stem = file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                if stem.starts_with('_') {
+                    continue;
+                }
                 let classified = classify(&file)?;
                 if classified.kind != kind {
                     bail!("{}: 目录和 recipe 类型不一致", file.display());
@@ -1644,6 +1882,39 @@ fn classify(path: &Path) -> Result<RecipeFile> {
     }
 }
 
+fn prelude_name(path: &Path) -> String {
+    path.parent()
+        .map(|dir| dir.join("_profile.star").display().to_string())
+        .unwrap_or_else(|| "_profile.star".to_owned())
+}
+
+fn read_prelude(path: &Path) -> Result<Option<String>> {
+    let Some(parent) = path.parent() else {
+        return Ok(None);
+    };
+    let prelude = parent.join("_profile.star");
+    if !prelude.is_file() {
+        return Ok(None);
+    }
+    let text =
+        fs::read_to_string(&prelude).with_context(|| format!("读不到 {}", prelude.display()))?;
+    Ok(Some(text))
+}
+
+fn parse_prelude(
+    path: &Path,
+    prelude: Option<&str>,
+    dialect: &Dialect,
+) -> Result<Option<AstModule>> {
+    match prelude {
+        Some(text) => Ok(Some(
+            AstModule::parse(&prelude_name(path), text.to_owned(), dialect)
+                .map_err(|e| anyhow!("{} 解析失败: {e}", prelude_name(path)))?,
+        )),
+        None => Ok(None),
+    }
+}
+
 struct MetaRaw {
     target_json: Option<serde_json::Value>,
     lines_json: Option<serde_json::Value>,
@@ -1655,6 +1926,7 @@ struct MetaRaw {
 fn eval_meta(
     path: &Path,
     defs: &str,
+    prelude: Option<&str>,
     src: &str,
     globals: &Globals,
     dialect: &Dialect,
@@ -1662,6 +1934,7 @@ fn eval_meta(
     let name = path.display().to_string();
     let ast_defs = AstModule::parse("defs.star", defs.to_owned(), dialect)
         .map_err(|e| anyhow!("defs.star 解析失败: {e}"))?;
+    let ast_prelude = parse_prelude(path, prelude, dialect)?;
     let ast = AstModule::parse(&name, src.to_owned(), dialect)
         .map_err(|e| anyhow!("{name} 解析失败: {e}"))?;
 
@@ -1669,6 +1942,10 @@ fn eval_meta(
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast_defs, globals)
             .map_err(|e| anyhow!("defs.star 求值失败: {e}"))?;
+        if let Some(ast) = ast_prelude {
+            eval.eval_module(ast, globals)
+                .map_err(|e| anyhow!("{} 求值失败: {e}", prelude_name(path)))?;
+        }
         eval.eval_module(ast, globals)
             .map_err(|e| anyhow!("{name} 求值失败: {e}"))?;
         let target = module
@@ -1712,6 +1989,7 @@ fn eval_meta(
 fn eval_target(
     path: &Path,
     defs: &str,
+    prelude: Option<&str>,
     src: &str,
     globals: &Globals,
     dialect: &Dialect,
@@ -1720,6 +1998,7 @@ fn eval_target(
     let name = path.display().to_string();
     let ast_defs = AstModule::parse("defs.star", defs.to_owned(), dialect)
         .map_err(|e| anyhow!("defs.star 解析失败: {e}"))?;
+    let ast_prelude = parse_prelude(path, prelude, dialect)?;
     let ast = AstModule::parse(&name, src.to_owned(), dialect)
         .map_err(|e| anyhow!("{name} 解析失败: {e}"))?;
     let ctx_src = format!("ctx = {}", starlark_literal(ctx));
@@ -1730,6 +2009,10 @@ fn eval_target(
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast_defs, globals)
             .map_err(|e| anyhow!("defs.star 求值失败: {e}"))?;
+        if let Some(ast) = ast_prelude {
+            eval.eval_module(ast, globals)
+                .map_err(|e| anyhow!("{} 求值失败: {e}", prelude_name(path)))?;
+        }
         eval.eval_module(ast_ctx, globals)
             .map_err(|e| anyhow!("{name}: 注入 ctx 失败: {e}"))?;
         eval.eval_module(ast, globals)
@@ -2122,6 +2405,33 @@ mod tests {
         assert!(reg.component("openssl").unwrap().url.is_empty());
         assert_eq!(reg.component("swoole").unwrap().source, "external");
         assert!(!reg.component("swoole").unwrap().url.is_empty());
+    }
+
+    #[test]
+    fn php_profile_is_shared_and_series_can_extend_it() {
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        let product = reg.product_any().unwrap();
+        assert!(product.profile.tools.iter().any(|tool| tool.name == "gcc"));
+        assert!(!product.profile.post_install.is_empty());
+        assert_eq!(product.profile.entry_template, "entry.sh");
+        assert_eq!(product.profile.env["CC"], "gcc");
+
+        let (reg, _) = load("8.0", &[], &[]).unwrap();
+        let product = reg.product_any().unwrap();
+        assert_eq!(
+            product.profile.env.get("CFLAGS").map(String::as_str),
+            Some("-O2 -std=gnu17 -Wno-error=incompatible-pointer-types")
+        );
+        assert_eq!(product.profile.env["CC"], "gcc");
+    }
+
+    #[test]
+    fn nginx_profile_is_shared() {
+        let (reg, _) = load_product("nginx", "1.29", &[], &[]).unwrap();
+        let product = reg.product_any().unwrap();
+        assert!(product.profile.tools.iter().any(|tool| tool.name == "perl"));
+        assert_eq!(product.profile.entry, "");
+        assert!(product.profile.post_install.is_empty());
     }
 
     #[test]

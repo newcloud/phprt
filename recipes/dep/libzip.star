@@ -6,6 +6,7 @@ def target(ctx):
         version = self["version"],
         url = self["url"],
         sha256 = self["sha256"],
+        host_tools = ["cmake"],
         needs = ["zlib"],
         # 压缩后端只留 zlib；加密后端默认关，打开时用 PHP 自己编的 openssl。
         features = {

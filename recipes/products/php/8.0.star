@@ -107,7 +107,15 @@ BUILTIN_DISABLE = {
 
 TARGET = product(
     name = "php",
-    profile = php_profile(),
+    # GCC 15 默认 gnu23：() 旧式声明被当成零参数，8.0 的 scanf.c 等旧式 C 编不过；
+    # GCC 14 起 incompatible-pointer-types 默认升级为错误，pcntl.c 等旧式声明同样中招。
+    # 上游 8.1+ 已修，8.0 分支 EOL 没跟；显式 gnu17 + 降级该警告。
+    profile = extend_profile(
+        PROFILE,
+        env = {
+            "CFLAGS": "-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
+        },
+    ),
     series = "8.0",
     bundled = BUILTIN_EXTS,
     bundled_disable = BUILTIN_DISABLE,
@@ -124,10 +132,6 @@ TARGET = product(
         "--enable-bcmath",
         "--enable-calendar",
         "--enable-exif",
-        # GCC 15 默认 gnu23：() 旧式声明被当成零参数，8.0 的 scanf.c 等旧式 C 编不过；
-        # GCC 14 起 incompatible-pointer-types 默认升级为错误，pcntl.c 等旧式声明同样中招。
-        # 上游 8.1+ 已修，8.0 分支 EOL 没跟；显式 gnu17 + 降级该警告。
-        "CFLAGS=-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
     ],
     make = ["make", "make install"],
     artifacts = ["bin/php"],

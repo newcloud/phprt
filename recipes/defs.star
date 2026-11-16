@@ -43,6 +43,7 @@ def dep(
         url = "",
         sha256 = "",
         needs = [],
+        host_tools = [],
         features = {},
         ignored = {},
         configure = [],
@@ -60,6 +61,7 @@ def dep(
         "url": url,
         "sha256": sha256,
         "needs": needs,
+        "host_tools": host_tools,
         "features": features,
         "ignored": ignored,
         "configure": configure,
@@ -94,43 +96,163 @@ def runtime(lib_dir = "", rpath = {}):
     }
 
 
+def tool(name, min = "", probe = ["--version"]):
+    """一个宿主机命令要求。
+
+    字符串缩写只检查存在；带 min 时探测版本并要求 >= min。
+    probe 是探测命令的参数列表，不经过 shell。
+    """
+    return {
+        "name": name,
+        "min": min,
+        "probe": probe,
+    }
+
+
+def ensure_dir(path):
+    """post_install：在安装树里创建目录。"""
+    return {"kind": "ensure-dir", "path": path}
+
+
+def write_file(path, content, if_missing = False):
+    """post_install：写文件；if_missing 时保留已有文件。"""
+    return {
+        "kind": "write-file",
+        "path": path,
+        "content": content,
+        "if_missing": if_missing,
+    }
+
+
+def copy_ca_bundle(to, candidates):
+    """post_install：复制系统 CA 包；候选都不存在时只警告。"""
+    return {
+        "kind": "copy-ca-bundle",
+        "to": to,
+        "candidates": candidates,
+    }
+
+
+def write_component_ini(directory, register):
+    """post_install：为选中且匹配 register 的组件写 ini，删掉旧 ini。"""
+    return {
+        "kind": "write-component-ini",
+        "dir": directory,
+        "register": register,
+    }
+
+
+def _tool_name(item):
+    return item if type(item) == "string" else item["name"]
+
+
+def _copy_dict(value):
+    return {key: value[key] for key in value}
+
+
+def extend_profile(
+        base,
+        modes = None,
+        tools = None,
+        defaults = None,
+        bundled_path = None,
+        runtime = None,
+        register = None,
+        post_install = None,
+        verify = None,
+        verify_modules = None,
+        entry = None,
+        entry_template = None,
+        env = None,
+        audit = None):
+    """在共享 profile 上覆盖少数字段。
+
+    tools 按名字合并（后面的覆盖前面的）；env 按 key 合并；
+    其他字段传了才替换。
+    """
+    out = _copy_dict(base)
+    if modes != None:
+        out["modes"] = modes
+    if defaults != None:
+        out["defaults"] = defaults
+    if bundled_path != None:
+        out["bundled_path"] = bundled_path
+    if runtime != None:
+        out["runtime"] = runtime
+    if register != None:
+        out["register"] = register
+    if post_install != None:
+        out["post_install"] = post_install
+    if verify != None:
+        out["verify"] = verify
+    if verify_modules != None:
+        out["verify_modules"] = verify_modules
+    if entry != None:
+        out["entry"] = entry
+    if entry_template != None:
+        out["entry_template"] = entry_template
+    if audit != None:
+        out["audit"] = audit
+
+    if tools != None:
+        merged = {}
+        order = []
+        for item in base.get("tools", []) + tools:
+            name = _tool_name(item)
+            if name not in merged:
+                order.append(name)
+            merged[name] = item
+        out["tools"] = [merged[name] for name in order]
+
+    if env != None:
+        merged_env = _copy_dict(base.get("env", {}))
+        for key in env:
+            merged_env[key] = env[key]
+        out["env"] = merged_env
+    return out
+
+
 def product_profile(
         modes = {},
+        tools = [],
         defaults = {},
         bundled_path = "",
         runtime = {},
         register = {},
+        post_install = [],
         verify = [],
         verify_modules = "",
         entry = "",
         entry_template = "",
         env = {},
-        audit = "none",
-        config = ""):
+        audit = "none"):
     """产品的组件挂载协议、运行时整理、验证和入口。
 
+    tools：产品总是需要的宿主机命令，可带最低版本。
     modes：挂载方式 -> mode(...)。
     defaults：组件来源（bundled / external）-> 默认挂载方式。
     register：挂载方式 -> 登记动作；目前只有 php-ini。
+    post_install：安装后动作，见 ensure_dir / write_file / copy_ca_bundle /
+                  write_component_ini。
     verify / verify_modules：产品启动验证；verify_modules 用来检查组件模块。
-    entry / entry_template：项目入口文件名模板和内置模板名。
+    entry / entry_template：项目入口名模板和产品目录下的模板文件名。
     env：产品专用环境变量，支持 {tree} 和 {tool:<dep>}。
     audit：选项来源，php-config-m4 / configure-help / none。
-    config：安装后配置动作，php 或空。
     """
     return {
         "modes": modes,
+        "tools": tools,
         "defaults": defaults,
         "bundled_path": bundled_path,
         "runtime": runtime,
         "register": register,
+        "post_install": post_install,
         "verify": verify,
         "verify_modules": verify_modules,
         "entry": entry,
         "entry_template": entry_template,
         "env": env,
         "audit": audit,
-        "config": config,
     }
 
 
@@ -143,6 +265,7 @@ def component(
         url = "",
         sha256 = "",
         needs = [],
+        host_tools = [],
         tools = [],
         dep_configure = {},
         prepare = [],
@@ -190,6 +313,7 @@ def component(
         "sha256": sha256,
         "modes": modes,
         "needs": needs,
+        "host_tools": host_tools,
         "tools": tools,
         "dep_configure": dep_configure,
         "prepare": prepare,
@@ -247,41 +371,3 @@ def product(
         "desc": desc,
     }
 
-
-def php_profile():
-    """PHP 产品的 profile：static 折叠进 PHP，shared 用 phpize 单独构建。"""
-    return product_profile(
-        modes = {
-            "static": mode(strategy = "fold"),
-            "shared": mode(
-                strategy = "standalone",
-                steps = [
-                    "phpize",
-                    "./configure --with-php-config={tree}/bin/php-config {flags}",
-                    "make",
-                    "make install",
-                ],
-                artifacts = ["lib/php/extensions/*/{name}.so"],
-            ),
-        },
-        defaults = {"bundled": "static", "external": "shared"},
-        bundled_path = "ext/{name}",
-        runtime = runtime(
-            lib_dir = "lib/phprt",
-            rpath = {
-                "bin/*": "$ORIGIN/../lib/phprt",
-                "lib/php/extensions/*/*.so": "$ORIGIN/../../../phprt",
-            },
-        ),
-        register = {"shared": "php-ini"},
-        verify = ["{tree}/bin/php", "-v"],
-        verify_modules = "{tree}/bin/php -m",
-        entry = "myphp-{series}",
-        entry_template = "myphp",
-        env = {
-            "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
-            "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
-        },
-        audit = "php-config-m4",
-        config = "php",
-    )

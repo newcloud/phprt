@@ -9,33 +9,6 @@ LINES = {
 }
 
 
-def nginx_profile():
-    return product_profile(
-        modes = {
-            "builtin": mode(
-                strategy = "fold",
-                configure = ["--add-module={component_source}"],
-            ),
-            "dynamic": mode(
-                strategy = "fold",
-                configure = ["--add-dynamic-module={component_source}"],
-                artifacts = ["modules/*.so"],
-            ),
-        },
-        defaults = {"bundled": "builtin", "external": "dynamic"},
-        runtime = runtime(
-            lib_dir = "lib/phprt",
-            rpath = {
-                "sbin/nginx": "$ORIGIN/../lib/phprt",
-                "modules/*.so": "$ORIGIN/../lib/phprt",
-            },
-        ),
-        verify = ["{tree}/sbin/nginx", "-V"],
-        entry = "",
-        audit = "none",
-    )
-
-
 TARGET = product(
     name = "nginx",
     series = "1.29",
@@ -57,6 +30,6 @@ TARGET = product(
     ],
     make = ["make", "make install"],
     artifacts = ["sbin/nginx"],
-    profile = nginx_profile(),
+    profile = PROFILE,
     desc = "nginx 1.29 本体",
 )

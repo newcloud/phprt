@@ -5,14 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use phprt_build::{Cmd, Ini, Step};
+use phprt_build::{Cmd, Step};
 use phprt_ui::Mode;
 
+use crate::actions;
 use crate::layout;
 use crate::recipe::{Kind, Registry, Selection, Strategy, Target};
 use crate::render::{self, Ctx};
-
-const MYPHP: &str = include_str!("../templates/myphp.tmpl");
 
 pub struct Options<'a> {
     pub root: &'a Path,
@@ -27,8 +26,6 @@ pub fn run(
     features: &BTreeMap<String, Vec<String>>,
     opts: &Options<'_>,
 ) -> Result<()> {
-    need_commands(order, features)?;
-
     let root = fs::canonicalize(opts.root)
         .with_context(|| format!("读不到项目根 {}", opts.root.display()))?;
     let product = reg.product_any()?;
@@ -207,23 +204,6 @@ pub fn run(
 
         let artifacts: Vec<PathBuf> = artifacts.into_iter().map(|rel| prefix.join(rel)).collect();
 
-        let ini = match (target.kind, mode.as_deref()) {
-            (Kind::Component, Some(mode_name))
-                if register_action(product, mode_name) == Some("php-ini")
-                    && !target.ini.is_empty() =>
-            {
-                Some(Ini {
-                    path: PathBuf::from(&tree).join("etc/conf.d").join(&target.ini),
-                    lines: if target.ini_lines.is_empty() {
-                        vec![format!("extension={}.so", target.name)]
-                    } else {
-                        target.ini_lines.clone()
-                    },
-                })
-            }
-            _ => None,
-        };
-
         let copy_from = match (target.kind, target.source.as_str(), strategy) {
             (Kind::Component, "bundled", Some(Strategy::Standalone)) => {
                 Some(product_build.join(render::bundled_source_path(product, target)?))
@@ -248,7 +228,6 @@ pub fn run(
             commands,
             env,
             artifacts,
-            ini,
             sig,
             log: root.join("build/logs").join(format!(
                 "{}-{}.log",
@@ -266,10 +245,10 @@ pub fn run(
 
     let tree = PathBuf::from(&tree);
     deploy_libs(product, order, &tree)?;
-    write_tree_config(reg, product, sel, &tree)?;
+    actions::run(reg, product, sel, &tree)?;
     verify(reg, product, &tree)?;
     let target = format!("{}@{}", product.name, product.series);
-    write_entry(&root, product, &target)?;
+    write_entry(&root, product, opts.recipes, &target)?;
     Ok(())
 }
 
@@ -723,63 +702,6 @@ fn is_elf(path: &Path) -> bool {
     bytes.starts_with(b"\x7fELF")
 }
 
-fn write_tree_config(reg: &Registry, product: &Target, sel: &Selection, tree: &Path) -> Result<()> {
-    if product.profile.config != "php" {
-        return Ok(());
-    }
-    let etc = tree.join("etc");
-    let conf = etc.join("conf.d");
-    fs::create_dir_all(&conf).with_context(|| format!("建不了 {}", conf.display()))?;
-
-    let ini = etc.join("php.ini");
-    if !ini.exists() {
-        fs::write(
-            &ini,
-            "[PHP]\ndate.timezone = Asia/Shanghai\nmemory_limit = 256M\nerror_reporting = E_ALL\ndisplay_errors = On\nlog_errors = On\n",
-        )
-        .with_context(|| format!("写不了 {}", ini.display()))?;
-    }
-
-    let selected: BTreeSet<&str> = product.components.iter().map(String::as_str).collect();
-    for component in reg.of_kind(Kind::Component) {
-        if component.ini.is_empty() {
-            continue;
-        }
-        let enabled = selected.contains(component.name.as_str())
-            && register_action(product, &sel.mode_of(component)) == Some("php-ini");
-        if !enabled {
-            let path = conf.join(&component.ini);
-            if path.exists() {
-                fs::remove_file(&path)
-                    .with_context(|| format!("删不了旧 ini {}", path.display()))?;
-            }
-        }
-    }
-
-    let ssl_dir = etc.join("ssl");
-    fs::create_dir_all(&ssl_dir).with_context(|| format!("建不了 {}", ssl_dir.display()))?;
-    let cert = ssl_dir.join("cert.pem");
-    if !cert.is_file() {
-        let candidates = [
-            "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
-            "/etc/ssl/certs/ca-certificates.crt",
-            "/etc/pki/tls/certs/ca-bundle.crt",
-            "/etc/ssl/cert.pem",
-        ];
-        if let Some(source) = candidates.iter().find(|path| Path::new(path).is_file()) {
-            fs::copy(source, &cert).with_context(|| format!("复制不了 CA {}", source))?;
-        } else {
-            eprintln!("注意: 没找到系统 CA，HTTPS 校验会失败");
-        }
-    }
-    fs::write(
-        conf.join("00-ssl.ini"),
-        "; 由 phprt 生成\nopenssl.cafile = \"${SSL_CERT_FILE}\"\ncurl.cainfo    = \"${SSL_CERT_FILE}\"\n",
-    )
-    .with_context(|| format!("写不了 {}", conf.join("00-ssl.ini").display()))?;
-    Ok(())
-}
-
 fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
     if product.profile.verify.is_empty() {
         return Ok(());
@@ -848,15 +770,20 @@ fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_entry(root: &Path, product: &Target, target: &str) -> Result<()> {
+fn write_entry(root: &Path, product: &Target, recipes: &Path, target: &str) -> Result<()> {
     if product.profile.entry.is_empty() {
         return Ok(());
     }
+    if product.profile.entry_template.is_empty() {
+        bail!("产品 {} 设置了 entry，但没有 entry_template", product.name);
+    }
+    let template_path = recipes
+        .join("products")
+        .join(&product.name)
+        .join(&product.profile.entry_template);
+    let template = fs::read_to_string(&template_path)
+        .with_context(|| format!("读不到入口模板 {}", template_path.display()))?;
     let name = product.profile.entry.replace("{series}", &product.series);
-    let template = match product.profile.entry_template.as_str() {
-        "myphp" => MYPHP,
-        other => bail!("未知的入口模板 {other}"),
-    };
     let content = template
         .replace("@@TREE@@", &format!("{}-{}", product.name, product.version))
         .replace("@@TARGET@@", target);
@@ -895,76 +822,4 @@ fn only_series(root: &Path, product: &Target) -> bool {
         }
     }
     true
-}
-
-fn need_commands(order: &[&Target], features: &BTreeMap<String, Vec<String>>) -> Result<()> {
-    let mut required = vec![
-        "gcc",
-        "g++",
-        "make",
-        "ar",
-        "ranlib",
-        "pkg-config",
-        "patchelf",
-        "m4",
-        "perl",
-        "sh",
-    ];
-
-    if order.iter().any(|t| t.kind == Kind::Dep && uses_cmake(t)) {
-        required.push("cmake");
-    }
-
-    let jpeg_in_order = order
-        .iter()
-        .any(|t| t.kind == Kind::Dep && t.name == "jpeg");
-    let needs_nasm = order.iter().any(|t| t.kind == Kind::Dep && t.name == "aom")
-        || (jpeg_in_order
-            && features
-                .get("jpeg")
-                .is_some_and(|enabled| enabled.iter().any(|f| f == "simd")));
-    if needs_nasm && !on_path("nasm") && !on_path("yasm") {
-        bail!(
-            "缺少构建工具: nasm 或 yasm（Fedora: sudo dnf install nasm；\
-             libjpeg-turbo SIMD 和 libaom 需要它）"
-        );
-    }
-
-    let missing: Vec<&str> = required
-        .iter()
-        .copied()
-        .filter(|tool| !on_path(tool))
-        .collect();
-    if missing.is_empty() {
-        return Ok(());
-    }
-    bail!(
-        "缺少构建工具: {}（Fedora: sudo dnf install gcc gcc-c++ make cmake binutils pkgconf-pkg-config patchelf tar m4 perl）",
-        missing.join(", ")
-    )
-}
-
-fn uses_cmake(target: &Target) -> bool {
-    target
-        .configure
-        .first()
-        .is_some_and(|program| program == "cmake")
-        || target
-            .make
-            .iter()
-            .any(|line| line.trim_start().starts_with("cmake "))
-}
-
-fn on_path(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let candidate = dir.join(name);
-        candidate.is_file()
-            && candidate
-                .metadata()
-                .map(|m| m.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
-    })
 }

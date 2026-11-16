@@ -33,13 +33,6 @@ impl Cmd {
     }
 }
 
-/// shared 扩展安装完成后写的 ini。
-#[derive(Debug, Clone)]
-pub struct Ini {
-    pub path: PathBuf,
-    pub lines: Vec<String>,
-}
-
 /// 一个节点的完整构建步骤。
 #[derive(Debug, Clone)]
 pub struct Step {
@@ -51,7 +44,6 @@ pub struct Step {
     pub env: BTreeMap<String, String>,
     /// 相对安装前缀的产物模式，允许一个 `*` 组件（如 `lib/php/extensions/*/curl.so`）。
     pub artifacts: Vec<PathBuf>,
-    pub ini: Option<Ini>,
     /// 构建签名内容；变化时先 make distclean。
     pub sig: String,
     pub log: PathBuf,
@@ -108,9 +100,6 @@ fn run_one(step: &Step, index: usize, ui: &Tracker) -> Result<bool> {
     let all_artifacts = !step.artifacts.is_empty() && step.artifacts.iter().all(|p| glob_exists(p));
 
     if sig_ok && all_artifacts {
-        if let Some(ini) = &step.ini {
-            write_ini(ini)?;
-        }
         ui.finish(index, "✓", "已构建");
         return Ok(false);
     }
@@ -145,9 +134,6 @@ fn run_one(step: &Step, index: usize, ui: &Tracker) -> Result<bool> {
         File::create(&step.log).with_context(|| format!("写不了日志 {}", step.log.display()))?;
     let mut log = BufWriter::new(log);
     writeln!(log, "==> {}", step.tag)?;
-    if let Some(ini) = &step.ini {
-        writeln!(log, "ini: {}", ini.path.display())?;
-    }
 
     if !sig_ok && step.cwd.join("Makefile").is_file() {
         ui.start(index, "清理", Some("参数变化，make distclean"));
@@ -192,11 +178,6 @@ fn run_one(step: &Step, index: usize, ui: &Tracker) -> Result<bool> {
                 tail
             );
         }
-    }
-
-    if let Some(ini) = &step.ini {
-        write_ini(ini)?;
-        writeln!(log, "已写 ini: {}", ini.path.display())?;
     }
 
     let missing: Vec<String> = step
@@ -269,19 +250,6 @@ fn command_label(cmd: &Cmd) -> &'static str {
             }
         }
     }
-}
-
-fn write_ini(ini: &Ini) -> Result<()> {
-    if let Some(parent) = ini.path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("建不了 {}", parent.display()))?;
-    }
-    let mut text = String::from("; 由 phprt 生成，勿手改\n");
-    for line in &ini.lines {
-        text.push_str(line);
-        text.push('\n');
-    }
-    fs::write(&ini.path, text).with_context(|| format!("写不了 {}", ini.path.display()))?;
-    Ok(())
 }
 
 fn sig_hash(text: &str) -> String {
