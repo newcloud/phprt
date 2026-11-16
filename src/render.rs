@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow, bail};
 use serde::Serialize;
 
 use crate::layout;
-use crate::recipe::{Kind, Mode, Registry, Selection, Target};
+use crate::recipe::{Kind, Registry, Selection, Strategy, Target};
 use crate::state::ProjectState;
 
 #[derive(Debug, Serialize)]
@@ -21,9 +21,10 @@ pub struct Node {
     pub name: String,
     pub version: String,
     pub line: String,
-    pub origin: String,
-    pub mode: String,
     pub source: String,
+    pub mode: String,
+    pub strategy: String,
+    pub url: String,
     pub sha256: String,
     pub unpack: String,
     pub prefix: String,
@@ -38,7 +39,7 @@ pub struct Node {
     pub artifacts: Vec<String>,
     pub ini: String,
     pub ini_lines: Vec<String>,
-    pub shared_from: String,
+    pub source_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,47 +62,57 @@ pub fn build(
     sel: &Selection,
     features: &BTreeMap<String, Vec<String>>,
 ) -> Result<Sim> {
-    let php = reg.php()?;
-    let tree = format!(".phprt/php-{}", php.version);
-    let php_build = layout::build_dir(&php.name, Kind::Php, &php.url);
+    let product = reg.product_any()?;
+    let tree = format!(".phprt/{}-{}", product.name, product.version);
     let mut nodes = Vec::new();
 
     for t in order {
         let archive = layout::archive_name(&t.url).unwrap_or_else(|| "source".to_owned());
         let stem = layout::archive_stem(&archive);
-        let mode = if t.kind == Kind::Ext {
-            Some(sel.mode_of(t)?)
+        let mode = if t.kind == Kind::Component {
+            Some(sel.mode_of(t))
         } else {
             None
+        };
+        let strategy = match (&mode, t.kind) {
+            (Some(mode), Kind::Component) => Some(reg.product_mode(t, mode)?.strategy_kind()?),
+            _ => None,
         };
 
         let prefix = match t.kind {
             Kind::Dep => format!("{tree}/deps/{}-{}", t.name, t.version),
             _ => tree.clone(),
         };
-        let dir_name = match t.kind {
-            Kind::Php => "php",
-            _ => t.name.as_str(),
-        };
-        let build_dir = format!("build/{}/{}", dir_name, stem);
+        let build_dir = format!("build/{}/{}", t.name, stem);
         let ctx = Ctx {
             tree: &tree,
             build: build_dir.clone(),
             prefix: prefix.clone(),
         };
 
-        // ext 的 configure = 自己的参数 + 选中子配置的参数。
-        let mut configure = if t.kind == Kind::Ext {
-            ext_configure(reg, t, sel, &ctx)?
-        } else {
-            t.configure
+        let mut configure = match t.kind {
+            Kind::Component if strategy == Some(Strategy::Fold) => {
+                let mut out = component_configure(reg, t, sel, &ctx)?;
+                if let Some(mode) = mode.as_deref() {
+                    out.extend(fold_templates(reg, product, t, mode, &ctx)?);
+                }
+                out
+            }
+            Kind::Component => component_configure(reg, t, sel, &ctx)?,
+            Kind::Product => t
+                .configure
                 .iter()
                 .map(|s| expand(s, &ctx, reg))
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>>>()?,
+            Kind::Dep => t
+                .configure
+                .iter()
+                .map(|s| expand(s, &ctx, reg))
+                .collect::<Result<Vec<_>>>()?,
         };
 
         let mut needs: Vec<String> = t.needs.iter().map(|n| format!("dep:{n}")).collect();
-        if t.kind == Kind::Ext {
+        if t.kind == Kind::Component {
             for need in sel.feature_needs(t) {
                 let id = format!("dep:{need}");
                 if !needs.contains(&id) {
@@ -112,7 +123,7 @@ pub fn build(
         let tools: Vec<String> = t.tools.iter().map(|n| format!("dep:{n}")).collect();
         let mut enabled_features: Vec<String> = Vec::new();
 
-        if t.kind == Kind::Ext
+        if t.kind == Kind::Component
             && let Some(selected) = sel.features_of(t)
         {
             enabled_features = selected.iter().cloned().collect();
@@ -136,14 +147,14 @@ pub fn build(
             configure = dep_configure(reg, t, features.get(&t.name), &ctx)?;
         }
 
-        // 每个内置扩展在 PHP configure 里只出现关闭参数或正向参数其中一组。
-        if t.kind == Kind::Php {
-            let php_ctx = Ctx {
+        // 产品的 configure 追加 fold 组件的参数和内置组件的关闭参数。
+        if t.kind == Kind::Product {
+            let product_ctx = Ctx {
                 tree: &tree,
                 build: build_dir.clone(),
                 prefix: tree.clone(),
             };
-            configure.extend(php_configure_flags(reg, t, sel, &php_ctx)?);
+            configure.extend(product_configure_flags(reg, t, sel, &product_ctx)?);
         }
 
         let make = t
@@ -152,9 +163,8 @@ pub fn build(
             .map(|s| expand(s, &ctx, reg))
             .collect::<Result<Vec<_>>>()?;
 
-        let mut source = t.url.clone();
         let mut unpack = match t.kind {
-            Kind::Ext => String::new(),
+            Kind::Component => String::new(),
             _ => build_dir.clone(),
         };
         let mut steps = Vec::new();
@@ -162,41 +172,70 @@ pub fn build(
         let mut ini = String::new();
         let mut ini_lines = t.ini_lines.clone();
 
-        match mode {
-            Some(Mode::Shared) => {
-                // builtin 从 PHP 源码树里拷，PECL 用自己下载的源码包。
-                if t.origin == "builtin" {
-                    source = format!("{php_build}/{}", t.shared_from);
-                    unpack = format!("build/{}/php-{}", t.name, php.version);
+        match (t.kind, strategy) {
+            (Kind::Component, Some(Strategy::Standalone)) => {
+                let mode_name = mode.clone().unwrap_or_default();
+                let def = reg.product_mode(t, &mode_name)?;
+                let flags = configure.join(" ");
+                unpack = if t.source == "bundled" {
+                    format!("build/{}/{}-{}", t.name, product.name, product.version)
                 } else {
-                    source = t.url.clone();
-                    unpack = build_dir.clone();
-                }
-                let mut args = configure.clone();
-                args.insert(0, format!("--with-php-config={tree}/bin/php-config"));
-                steps = vec![
-                    "phpize".to_owned(),
-                    format!("./configure {}", args.join(" ")),
-                    "make".to_owned(),
-                    "make install".to_owned(),
-                ];
+                    build_dir.clone()
+                };
+                steps = def
+                    .steps
+                    .iter()
+                    .map(|step| {
+                        let step = step
+                            .replace("{name}", &t.name)
+                            .replace("{product}", ctx.tree)
+                            .replace("{product_version}", &product.version)
+                            .replace("{flags}", &flags)
+                            .replace("{build}", &ctx.build)
+                            .replace("{prefix}", &ctx.prefix);
+                        expand(&step, &ctx, reg)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 if artifacts.is_empty() {
-                    artifacts = vec![format!("lib/php/extensions/*/{}.so", t.name)];
+                    artifacts = def
+                        .artifacts
+                        .iter()
+                        .map(|pattern| pattern.replace("{name}", &t.name))
+                        .collect();
                 }
-                ini = t.ini.clone();
-                if ini_lines.is_empty() {
-                    ini_lines = vec![format!("extension={}.so", t.name)];
+                if register_action(product, &mode_name) == Some("php-ini") && !t.ini.is_empty() {
+                    ini = t.ini.clone();
+                    if ini_lines.is_empty() {
+                        ini_lines = vec![format!("extension={}.so", t.name)];
+                    }
                 }
-                needs.push(format!("php:{}", php.version));
+                needs.push(product.id());
             }
-            Some(Mode::Static) => {
+            (Kind::Component, Some(Strategy::Fold)) => {
                 ini.clear();
                 ini_lines.clear();
+                if !t.ini.is_empty() {
+                    ini.clear();
+                }
             }
-            None => {}
+            (Kind::Product, _) => {
+                for name in &t.components {
+                    let component = reg.component(name)?;
+                    let mode_name = sel.mode_of(component);
+                    if reg.product_mode(component, &mode_name)?.strategy_kind()? == Strategy::Fold {
+                        artifacts.extend(
+                            reg.product_mode(component, &mode_name)?
+                                .artifacts
+                                .iter()
+                                .map(|pattern| pattern.replace("{name}", &component.name)),
+                        );
+                    }
+                }
+            }
+            _ => {}
         }
 
-        let dep_nodes = if t.kind == Kind::Ext {
+        let dep_nodes = if t.kind == Kind::Component {
             sel.deps_of(t)
                 .map(|(name, feats)| DepNode {
                     name: name.clone(),
@@ -213,13 +252,14 @@ pub fn build(
             name: t.name.clone(),
             version: t.version.clone(),
             line: t.line.clone(),
-            origin: if t.kind == Kind::Ext {
-                t.origin.clone()
+            source: if t.kind == Kind::Component {
+                t.source.clone()
             } else {
                 String::new()
             },
-            mode: mode.map(|m| m.as_str().to_owned()).unwrap_or_default(),
-            source,
+            mode: mode.unwrap_or_default(),
+            strategy: strategy.map(|s| s.as_str()).unwrap_or_default().to_owned(),
+            url: t.url.clone(),
             sha256: t.sha256.clone(),
             unpack,
             prefix,
@@ -234,7 +274,7 @@ pub fn build(
             artifacts,
             ini,
             ini_lines,
-            shared_from: t.shared_from.clone(),
+            source_path: t.source_path.clone(),
         });
     }
 
@@ -273,52 +313,74 @@ pub(crate) fn dep_configure(
     Ok(out)
 }
 
-/// PHP configure 里的内置扩展开关：
-/// `builtin_disable` 里的扩展没选 static 时用它的关闭参数，
-/// 选了 static 时用 ext recipe 的 configure。
-pub(crate) fn php_configure_flags(
+/// 产品 configure 里由组件贡献的参数：
+/// `bundled_disable` 里的组件没选 fold 时用它的关闭参数，
+/// 选了 fold 时用 profile 的模板和组件自己的 configure。
+pub(crate) fn product_configure_flags(
     reg: &Registry,
-    php: &Target,
+    product: &Target,
     sel: &Selection,
     ctx: &Ctx<'_>,
 ) -> Result<Vec<String>> {
-    let mut static_exts = BTreeSet::new();
-    for name in &php.exts {
-        let ext = reg.ext(name)?;
-        if sel.mode_of(ext)? == Mode::Static {
-            static_exts.insert(name.as_str());
+    let mut folded = BTreeSet::new();
+    for name in &product.components {
+        let component = reg.component(name)?;
+        let mode = sel.mode_of(component);
+        if reg.product_mode(component, &mode)?.strategy_kind()? == Strategy::Fold {
+            folded.insert(name.as_str());
         }
     }
 
     let mut out = Vec::new();
-    for (name, flag) in &php.builtin_disable {
-        if static_exts.contains(name.as_str()) {
+    for (name, flag) in &product.bundled_disable {
+        if folded.contains(name.as_str()) {
             continue;
         }
         out.push(expand(flag, ctx, reg)?);
     }
-    for name in &php.exts {
-        let ext = reg.ext(name)?;
-        if sel.mode_of(ext)? != Mode::Static {
+    for name in &product.components {
+        let component = reg.component(name)?;
+        if !folded.contains(name.as_str()) {
             continue;
         }
-        out.extend(ext_configure(reg, ext, sel, ctx)?);
+        let mode = sel.mode_of(component);
+        out.extend(component_configure(reg, component, sel, ctx)?);
+        out.extend(fold_templates(reg, product, component, &mode, ctx)?);
     }
     Ok(out)
 }
 
-pub(crate) fn ext_configure(
+/// profile 为一个 fold 模式声明的参数模板。
+fn fold_templates(
     reg: &Registry,
-    ext: &Target,
+    product: &Target,
+    component: &Target,
+    mode: &str,
+    ctx: &Ctx<'_>,
+) -> Result<Vec<String>> {
+    let def = reg.product_mode(component, mode)?;
+    let source = absolute_source(ctx, &component_source(reg, product, component)?);
+    def.configure
+        .iter()
+        .map(|template| {
+            let replaced = template.replace("{component_source}", &source);
+            expand(&replaced, ctx, reg)
+        })
+        .collect()
+}
+
+pub(crate) fn component_configure(
+    reg: &Registry,
+    component: &Target,
     sel: &Selection,
     ctx: &Ctx<'_>,
 ) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    for arg in &ext.configure {
+    for arg in &component.configure {
         out.push(expand(arg, ctx, reg)?);
     }
-    if let Some(selected) = sel.features_of(ext) {
-        for (name, def) in &ext.features {
+    if let Some(selected) = sel.features_of(component) {
+        for (name, def) in &component.features {
             if !selected.contains(name) {
                 continue;
             }
@@ -327,8 +389,8 @@ pub(crate) fn ext_configure(
             }
         }
     }
-    for (dep, _) in sel.deps_of(ext) {
-        let Some(flags) = ext.dep_configure.get(dep) else {
+    for (dep, _) in sel.deps_of(component) {
+        let Some(flags) = component.dep_configure.get(dep) else {
             continue;
         };
         for arg in flags {
@@ -336,6 +398,52 @@ pub(crate) fn ext_configure(
         }
     }
     Ok(out)
+}
+
+fn register_action<'a>(product: &'a Target, mode: &str) -> Option<&'a str> {
+    product.profile.register.get(mode).map(String::as_str)
+}
+
+/// bundled 组件的源码位于产品源码树里；external 组件和 dep 用解压目录。
+fn component_source(_reg: &Registry, product: &Target, component: &Target) -> Result<String> {
+    match component.kind {
+        Kind::Component if component.source == "bundled" => Ok(format!(
+            "{}/{}",
+            layout::build_dir_of(product),
+            bundled_source_path(product, component)?
+        )),
+        _ => Ok(layout::build_dir_of(component)),
+    }
+}
+
+/// 构建时 ctx.tree 是绝对路径，源码根也要绝对化；plan 仍用相对路径。
+fn absolute_source(ctx: &Ctx<'_>, relative: &str) -> String {
+    let tree = std::path::Path::new(ctx.tree);
+    if !tree.is_absolute() {
+        return relative.to_owned();
+    }
+    let Some(root) = tree.parent().and_then(|p| p.parent()) else {
+        return relative.to_owned();
+    };
+    root.join(relative).display().to_string()
+}
+
+/// bundled 组件在产品源码树里的相对路径：组件声明优先，否则用产品 profile 的模板。
+pub(crate) fn bundled_source_path(product: &Target, component: &Target) -> Result<String> {
+    if !component.source_path.is_empty() {
+        return Ok(component.source_path.clone());
+    }
+    if product.profile.bundled_path.is_empty() {
+        bail!(
+            "component:{} 是 bundled，但没有 source_path，产品 {} 的 profile 也没有 bundled_path",
+            component.name,
+            product.name
+        );
+    }
+    Ok(product
+        .profile
+        .bundled_path
+        .replace("{name}", &component.name))
 }
 
 pub fn to_json(sim: &Sim) -> Result<String> {
@@ -351,22 +459,22 @@ pub fn to_text(sim: &Sim) -> String {
     out.push_str("\nbuild order\n");
     for (i, n) in sim.order.iter().enumerate() {
         let extra = match n.kind.as_str() {
-            "ext" => {
+            "component" => {
                 let line = if n.line.is_empty() {
                     String::new()
                 } else {
                     format!(", line {}", n.line)
                 };
-                format!("  ({} {}{})", n.origin, n.mode, line)
+                format!("  ({} {}{})", n.source, n.mode, line)
             }
-            "php" => String::new(),
+            "product" => String::new(),
             _ => format!("  {}", n.version),
         };
-        out.push_str(&format!("  {:>2}. {:<14}{}\n", i + 1, n.id, extra));
+        out.push_str(&format!("  {:>2}. {:<24}{}\n", i + 1, n.id, extra));
     }
 
     for (i, n) in sim.order.iter().enumerate() {
-        let version = if n.kind == "php" {
+        let version = if n.kind == "product" {
             String::new()
         } else {
             format!(" {}", n.version)
@@ -378,8 +486,11 @@ pub fn to_text(sim: &Sim) -> String {
             n.id,
             version
         ));
-        if !n.source.is_empty() {
-            out.push_str(&format!("  source     {}\n", n.source));
+        if !n.url.is_empty() {
+            out.push_str(&format!("  source     {}\n", n.url));
+        }
+        if n.kind == "component" && n.source == "bundled" {
+            out.push_str(&format!("  from       {}\n", n.source_path));
         }
         if !n.sha256.is_empty() {
             out.push_str(&format!("  sha256     {}\n", n.sha256));
@@ -411,24 +522,34 @@ pub fn to_text(sim: &Sim) -> String {
         if !n.features.is_empty() {
             out.push_str(&format!("  features   {}\n", n.features.join(", ")));
         }
-        if n.mode == "static" {
-            for arg in &n.configure {
-                out.push_str(&format!("  flag       {}\n", arg));
+        match n.kind.as_str() {
+            "component" if n.strategy == "fold" => {
+                for arg in &n.configure {
+                    out.push_str(&format!("  flag       {}\n", arg));
+                }
+                if !n.artifacts.is_empty() {
+                    out.push_str(&format!("  outputs    {}\n", n.artifacts.join(", ")));
+                }
             }
-        } else if n.mode == "shared" {
-            for step in &n.steps {
-                out.push_str(&format!("  step       {}\n", step));
+            "component" => {
+                for step in &n.steps {
+                    out.push_str(&format!("  step       {}\n", step));
+                }
+                if !n.artifacts.is_empty() {
+                    out.push_str(&format!("  outputs    {}\n", n.artifacts.join(", ")));
+                }
             }
-        } else {
-            for arg in &n.configure {
-                out.push_str(&format!("  configure  {}\n", arg));
+            _ => {
+                for arg in &n.configure {
+                    out.push_str(&format!("  configure  {}\n", arg));
+                }
+                for step in &n.make {
+                    out.push_str(&format!("  make       {}\n", step));
+                }
+                if !n.artifacts.is_empty() {
+                    out.push_str(&format!("  outputs    {}\n", n.artifacts.join(", ")));
+                }
             }
-            for step in &n.make {
-                out.push_str(&format!("  make       {}\n", step));
-            }
-        }
-        if !n.artifacts.is_empty() {
-            out.push_str(&format!("  outputs    {}\n", n.artifacts.join(", ")));
         }
         if !n.ini.is_empty() {
             out.push_str(&format!("  ini        etc/conf.d/{}\n", n.ini));
@@ -446,7 +567,6 @@ pub fn graph_text(
     features: &BTreeMap<String, Vec<String>>,
 ) -> Result<String> {
     let mut out = String::new();
-    let php = reg.php()?;
     for t in reg.targets.values() {
         match t.kind {
             Kind::Dep => {
@@ -467,22 +587,30 @@ pub fn graph_text(
                     }
                 }
             }
-            Kind::Ext => {
+            Kind::Component => {
                 for dep in &t.needs {
                     out.push_str(&format!("{} -> dep:{}\n", t.id(), dep));
                 }
                 for tool in &t.tools {
                     out.push_str(&format!("{} -> dep:{}  (tool)\n", t.id(), tool));
                 }
-                if sel.mode_of(t)? == Mode::Shared {
-                    out.push_str(&format!("{} -> php:{}  (shared)\n", t.id(), php.version));
+                let mode = sel.mode_of(t);
+                if reg.product_mode(t, &mode)?.strategy_kind()? == Strategy::Standalone
+                    && let Some(product) = reg.get(&format!(
+                        "product:{}@{}",
+                        t.product,
+                        reg.product_any()?.version
+                    ))
+                {
+                    out.push_str(&format!("{} -> {}  (standalone)\n", t.id(), product.id()));
                 }
             }
-            Kind::Php => {
-                for name in &t.exts {
-                    let ext = reg.ext(name)?;
-                    if sel.mode_of(ext)? == Mode::Static {
-                        out.push_str(&format!("{} -> ext:{}\n", t.id(), name));
+            Kind::Product => {
+                for name in &t.components {
+                    let component = reg.component(name)?;
+                    let mode = sel.mode_of(component);
+                    if reg.product_mode(component, &mode)?.strategy_kind()? == Strategy::Fold {
+                        out.push_str(&format!("{} -> component:{}\n", t.id(), name));
                     }
                 }
             }
@@ -491,18 +619,18 @@ pub fn graph_text(
     Ok(out)
 }
 
-pub fn ext_list_text(
+pub fn component_list_text(
     reg: &Registry,
     state: &ProjectState,
     installed_only: bool,
     pending_only: bool,
 ) -> String {
     let mut out = format!(
-        "{:<12} {:<9} {:<15} {:<10} {}\n",
-        "name", "origin", "link", "version", "status"
+        "{:<16} {:<9} {:<18} {:<10} {}\n",
+        "name", "source", "modes", "version", "status"
     );
-    for ext in reg.of_kind(Kind::Ext) {
-        let status = state.ext_status(&ext.name);
+    for component in reg.of_kind(Kind::Component) {
+        let status = state.component_status(&component.name);
         if installed_only && status != "installed" {
             continue;
         }
@@ -510,61 +638,12 @@ pub fn ext_list_text(
             continue;
         }
         out.push_str(&format!(
-            "{:<12} {:<9} {:<15} {:<10} {}\n",
-            ext.name,
-            ext.origin,
-            ext.link.join(","),
-            ext.version,
+            "{:<16} {:<9} {:<18} {:<10} {}\n",
+            component.name,
+            component.source,
+            component.modes.join(","),
+            component.version,
             status
-        ));
-    }
-    out
-}
-
-pub fn list_text(reg: &Registry) -> String {
-    let mut out = String::new();
-    for t in reg.targets.values() {
-        let mut notes = Vec::new();
-        if !t.line.is_empty() {
-            notes.push(format!("line={}", t.line));
-        }
-        if !t.needs.is_empty() {
-            notes.push(format!("needs={}", t.needs.join(",")));
-        }
-        if !t.tools.is_empty() {
-            notes.push(format!("tools={}", t.tools.join(",")));
-        }
-        if !t.exts.is_empty() {
-            notes.push(format!("exts={}", t.exts.join(",")));
-        }
-        if !t.modules.is_empty() {
-            notes.push(format!("modules={}", t.modules.join(",")));
-        }
-        if t.kind == Kind::Ext {
-            notes.push(format!("origin={}", t.origin));
-            notes.push(format!("link={}", t.link.join(",")));
-            if !t.dep_configure.is_empty() {
-                notes.push(format!(
-                    "dep_configure={}",
-                    t.dep_configure
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(",")
-                ));
-            }
-        }
-        if !t.features.is_empty() {
-            notes.push(format!(
-                "features={}",
-                t.features.keys().cloned().collect::<Vec<_>>().join(",")
-            ));
-        }
-        out.push_str(&format!(
-            "{:<16} {:<10} {}\n",
-            t.id(),
-            t.version,
-            notes.join(" ")
         ));
     }
     out
@@ -581,7 +660,7 @@ pub(crate) fn expand(input: &str, ctx: &Ctx<'_>, reg: &Registry) -> Result<Strin
         out.push_str(&rest[..start]);
         let key = &after[..end];
         let value = match key {
-            "tree" => ctx.tree.to_owned(),
+            "tree" | "product" => ctx.tree.to_owned(),
             "deps" => format!("{}/deps", ctx.tree),
             "build" => ctx.build.clone(),
             "prefix" => ctx.prefix.clone(),
@@ -591,6 +670,15 @@ pub(crate) fn expand(input: &str, ctx: &Ctx<'_>, reg: &Registry) -> Result<Strin
                     .get(&format!("dep:{name}"))
                     .ok_or_else(|| anyhow!("占位符 {{dep:{name}}} 找不到依赖"))?;
                 format!("{}/deps/{}-{}", ctx.tree, dep.name, dep.version)
+            }
+            _ if key.starts_with("source:") => {
+                let name = &key[7..];
+                let product = reg.product_any()?;
+                let target = reg
+                    .get(&format!("dep:{name}"))
+                    .or_else(|| reg.get(&format!("component:{name}")))
+                    .ok_or_else(|| anyhow!("占位符 {{source:{name}}} 找不到 dep 或 component"))?;
+                absolute_source(ctx, &component_source(reg, product, target)?)
             }
             _ => bail!("未知占位符 {{{key}}}（在 {input:?} 里）"),
         };
@@ -604,7 +692,7 @@ pub(crate) fn expand(input: &str, ctx: &Ctx<'_>, reg: &Registry) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::Feature;
+    use crate::recipe::{Feature, Profile, ProfileMode};
 
     fn libcurl() -> Target {
         let mut target = Target {
@@ -636,17 +724,22 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            builtin_exts: vec![],
-            builtin_disable: Default::default(),
-            exts: vec![],
+            bundled: vec![],
+            bundled_disable: Default::default(),
+            components: vec![],
+            deps: Default::default(),
+            profile: Default::default(),
+            product: String::new(),
+            source: String::new(),
+            modes: vec![],
+            default_mode: String::new(),
+            source_path: String::new(),
             modules: vec![],
-            origin: "builtin".into(),
-            link: vec![],
-            dep_configure: Default::default(),
-            prepare: vec![],
-            shared_from: String::new(),
             ini: String::new(),
             ini_lines: vec![],
+            env: Default::default(),
+            dep_configure: Default::default(),
+            prepare: vec![],
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
@@ -668,55 +761,95 @@ mod tests {
         }
     }
 
-    fn openssl_ext() -> Target {
+    fn openssl_component() -> Target {
+        let mut profile = Profile::default();
+        profile.modes.insert(
+            "static".into(),
+            ProfileMode {
+                strategy: "fold".into(),
+                ..Default::default()
+            },
+        );
+        profile.modes.insert(
+            "shared".into(),
+            ProfileMode {
+                strategy: "standalone".into(),
+                ..Default::default()
+            },
+        );
+        profile.defaults.insert("bundled".into(), "static".into());
+        profile.bundled_path = "ext/{name}".into();
         Target {
-            kind: Kind::Ext,
+            kind: Kind::Component,
             name: "openssl".into(),
+            product: "php".into(),
+            source: "bundled".into(),
+            modes: vec!["static".into(), "shared".into()],
+            default_mode: "static".into(),
             version: "8.5.12".into(),
             modules: vec!["openssl".into()],
-            origin: "builtin".into(),
-            link: vec!["static".into(), "shared".into()],
             needs: vec!["openssl".into()],
             configure: vec!["--with-openssl={dep:openssl}".into()],
             ..blank()
         }
     }
 
-    fn php(exts: &[&str]) -> Target {
+    fn product(components: &[&str]) -> Target {
+        let mut profile = Profile::default();
+        profile.modes.insert(
+            "static".into(),
+            ProfileMode {
+                strategy: "fold".into(),
+                ..Default::default()
+            },
+        );
+        profile.modes.insert(
+            "shared".into(),
+            ProfileMode {
+                strategy: "standalone".into(),
+                ..Default::default()
+            },
+        );
+        profile.defaults.insert("bundled".into(), "static".into());
+        profile.bundled_path = "ext/{name}".into();
         Target {
-            kind: Kind::Php,
-            name: "8.5.12".into(),
+            kind: Kind::Product,
+            name: "php".into(),
             version: "8.5.12".into(),
             url: "https://example.com/php.tar.xz".into(),
-            builtin_exts: vec!["openssl".into()],
-            builtin_disable: BTreeMap::from([(
+            series: "8.5".into(),
+            bundled: vec!["openssl".into()],
+            bundled_disable: BTreeMap::from([(
                 "openssl".to_owned(),
                 "--without-openssl".to_owned(),
             )]),
-            exts: exts.iter().map(|s| s.to_string()).collect(),
+            components: components.iter().map(|s| s.to_string()).collect(),
+            profile,
             ..blank()
         }
     }
 
     #[test]
-    fn php_gets_one_side_of_the_static_flags() {
-        let reg = Registry::from_targets(vec![openssl(), openssl_ext(), php(&[])]).unwrap();
-        let php_target = reg.php().unwrap();
+    fn product_gets_one_side_of_the_fold_flags() {
+        let reg =
+            Registry::from_targets(vec![openssl(), openssl_component(), product(&[])]).unwrap();
+        let product_target = reg.product_any().unwrap();
         let ctx = Ctx {
             tree: "/t",
             build: "/b".into(),
             prefix: "/t".into(),
         };
         let sel = Selection::default();
-        let args = php_configure_flags(&reg, php_target, &sel, &ctx).unwrap();
+        let args = product_configure_flags(&reg, product_target, &sel, &ctx).unwrap();
         assert!(args.contains(&"--without-openssl".to_owned()));
         assert!(!args.iter().any(|arg| arg.starts_with("--with-openssl")));
 
         let reg =
-            Registry::from_targets(vec![openssl(), openssl_ext(), php(&["openssl"])]).unwrap();
-        let php_target = reg.php().unwrap();
+            Registry::from_targets(vec![openssl(), openssl_component(), product(&["openssl"])])
+                .unwrap();
+        let product_target = reg.product_any().unwrap();
         let sel = Selection::default();
-        let args = php_configure_flags(&reg, php_target, &sel, &ctx).unwrap();
+        let args = product_configure_flags(&reg, product_target, &sel, &ctx).unwrap();
         assert!(args.contains(&"--with-openssl=/t/deps/openssl-3.5.9".to_owned()));
         assert!(!args.contains(&"--without-openssl".to_owned()));
     }

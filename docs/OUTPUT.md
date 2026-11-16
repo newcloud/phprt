@@ -11,89 +11,87 @@ Sim { root, tree, order: [Node] }
 | 字段 | 说明 |
 | --- | --- |
 | `root` | `--root` 的展示值 |
-| `tree` | `.phprt/php-<php 版本>` |
+| `tree` | `.phprt/<产品>-<产品版本>` |
 | `order` | 拓扑序节点数组 |
 
 `Node` 字段：
 
 | 字段 | 说明 |
 | --- | --- |
-| `id` | `kind:name` |
-| `kind` | `dep` / `ext` / `php` |
+| `id` | 产品 `product:<名字>@<版本>`；组件 / 依赖 `component:<名字>` / `dep:<名字>` |
+| `kind` | `dep` / `component` / `product` |
 | `name` / `version` | 目标名和版本（补丁来自 catalog） |
-| `line` | 选中的版本线，如 `6.2`；builtin 扩展为空 |
-| `origin` | ext 的 `builtin` / `pecl`，由 php recipe 的 `builtin_exts` 推导 |
-| `mode` | ext 的 `static` / `shared`，其他为空 |
-| `source` | 源码地址；shared builtin 显示 PHP 源码里的目录 |
+| `line` | 选中的版本线，如 `6.2`；bundled 组件为空 |
+| `source` | 组件的来源 `bundled` / `external`；产品 / 依赖为空 |
+| `mode` | 组件挂载方式，如 `static` / `shared` / `dynamic`；其他为空 |
+| `strategy` | 挂载策略 `fold` / `standalone`；其他为空 |
+| `url` | 源码地址；bundled 组件为空 |
+| `source_path` | bundled 组件在产品源码树里的相对路径 |
 | `sha256` | catalog 里的校验和 |
-| `unpack` | 解压目录；shared builtin 显示拷贝出来的构建目录 |
+| `unpack` | 解压目录；bundled standalone 组件显示拷贝出来的构建目录 |
 | `prefix` | 安装前缀 |
-| `needs` | 实际依赖的 `dep:*` / `php:*` |
+| `needs` | 实际依赖的 `dep:*` / 产品节点 |
 | `tools` | 构建期工具依赖，如 `dep:autoconf` |
-| `modules` | ext 提供的模块 |
-| `deps` | ext 选中的依赖集成：`[{name, features}]` |
-| `features` | 该 dep 实际启用的 feature（含历史累计） |
+| `modules` | 组件提供的模块 |
+| `deps` | 组件选中的依赖集成：`[{name, features}]` |
+| `features` | 该组件 / 依赖实际启用的 feature（含历史累计） |
 | `configure` | 展开后的 configure 参数 |
-| `steps` | shared ext 的构建步骤 |
-| `make` | dep/php 的 make 步骤 |
+| `steps` | standalone 组件的构建步骤 |
+| `make` | dep / product 的 make 步骤 |
 | `artifacts` | 预期产物 |
-| `ini` / `ini_lines` | shared ext 的 ini 文件和内容 |
+| `ini` / `ini_lines` | PHP shared 组件的 ini 文件和内容 |
 
 ## 2. 路径规则
 
 | 对象 | 值 |
 | --- | --- |
-| 安装树 | `.phprt/php-<php 版本>` |
-| 项目入口 | `<root>/myphp` |
-| 当前版本 | `<root>/.phprt/current` → `php-<php 版本>` |
+| 安装树 | `.phprt/<产品>-<产品版本>` |
+| 项目入口（PHP） | `<root>/myphp-<系列>`；只有一个 PHP 系列时额外写 `<root>/myphp` |
 | 依赖库 | `{tree}/lib/phprt` |
 | dep 前缀 | `{tree}/deps/<name>-<version>` |
 | 源码缓存 | `<root>/.phprt/downloads/<URL 最后一段>` |
-| 解压目录 | `build/<目标名>/<源码目录名>`，php 用 `build/php/<源码目录名>` |
-| shared builtin 源码 | `build/php/<PHP 源码目录名>/<shared_from>` |
-| shared builtin 构建目录 | `build/<扩展名>/php-<PHP 版本>` |
-| shared PECL 源码 | 下载地址最后一段，解压到构建目录 |
+| 解压目录 | `build/<目标名>/<源码目录名>` |
+| bundled standalone 组件源码 | `build/<产品>/<产品源码目录名>/<source_path>` |
+| bundled standalone 组件构建目录 | `build/<组件名>/<产品>-<产品版本>` |
+| external 组件源码 | 下载地址最后一段，解压到构建目录 |
 | ini | `{tree}/etc/conf.d/<ini>` |
-| `.so` | `lib/php/extensions/*/<name>.so` |
+| `.so`（PHP） | `lib/php/extensions/*/<name>.so` |
+| `.so`（nginx dynamic） | `modules/*.so` |
 
-源码目录名取 URL 最后一段（去掉查询串）并去掉 `.tar.gz` / `.tgz` / `.tar.xz` / `.txz` / `.tar.bz2` / `.zip`。
+源码目录名取 URL 最后一段（去掉查询串）并去掉 `.tar.gz` / `.tgz` / `.tar.xz` / `.txz` /
+`.tar.bz2` / `.zip`。
 
 ## 3. 文本格式
 
 每个节点一段：
 
 ```text
-[3/7] ext:curl 8.5.12
-  source     build/php/php-8.5.12/ext/curl
+[4/27] component:curl 8.5.12
+  from       ext/curl
   prefix     .phprt/php-8.5.12
-  needs      dep:libcurl, php:8.5.12
+  needs      dep:libcurl, dep:autoconf
   tools      dep:autoconf
   modules    curl
-  sub        curl [ssl, nghttp2] -> dep:libcurl
-  step       phpize
-  step       ./configure --with-php-config=... --with-curl=...
-  step       make
-  step       make install
-  outputs    lib/php/extensions/*/curl.so
-  ini        etc/conf.d/20-curl.ini
-             extension=curl.so
+  dep        libcurl [ssl]
+  features   ssl
+  flag       --with-curl=...
 ```
 
 标签随节点变化：
 
-- static ext：每个 `configure` 正向参数一行 `flag`。
-- ext 选中的依赖集成输出一行 `dep        libcurl [ssl]`；选中的 feature 输出在
+- fold 组件：每个 `configure` 正向参数一行 `flag`，以及 profile 追加的参数。
+- standalone 组件：每个构建步骤一行 `step`。
+- product / dep：`configure` 每个参数一行，`make` 每个步骤一行。
+- 组件选中的依赖集成输出一行 `dep        libcurl [ssl]`；选中的 feature 输出在
   `features` 行（与 dep 的 feature 共用这个字段）。
-- php：`configure` 里每个内置扩展只出现正向参数或 php recipe
-  `builtin_disable` 的关闭参数其中一组，不会同时出现 `--without-x` 和 `--with-x`。
-- shared ext：每个构建步骤一行 `step`。
-- dep / php：`configure` 每个参数一行，`make` 每个步骤一行。
-- 有值才输出：`source`、`sha256`、`unpack`、`needs`、`tools`、`modules`、`deps`、
+- product 的 `configure` 里每个 bundled 组件只出现正向参数或产品 recipe
+  `bundled_disable` 的关闭参数其中一组，不会同时出现 `--without-x` 和 `--with-x`。
+- 有值才输出：`source`、`from`、`sha256`、`unpack`、`needs`、`tools`、`modules`、`deps`、
   `features`、`outputs`、`ini`。
-- 首次项目会把 bundle 的 `default_exts` 算进方案；`plan` 输出里能直接看到这些节点。
+- 首次项目会把 bundle 的 `default_components` 算进方案；`plan` 输出里能直接看到这些节点。
 - dep 的 `configure` 包含未启用 feature 的 `disable` 参数（如 `--without-ssl`）。
 
-`build order` 里 ext 显示 `(origin mode, line X)`；php 显示补丁版本，dep 显示线对应的补丁。
+`build order` 里组件显示 `(source mode, line X)`；产品显示补丁版本，dep 显示线对应的补丁。
 
 需要版本线的节点还会多一行：
 
@@ -111,44 +109,52 @@ Sim { root, tree, order: [Node] }
   "tree": ".phprt/php-8.5.12",
   "order": [
     {
-      "id": "ext:curl",
-      "kind": "ext",
+      "id": "component:curl",
+      "kind": "component",
       "name": "curl",
       "version": "8.5.12",
       "line": "",
-      "origin": "builtin",
-      "mode": "shared",
-      "source": "build/php/php-8.5.12/ext/curl",
-      "needs": ["dep:libcurl", "php:8.5.12"],
+      "source": "bundled",
+      "mode": "static",
+      "strategy": "fold",
+      "url": "",
+      "source_path": "ext/curl",
+      "needs": ["dep:libcurl"],
       "deps": [
         {"name": "libcurl", "features": ["ssl", "nghttp2"]}
       ],
       "features": [],
-      "steps": ["phpize", "./configure ...", "make", "make install"],
-      "ini": "20-curl.ini",
-      "ini_lines": ["extension=curl.so"]
+      "configure": ["--with-curl=..."],
+      "ini": "",
+      "ini_lines": []
     }
   ]
 }
 ```
 
-`list` 和 `graph` 只有文本输出。`list` 第一行会打印当前 PHP 系列：
+`list` 和 `graph` 只有文本输出。
+
+`list` 不带参数：
 
 ```text
-series 8.5（PHP 8.5.12）
+product        version      tree
+php@8.5        8.5.12       .phprt/php-8.5.12
+nginx@1.29     1.29.8       .phprt/nginx-1.29.8
 ```
 
-`ext list` 的列：
+`list <产品>@<系列>`：
 
 ```text
-name         origin    link            version    status
-curl         builtin   static,shared   8.5.12     installed
-swoole       pecl      shared          6.2.5      pending
-xdebug       pecl      shared          3.5.3      available
+series 8.5（php 8.5.12）
+name             source    modes              version    status
+curl             bundled   static,shared      8.5.12     installed
+swoole           external  shared             6.2.5      pending
+xdebug           external  shared             3.5.3      available
 ```
 
-版本列是当前系列下 recipe 解析出的版本；内置扩展跟随 PHP 补丁。
-没有 state 时，bundle `default_exts` 里的扩展显示为 `pending`，其他 recipe 显示 `available`。
+版本列是当前系列下 recipe 解析出的版本；bundled 组件跟随产品补丁。
+没有 state 时，bundle `default_components` 里的组件显示为 `pending`，其他 recipe 显示
+`available`。
 
 ## 5. 下载输出
 
@@ -158,10 +164,10 @@ xdebug       pecl      shared          3.5.3      available
 ```text
 源码缓存: .phprt/downloads
 并发: 10 个文件（每站点 2），单文件分片 4（≥8 MB 才启用）
-  [php] 8.5.12                     [██████████░░░░]  72%  10.1 MB / 13.9 MB  3.4 MB/s
+  [product] php 8.5.12             [██████████░░░░]  72%  10.1 MB / 13.9 MB  3.4 MB/s
   [deps] openssl 3.5.9             ⠹ 1.2 MB
-  [ext] swoole 6.2.5               ⠸ 等待
-  [php] 8.5.12                     ✓ 完成（13.9 MB）
+  [component] lua-nginx-module 0.10.31  ⠸ 等待
+  [product] php 8.5.12             ✓ 完成（13.9 MB）
 下载完成: 1 个，已存在 0 个
 ```
 
@@ -176,8 +182,8 @@ xdebug       pecl      shared          3.5.3      available
 
 ```text
 解压源码（按构建顺序，3 个）
-[1/3] [php] 8.5.12 解压 php-8.5.12.tar.xz → build/php/php-8.5.12
-[php] 8.5.12 ✓ 解压完成
+[1/3] [product] php 8.5.12 解压 php-8.5.12.tar.xz → build/php/php-8.5.12
+[product] php 8.5.12 ✓ 解压完成
 [deps] libcurl 8.23.0 ✓ 已解压
 解压完成: 1 个，已存在 1 个
 ```
@@ -191,14 +197,13 @@ xdebug       pecl      shared          3.5.3      available
 解压之后按拓扑序编译，和下载/解压共用进度框；`--ui plain` 时逐行输出：
 
 ```text
-编译并安装（按构建顺序，8 个）
+编译并安装（按构建顺序，9 个）
 [deps] openssl 3.5.9 ✓ 已构建
-[3/8] [php] 8.5.12 configure
-[3/8] [php] 8.5.12 make
-[3/8] [php] 8.5.12 install
-[php] 8.5.12 ✓ 完成
-[ext] swoole 6.2.5 ✓ 已构建
-编译完成: 2 个，已构建跳过 6 个
+[3/9] [product] php 8.5.12 configure
+[3/9] [product] php 8.5.12 make
+[product] php 8.5.12 ✓ 完成
+[component] swoole 6.2.5 ✓ 已构建
+编译完成: 2 个，已构建跳过 7 个
 ```
 
 - 已完成的节点显示 `✓ 已构建`。
@@ -221,10 +226,15 @@ xdebug       pecl      shared          3.5.3      available
 源码已下载到 ./.phprt/downloads（未解压）
 ```
 
-`ext add` / `ext remove` 不打印计划，只输出：
+`add` / `remove` 不打印计划，只输出：
 
 ```text
-已加入扩展 swoole（待安装）
+已加入组件 swoole（待安装）
+已写入 ./.phprt/php-8.5/state.json
+```
+
+```text
+已移除组件 swoole
 已写入 ./.phprt/php-8.5/state.json
 ```
 
@@ -233,15 +243,18 @@ xdebug       pecl      shared          3.5.3      available
 ## 9. audit
 
 ```text
-ext:openssl
+audit php@8.5
+
+component:openssl
   source  build/php/php-8.5.12/ext/openssl
   --with-openssl                     configure
   --with-openssl-argon2              feature argon2
   --with-openssl-legacy-provider     ignored: 会改变默认 TLS 行为，需要单独验证
-  feature argon2                   默认开  requires php 8.5/8.6，dep:openssl 3.5/4.0
+  feature argon2                   默认开  requires product 8.4/8.5/8.6，dep:openssl 3.5/4.0
 ```
 
-- 每个扩展/依赖一个段落；`source` 是源码目录，`note` 说明为什么拿不到清单。
-- `--json` 输出 `{series, components[]}`；每个组件的 `options[]` 是
+- 每个组件 / 依赖一个段落；`source` 是源码目录，`note` 说明为什么拿不到清单。
+- `--json` 输出 `{product, series, components[]}`；每个组件的 `options[]` 是
   `{option, state, detail?}`，`state` 为 `configure` / `feature` / `ignored` / `missing`。
 - `features[]` 带 `default_on`（当前系列 bundle 是否默认开）和 `available`（requires 是否满足）。
+- `audited=false` 的组件（产品 profile 的 `audit=none`）不要求处置选项。

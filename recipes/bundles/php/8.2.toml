@@ -1,0 +1,74 @@
+# 只写默认版本线，不写补丁号；顶层是扩展，[deps] 是依赖库。
+product = "php"
+swoole = "6.0"
+xdebug = "3.5"
+redis = "6.3"
+apcu = "5.1"
+igbinary = "3.2"
+msgpack = "3.0"
+protobuf = "5.36"
+yaml = "2.3"
+memcached = "3.4"
+imagick = "3.8"
+ssh2 = "1.5"
+amqp = "2.2"
+rdkafka = "6.0"
+
+# 依赖库的默认版本线，按 dep recipe 的名字索引。
+[deps]
+openssl = "3.5"
+zlib = "1.3"
+libpng = "1.6"
+jpeg = "3.1"
+webp = "1.6"
+aom = "3.12"
+avif = "1.3"
+freetype = "2.13"
+libyaml = "0.2"
+libmemcached = "1.1"
+imagemagick = "7.1"
+libssh2 = "1.11"
+rabbitmq-c = "0.18"
+librdkafka = "2.16"
+
+# 扩展被选中时的默认 feature / 依赖功能；不决定是否默认安装。
+# --ext 名字 或 ext add 名字 时使用这里的配置。
+[component_presets]
+curl = { deps = { libcurl = ["ssl"] } }
+gd = { features = ["jpeg", "webp", "freetype"] }
+zip = { deps = { libzip = ["encryption"] } }
+sqlite3 = { deps = { sqlite = ["column_metadata"] } }
+pdo_sqlite = { deps = { sqlite = ["column_metadata"] } }
+
+# 默认启用的扩展。
+#
+# features 是扩展自己的编译开关；deps 按依赖名列出要转给它的 feature。
+# 需要某个依赖的功能时，deps 必须和扩展一起写；示例见上方 [component_presets].curl。
+# 不写代码做依赖推导，漏写时 PHP configure 会报错。
+#
+# 默认项用 ref 引用 [component_presets]；ref 只接受
+# "component_presets.<同名扩展>"，不能和 features/deps 同时写。
+#
+# 这张表必须放在文件最后：TOML 里表头之后的裸键都属于这个表。
+[default_components]
+openssl = {}
+curl = { ref = "component_presets.curl" }
+libxml = {}
+# v2 的默认集：框架和主流项目常用的内置扩展，全部静态编进 PHP。
+# 依赖库默认线在 [deps]；zlib/sqlite3/mbstring/zip/sodium 需要对应的 dep。
+zlib = {}
+sqlite3 = { ref = "component_presets.sqlite3" }
+pdo_sqlite = { ref = "component_presets.pdo_sqlite" }
+mysqli = {}
+pdo_mysql = {}
+mbstring = {}
+zip = { ref = "component_presets.zip" }
+sodium = {}
+gettext = {}
+pcntl = {}
+sockets = {}
+shmop = {}
+sysvmsg = {}
+sysvsem = {}
+sysvshm = {}
+

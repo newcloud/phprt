@@ -1,0 +1,13 @@
+# nginx 1.29 的默认版本线；默认不装第三方模块。
+product = "nginx"
+lua-nginx-module = "0.10"
+
+[deps]
+openssl = "3.5"
+pcre2 = "10.49"
+luajit = "2.1"
+
+[component_presets]
+lua-nginx-module = {}
+
+[default_components]

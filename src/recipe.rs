@@ -10,46 +10,30 @@ use starlark::syntax::{AstModule, Dialect};
 
 use crate::catalog::Catalog;
 
+/// 三层目标：产品、组件、依赖库。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Dep,
-    Ext,
-    Php,
+    Component,
+    Product,
 }
 
 impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Dep => "dep",
-            Kind::Ext => "ext",
-            Kind::Php => "php",
+            Kind::Component => "component",
+            Kind::Product => "product",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    Static,
-    Shared,
-}
-
-impl Mode {
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "static" => Ok(Mode::Static),
-            "shared" => Ok(Mode::Shared),
-            other => bail!("未知链接方式 {other}，只支持 static 或 shared"),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Mode::Static => "static",
-            Mode::Shared => "shared",
-        }
-    }
+/// 挂载策略：fold 只把参数/源码交给产品，standalone 在产品之后单独构建。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strategy {
+    Fold,
+    Standalone,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -66,16 +50,113 @@ pub struct Feature {
     pub requires: Requires,
 }
 
-/// feature 的可用条件：允许的 PHP 系列、允许的依赖线、宿主机命令。
+/// feature 的可用条件：允许的产品系列、允许的依赖线、宿主机命令。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Requires {
     #[serde(default)]
-    pub php: Vec<String>,
+    pub product: Vec<String>,
     #[serde(default)]
     pub dep: BTreeMap<String, Vec<String>>,
     /// 需要出现在 PATH 里的宿主机命令，如 `nasm`。
     #[serde(default)]
     pub commands: Vec<String>,
+}
+
+/// 产品的一种组件挂载方式。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProfileMode {
+    /// `fold` 或 `standalone`。
+    #[serde(default)]
+    pub strategy: String,
+    /// standalone 的步骤模板；支持 `{flags}` / `{name}` / `{product}` / `{build}`。
+    #[serde(default)]
+    pub steps: Vec<String>,
+    /// standalone / fold 追加到产品的产物模式；支持 `{name}`。
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    /// fold 追加到产品 configure 的参数模板；支持 `{component_source}` / `{name}`。
+    #[serde(default)]
+    pub configure: Vec<String>,
+}
+
+/// 产品安装树的运行时整理规则。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Runtime {
+    /// 依赖库的统一运行目录，相对安装树；空表示不做运行库收集。
+    #[serde(default)]
+    pub lib_dir: String,
+    /// 安装树内的 rpath 规则：相对路径 glob -> rpath。
+    #[serde(default)]
+    pub rpath: BTreeMap<String, String>,
+}
+
+impl ProfileMode {
+    pub fn strategy_kind(&self) -> Result<Strategy> {
+        match self.strategy.as_str() {
+            "fold" => Ok(Strategy::Fold),
+            "standalone" => Ok(Strategy::Standalone),
+            other => bail!("strategy={other} 不合法，只能是 fold 或 standalone"),
+        }
+    }
+}
+
+impl Strategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Strategy::Fold => "fold",
+            Strategy::Standalone => "standalone",
+        }
+    }
+}
+
+/// 产品 profile：组件挂载协议、运行时整理、验证和入口。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Profile {
+    #[serde(default)]
+    pub modes: BTreeMap<String, ProfileMode>,
+    /// 组件来源 -> 默认挂载方式，如 `{ bundled = "static", external = "shared" }`。
+    #[serde(default)]
+    pub defaults: BTreeMap<String, String>,
+    /// bundled 组件在产品源码树里的默认相对路径模板，如 `ext/{name}`。
+    #[serde(default)]
+    pub bundled_path: String,
+    #[serde(default)]
+    pub runtime: Runtime,
+    /// 挂载方式 -> 登记动作（目前支持 `php-ini`）。
+    #[serde(default)]
+    pub register: BTreeMap<String, String>,
+    #[serde(default)]
+    pub verify: Vec<String>,
+    #[serde(default)]
+    pub verify_modules: String,
+    /// 入口名模板，如 `myphp-{series}`；空表示不生成入口。
+    #[serde(default)]
+    pub entry: String,
+    /// 入口内容的内置模板名，如 `myphp`。
+    #[serde(default)]
+    pub entry_template: String,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// 选项来源：`php-config-m4` / `configure-help` / `none`。
+    #[serde(default)]
+    pub audit: String,
+    /// 安装后配置动作：`php` 或空。
+    #[serde(default)]
+    pub config: String,
+}
+
+impl Profile {
+    pub fn strategy(&self, mode: &str) -> Result<Strategy> {
+        let def = self
+            .modes
+            .get(mode)
+            .ok_or_else(|| anyhow!("产品 profile 没有挂载方式 {mode}"))?;
+        match def.strategy.as_str() {
+            "fold" => Ok(Strategy::Fold),
+            "standalone" => Ok(Strategy::Standalone),
+            other => bail!("挂载方式 {mode} 的 strategy={other} 不合法，只能是 fold 或 standalone"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,36 +174,57 @@ pub struct Target {
     /// 构建期工具依赖（dep）；参与构建顺序和 PATH，不参与链接。
     #[serde(default)]
     pub tools: Vec<String>,
-    /// PHP 版本事实：该版本内置扩展列表（只有 php target 使用）。
+    /// 产品：源码包内自带的组件名。
     #[serde(default)]
-    pub builtin_exts: Vec<String>,
-    /// PHP 版本事实：内置扩展 -> 不选中时使用的关闭参数（只有 php target 使用）。
+    pub bundled: Vec<String>,
+    /// 产品：组件未选中时使用的关闭参数。
     #[serde(default)]
-    pub builtin_disable: BTreeMap<String, String>,
+    pub bundled_disable: BTreeMap<String, String>,
+    /// 产品：本次方案选中的组件名（由 state 或 CLI 注入）。
     #[serde(default)]
-    pub exts: Vec<String>,
+    pub components: Vec<String>,
+    /// 产品：转给依赖库的 feature，如 `{ openssl = ["..."] }`。
+    #[serde(default)]
+    pub deps: BTreeMap<String, Vec<String>>,
+    /// 产品 profile。
+    #[serde(default)]
+    pub profile: Profile,
+    /// 组件：所属产品。
+    #[serde(default)]
+    pub product: String,
+    /// 组件来源：`bundled` 或 `external`。
+    #[serde(default)]
+    pub source: String,
+    /// 组件支持的挂载方式；第一个是默认值（也可以由 profile.defaults 覆盖）。
+    #[serde(default)]
+    pub modes: Vec<String>,
+    /// 组件默认挂载方式，由产品 profile 的 defaults 注入。
+    #[serde(default)]
+    pub default_mode: String,
+    /// bundled 组件的源码在产品源码树里的相对路径，如 `ext/openssl`。
+    #[serde(default)]
+    pub source_path: String,
+    /// 产品启动后应看到的模块名；由产品 profile 的验证步骤使用。
     #[serde(default)]
     pub modules: Vec<String>,
-    #[serde(default = "default_origin")]
-    pub origin: String,
-    #[serde(default)]
-    pub link: Vec<String>,
-    /// 依赖集成：依赖名 -> 选中该依赖时额外加给扩展的 configure 参数。
-    /// 出现即表示允许 dep:NAME；key 必须在 needs 或某个 feature 的 needs 里。
-    #[serde(default)]
-    pub dep_configure: BTreeMap<String, Vec<String>>,
-    /// 构建前在源码目录执行的命令（如给上游源码打兼容补丁）；只有 ext 使用。
-    #[serde(default)]
-    pub prepare: Vec<String>,
-    #[serde(default)]
-    pub shared_from: String,
+    /// 组件安装后的登记文件；由产品 profile 的 register 动作使用。
     #[serde(default)]
     pub ini: String,
     #[serde(default)]
     pub ini_lines: Vec<String>,
+    /// 组件自己的环境变量；fold 时合并进产品节点。
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// 依赖集成：依赖名 -> 选中该依赖时额外加给组件的 configure 参数。
+    /// 出现即表示允许 dep:NAME；key 必须在 needs 或某个 feature 的 needs 里。
+    #[serde(default)]
+    pub dep_configure: BTreeMap<String, Vec<String>>,
+    /// 构建前在源码目录执行的命令（如给上游源码打兼容补丁）。
+    #[serde(default)]
+    pub prepare: Vec<String>,
     #[serde(default)]
     pub features: BTreeMap<String, Feature>,
-    /// 看过但决定不暴露的上游选项 -> 理由；只有 dep / ext 使用。
+    /// 看过但决定不暴露的上游选项 -> 理由；只有 dep / component 使用。
     #[serde(default)]
     pub ignored: BTreeMap<String, String>,
     #[serde(default)]
@@ -136,29 +238,16 @@ pub struct Target {
     /// 选中的版本线（6.2 / 3.5 / 8.5）。
     #[serde(default)]
     pub line: String,
-    /// PHP recipe 的系列（8.5）；其他目标为空。
+    /// 产品 recipe 的系列（8.5）；其他目标为空。
     #[serde(default)]
     pub series: String,
 }
 
-fn default_origin() -> String {
-    "builtin".to_owned()
-}
-
 impl Target {
     pub fn id(&self) -> String {
-        format!("{}:{}", self.kind.as_str(), self.name)
-    }
-
-    /// builtin 默认静态，PECL 默认动态。
-    pub fn default_mode(&self) -> Result<Mode> {
-        match self.origin.as_str() {
-            "builtin" => Ok(Mode::Static),
-            "pecl" => Ok(Mode::Shared),
-            other => bail!(
-                "{} 的 origin={other} 不合法，只能是 builtin 或 pecl",
-                self.id()
-            ),
+        match self.kind {
+            Kind::Product => format!("product:{}@{}", self.name, self.version),
+            _ => format!("{}:{}", self.kind.as_str(), self.name),
         }
     }
 
@@ -175,18 +264,7 @@ impl Target {
                 if self.url.is_empty() {
                     bail!("{at}: dep:{} 缺少 url", self.name);
                 }
-                if !self.exts.is_empty() {
-                    bail!("{at}: dep:{} 不允许 exts 字段", self.name);
-                }
-                if !self.tools.is_empty() {
-                    bail!("{at}: dep:{} 不允许 tools 字段", self.name);
-                }
-                if !self.builtin_exts.is_empty() || !self.builtin_disable.is_empty() {
-                    bail!(
-                        "{at}: dep:{} 不允许 builtin_exts/builtin_disable",
-                        self.name
-                    );
-                }
+                self.reject_product_fields(&at)?;
                 if !self.dep_configure.is_empty() {
                     bail!("{at}: dep:{} 不允许 dep_configure", self.name);
                 }
@@ -194,7 +272,7 @@ impl Target {
                     bail!("{at}: dep:{} 不允许 prepare", self.name);
                 }
                 for (name, f) in &self.features {
-                    if !f.requires.php.is_empty() || !f.requires.dep.is_empty() {
+                    if !f.requires.product.is_empty() || !f.requires.dep.is_empty() {
                         bail!(
                             "{at}: dep:{} 的 feature {name} 只允许 requires.commands",
                             self.name
@@ -211,74 +289,55 @@ impl Target {
                 }
                 self.check_ignored(&at)?;
             }
-            Kind::Ext => {
-                if self.modules.is_empty() {
-                    bail!("{at}: ext:{} 缺少 modules", self.name);
+            Kind::Component => {
+                if self.product.is_empty() {
+                    bail!("{at}: component:{} 缺少 product", self.name);
                 }
-                if self.origin != "builtin" && self.origin != "pecl" {
+                if self.source != "bundled" && self.source != "external" {
                     bail!(
-                        "{at}: ext:{} 的 origin={} 不合法，只能是 builtin 或 pecl",
+                        "{at}: component:{} 的 source={} 不合法，只能是 bundled 或 external",
                         self.name,
-                        self.origin
+                        self.source
                     );
                 }
-                if self.link.is_empty() {
-                    bail!("{at}: ext:{} 缺少 link 契约", self.name);
-                }
-                for m in &self.link {
-                    if m != "static" && m != "shared" {
-                        bail!(
-                            "{at}: ext:{} 的 link 值 {m} 不合法，只能是 static 或 shared",
-                            self.name
-                        );
-                    }
-                }
-                let default = self.default_mode()?;
-                if !self.link.iter().any(|m| m == default.as_str()) {
+                if self.source == "external" && (self.url.is_empty() || self.version.is_empty()) {
                     bail!(
-                        "{at}: ext:{} 是 {}，默认必须支持 {}，但 link={}",
-                        self.name,
-                        self.origin,
-                        default.as_str(),
-                        self.link.join(",")
-                    );
-                }
-                if self.link.iter().any(|m| m == "shared") {
-                    if self.ini.is_empty() {
-                        bail!("{at}: ext:{} 支持 shared，但缺少 ini", self.name);
-                    }
-                    match self.origin.as_str() {
-                        "builtin" => {
-                            if self.shared_from.is_empty() {
-                                bail!(
-                                    "{at}: ext:{} 是 builtin shared，但缺少 shared_from",
-                                    self.name
-                                );
-                            }
-                        }
-                        "pecl" if self.url.is_empty() || self.version.is_empty() => {
-                            bail!(
-                                "{at}: ext:{} 是 pecl shared，但缺少 url 或 version",
-                                self.name
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                for tool in &self.tools {
-                    if tool.is_empty() {
-                        bail!("{at}: ext:{} 的 tools 里有空名字", self.name);
-                    }
-                }
-                if !self.builtin_exts.is_empty() || !self.builtin_disable.is_empty() {
-                    bail!(
-                        "{at}: ext:{} 不允许 builtin_exts/builtin_disable",
+                        "{at}: component:{} 是 external，但缺少 url 或 version",
                         self.name
                     );
                 }
+                if self.modes.is_empty() {
+                    bail!("{at}: component:{} 缺少 modes", self.name);
+                }
+                for mode in &self.modes {
+                    if mode.is_empty() {
+                        bail!("{at}: component:{} 的 modes 里有空名字", self.name);
+                    }
+                }
+                if !self.modes.iter().any(|m| m == &self.default_mode) {
+                    bail!(
+                        "{at}: component:{} 的默认挂载方式 {} 不在 modes 里（{}）",
+                        self.name,
+                        self.default_mode,
+                        self.modes.join(", ")
+                    );
+                }
+                if !self.bundled.is_empty()
+                    || !self.bundled_disable.is_empty()
+                    || !self.profile.modes.is_empty()
+                    || !self.components.is_empty()
+                    || !self.series.is_empty()
+                {
+                    bail!("{at}: component:{} 不允许产品字段", self.name);
+                }
+                for tool in &self.tools {
+                    if tool.is_empty() {
+                        bail!("{at}: component:{} 的 tools 里有空名字", self.name);
+                    }
+                }
                 for (dep, flags) in &self.dep_configure {
                     if dep.is_empty() {
-                        bail!("{at}: ext:{} 的 dep_configure 里有空名字", self.name);
+                        bail!("{at}: component:{} 的 dep_configure 里有空名字", self.name);
                     }
                     let in_feature = self
                         .features
@@ -286,24 +345,27 @@ impl Target {
                         .any(|f| f.needs.iter().any(|n| n == dep));
                     if !self.needs.iter().any(|n| n == dep) && !in_feature {
                         bail!(
-                            "{at}: ext:{} 的 dep_configure 里有 dep:{dep}，\
+                            "{at}: component:{} 的 dep_configure 里有 dep:{dep}，\
                              但它不在 needs 或任何 feature 的 needs 里",
                             self.name
                         );
                     }
                     for flag in flags {
                         if flag.is_empty() {
-                            bail!("{at}: ext:{} 的 dep_configure[{dep}] 里有空参数", self.name);
+                            bail!(
+                                "{at}: component:{} 的 dep_configure[{dep}] 里有空参数",
+                                self.name
+                            );
                         }
                     }
                 }
                 for (name, f) in &self.features {
                     if name.is_empty() {
-                        bail!("{at}: ext:{} 的 features 里有空名字", self.name);
+                        bail!("{at}: component:{} 的 features 里有空名字", self.name);
                     }
                     if !f.disable.is_empty() {
                         bail!(
-                            "{at}: ext:{} 的 feature {name} 只允许 needs/configure/requires；\
+                            "{at}: component:{} 的 feature {name} 只允许 needs/configure/requires；\
                              disable 只用于 dep 的 feature",
                             self.name
                         );
@@ -311,20 +373,20 @@ impl Target {
                     for need in &f.needs {
                         if need.is_empty() {
                             bail!(
-                                "{at}: ext:{} 的 feature {name} 的 needs 里有空名字",
+                                "{at}: component:{} 的 feature {name} 的 needs 里有空名字",
                                 self.name
                             );
                         }
                     }
                     for flag in &f.configure {
                         if flag.is_empty() {
-                            bail!("{at}: ext:{} 的 feature {name} 里有空参数", self.name);
+                            bail!("{at}: component:{} 的 feature {name} 里有空参数", self.name);
                         }
                     }
-                    for php in &f.requires.php {
-                        if php.is_empty() {
+                    for series in &f.requires.product {
+                        if series.is_empty() {
                             bail!(
-                                "{at}: ext:{} 的 feature {name} 的 requires.php 里有空名字",
+                                "{at}: component:{} 的 feature {name} 的 requires.product 里有空名字",
                                 self.name
                             );
                         }
@@ -332,21 +394,21 @@ impl Target {
                     for (dep, lines) in &f.requires.dep {
                         if !self.needs.iter().any(|n| n == dep) {
                             bail!(
-                                "{at}: ext:{} 的 feature {name} 的 requires.dep 里有 {dep}，\
+                                "{at}: component:{} 的 feature {name} 的 requires.dep 里有 {dep}，\
                                  但它不在 needs 里",
                                 self.name
                             );
                         }
                         if lines.is_empty() {
                             bail!(
-                                "{at}: ext:{} 的 feature {name} 的 requires.dep[{dep}] 是空的",
+                                "{at}: component:{} 的 feature {name} 的 requires.dep[{dep}] 是空的",
                                 self.name
                             );
                         }
                         for line in lines {
                             if line.is_empty() {
                                 bail!(
-                                    "{at}: ext:{} 的 feature {name} 的 requires.dep[{dep}] 里有空线",
+                                    "{at}: component:{} 的 feature {name} 的 requires.dep[{dep}] 里有空线",
                                     self.name
                                 );
                             }
@@ -355,33 +417,97 @@ impl Target {
                     for command in &f.requires.commands {
                         if command.is_empty() {
                             bail!(
-                                "{at}: ext:{} 的 feature {name} 的 requires.commands 里有空名字",
+                                "{at}: component:{} 的 feature {name} 的 requires.commands 里有空名字",
                                 self.name
                             );
                         }
                     }
                 }
-            }
-            Kind::Php => {
-                if !self.prepare.is_empty() {
-                    bail!("{at}: php:{} 不允许 prepare", self.name);
+                for key in self.env.keys() {
+                    if key.is_empty() {
+                        bail!("{at}: component:{} 的 env 里有空名字", self.name);
+                    }
                 }
-                if self.builtin_exts.is_empty() {
-                    bail!("{at}: php:{} 的 builtin_exts 不能为空", self.name);
+            }
+            Kind::Product => {
+                if !self.prepare.is_empty() {
+                    bail!("{at}: product:{} 不允许 prepare", self.name);
+                }
+                if self.series.is_empty() {
+                    bail!("{at}: product:{} 缺少 series", self.name);
+                }
+                if !self.dep_configure.is_empty()
+                    || !self.features.is_empty()
+                    || !self.ignored.is_empty()
+                {
+                    bail!(
+                        "{at}: product:{} 不允许 dep_configure/features/ignored",
+                        self.name
+                    );
+                }
+                for (dep, feats) in &self.deps {
+                    if dep.is_empty() || feats.iter().any(|f| f.is_empty()) {
+                        bail!("{at}: product:{} 的 deps 里有空名字", self.name);
+                    }
+                }
+                if self.version.is_empty() {
+                    bail!("{at}: product:{} 缺少 version", self.name);
+                }
+                if self.url.is_empty() {
+                    bail!("{at}: product:{} 缺少 url", self.name);
+                }
+                if self.profile.modes.is_empty() {
+                    bail!("{at}: product:{} 的 profile.modes 不能为空", self.name);
+                }
+                for mode in self.profile.modes.keys() {
+                    if mode.is_empty() {
+                        bail!("{at}: product:{} 的 profile.modes 里有空名字", self.name);
+                    }
+                }
+                for (source, mode) in &self.profile.defaults {
+                    if source != "bundled" && source != "external" {
+                        bail!(
+                            "{at}: product:{} 的 profile.defaults 键 {source} 不合法，\
+                             只能是 bundled 或 external",
+                            self.name
+                        );
+                    }
+                    if !self.profile.modes.contains_key(mode) {
+                        bail!(
+                            "{at}: product:{} 的 profile.defaults.{source}={mode} 不在 profile.modes 里",
+                            self.name
+                        );
+                    }
+                }
+                for mode in self.profile.register.keys() {
+                    if !self.profile.modes.contains_key(mode) {
+                        bail!(
+                            "{at}: product:{} 的 profile.register.{mode} 不在 profile.modes 里",
+                            self.name
+                        );
+                    }
+                }
+                match self.profile.audit.as_str() {
+                    "" | "none" | "php-config-m4" | "configure-help" => {}
+                    other => bail!(
+                        "{at}: product:{} 的 profile.audit={other} 不合法\
+                         （只支持 php-config-m4 / configure-help / none）",
+                        self.name
+                    ),
                 }
                 let mut seen = BTreeSet::new();
-                for name in &self.builtin_exts {
+                for name in &self.bundled {
                     if name.is_empty() {
-                        bail!("{at}: php:{} 的 builtin_exts 里有空名字", self.name);
+                        bail!("{at}: product:{} 的 bundled 里有空名字", self.name);
                     }
                     if !seen.insert(name.clone()) {
-                        bail!("{at}: php:{} 的 builtin_exts 重复: {name}", self.name);
+                        bail!("{at}: product:{} 的 bundled 重复: {name}", self.name);
                     }
                 }
-                for (name, flag) in &self.builtin_disable {
+                for (name, flag) in &self.bundled_disable {
                     if !seen.contains(name) {
                         bail!(
-                            "{at}: php:{} 的 builtin_disable 里有非内置扩展 {name}",
+                            "{at}: product:{} 的 bundled_disable 里有非内置组件 {name}",
                             self.name
                         );
                     }
@@ -389,32 +515,36 @@ impl Target {
                         || !(flag.starts_with("--without-") || flag.starts_with("--disable-"))
                     {
                         bail!(
-                            "{at}: php:{} 的 builtin_disable[{name}] 必须是单个 --without-* 或 --disable-* 参数",
+                            "{at}: product:{} 的 bundled_disable[{name}] 必须是单个 \
+                             --without-* 或 --disable-* 参数",
                             self.name
                         );
                     }
                 }
-                if self.series.is_empty() {
-                    bail!("{at}: php:{} 缺少 series", self.name);
-                }
-                if !self.dep_configure.is_empty()
-                    || !self.features.is_empty()
-                    || !self.ignored.is_empty()
-                {
-                    bail!(
-                        "{at}: php:{} 不允许 dep_configure/features/ignored",
-                        self.name
-                    );
-                }
-                if self.version.is_empty() {
-                    bail!("{at}: php:{} 缺少 version", self.name);
-                }
-                if self.url.is_empty() {
-                    bail!("{at}: php:{} 缺少 url", self.name);
+                for (key, value) in &self.profile.env {
+                    if key.is_empty() {
+                        bail!("{at}: product:{} 的 profile.env 里有空名字", self.name);
+                    }
+                    if value.is_empty() {
+                        bail!("{at}: product:{} 的 profile.env[{key}] 是空的", self.name);
+                    }
                 }
             }
         }
         self.check_ignored(&at)?;
+        Ok(())
+    }
+
+    fn reject_product_fields(&self, at: &std::path::Display<'_>) -> Result<()> {
+        if !self.bundled.is_empty() || !self.bundled_disable.is_empty() {
+            bail!("{at}: dep:{} 不允许 bundled/bundled_disable", self.name);
+        }
+        if !self.components.is_empty() || !self.profile.modes.is_empty() {
+            bail!("{at}: dep:{} 不允许产品字段", self.name);
+        }
+        if !self.modes.is_empty() || !self.source.is_empty() || !self.product.is_empty() {
+            bail!("{at}: dep:{} 不允许组件字段", self.name);
+        }
         Ok(())
     }
 
@@ -439,10 +569,10 @@ impl Target {
     }
 }
 
-/// recipe 声明的一条版本线：支持哪些 PHP，以及依赖哪些线。
+/// recipe 声明的一条版本线：支持哪些产品系列，以及依赖哪些线。
 #[derive(Debug, Clone, Default)]
 pub struct LineMeta {
-    pub php: Vec<String>,
+    pub product: Vec<String>,
     pub deps: BTreeMap<String, Vec<String>>,
 }
 
@@ -451,38 +581,41 @@ pub struct LineMeta {
 pub struct RecipeMeta {
     pub kind: Kind,
     pub name: String,
+    /// 产品的系列；组件为空。
     pub series: Option<String>,
+    /// 组件所属的产品；产品 / 依赖库为空。
+    pub product: Option<String>,
     pub lines: BTreeMap<String, LineMeta>,
-    /// PHP 系列 -> 该扩展允许的依赖线（builtin 扩展用，如 ext:openssl）。
-    pub php_lines: BTreeMap<String, Vec<String>>,
-    /// PHP 系列 -> 依赖名 -> 允许的依赖线；用于没有同名依赖的 builtin 扩展（如 gd）。
-    pub php_dep_lines: BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    /// php recipe 的内置扩展事实；其他 recipe 为空。
-    pub builtin_exts: Vec<String>,
+    /// 产品系列 -> 该组件允许的依赖线（内置组件用，如 component:openssl）。
+    pub product_lines: BTreeMap<String, Vec<String>>,
+    /// 产品系列 -> 依赖名 -> 允许的依赖线；用于没有同名依赖的内置组件（如 gd）。
+    pub product_dep_lines: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// 产品 recipe 的 bundled 组件事实；其他 recipe 为空。
+    pub bundled: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ExtSpec {
-    pub link: Option<Mode>,
+pub struct ComponentSpec {
+    pub mode: Option<String>,
     /// 依赖名 -> 转给该依赖的 feature 列表
     pub deps: BTreeMap<String, Vec<String>>,
-    /// `feature:[...]` 选中的扩展自己的 feature；None 表示没写，
+    /// `feature:[...]` 选中的组件自己的 feature；None 表示没写，
     /// Some(空) 表示显式关闭（用于关掉 bundle 默认值）。
     pub features: Option<BTreeSet<String>>,
     /// `version:6.2` 指定的版本线；只在这里记录，绑定在加载 recipe 前完成。
     pub version: Option<String>,
 }
 
-/// 命令行 `--ext` 里与版本线有关的最小信息，用于加载 recipe 之前解析绑定。
+/// 命令行 `--component` 里与版本线有关的最小信息，用于加载 recipe 之前解析绑定。
 #[derive(Debug, Clone, Default)]
-pub struct RawExt {
+pub struct RawComponent {
     pub name: String,
     pub version: Option<String>,
 }
 
-/// 只解析 `--ext` 的扩展名和 `version:`，不依赖 recipe。
-pub fn preparse(specs: &[String]) -> Result<Vec<RawExt>> {
-    let mut out: Vec<RawExt> = Vec::new();
+/// 只解析组件 spec 的名字和 `version:`，不依赖 recipe。
+pub fn preparse(specs: &[String]) -> Result<Vec<RawComponent>> {
+    let mut out: Vec<RawComponent> = Vec::new();
     let mut seen: BTreeMap<String, ()> = BTreeMap::new();
 
     for spec in specs {
@@ -490,23 +623,31 @@ pub fn preparse(specs: &[String]) -> Result<Vec<RawExt>> {
         for raw in split_top(spec, ',')? {
             let part = raw.trim();
             if part.is_empty() {
-                bail!("--ext {spec} 里有空的片段");
+                bail!("组件 spec {spec} 里有空的片段");
             }
-            if let Some(version) = part.strip_prefix("version:") {
-                let idx =
-                    current.ok_or_else(|| anyhow!("--ext {spec} 的第一个片段不能是 {part}"))?;
-                if version.is_empty() {
-                    bail!("--ext {spec} 的 version: 后面缺少版本线");
-                }
-                if out[idx].version.replace(version.to_owned()).is_some() {
-                    bail!("--ext 里重复指定了 {} 的版本线", out[idx].name);
-                }
-                continue;
-            }
-            if part.starts_with("link:") || part.starts_with("dep:") || part.starts_with("feature:")
+            if part.starts_with("mode:")
+                || part.starts_with("dep:")
+                || part.starts_with("feature:")
+                || part.starts_with("version:")
             {
-                current.ok_or_else(|| anyhow!("--ext {spec} 的第一个片段不能是 {part}"))?;
+                let Some(idx) = current else {
+                    bail!("组件 spec {spec} 的第一个片段不能是 {part}");
+                };
+                if let Some(version) = part.strip_prefix("version:") {
+                    if version.is_empty() {
+                        bail!("组件 spec {spec} 的 version: 后面缺少版本线");
+                    }
+                    if out[idx].version.replace(version.to_owned()).is_some() {
+                        bail!("组件 spec 里重复指定了 {} 的版本线", out[idx].name);
+                    }
+                }
                 continue;
+            }
+            if current.is_some() {
+                bail!(
+                    "一次只能指定一个组件：{spec} 里的 {part} 是第二个组件名；\
+                     多个组件请分多条命令"
+                );
             }
 
             let (name, value) = match part.find(['=', ':']) {
@@ -514,37 +655,37 @@ pub fn preparse(specs: &[String]) -> Result<Vec<RawExt>> {
                 None => (part, None),
             };
             if name.is_empty() {
-                bail!("--ext {part} 缺少扩展名");
+                bail!("组件 spec {part} 缺少组件名");
             }
             if seen.insert(name.to_owned(), ()).is_some() {
-                bail!("--ext 里重复指定了扩展 {name}");
+                bail!("组件 spec 里重复指定了组件 {name}");
             }
-            let mut ext = RawExt {
+            let mut component = RawComponent {
                 name: name.to_owned(),
                 version: None,
             };
             if let Some(value) = value {
                 if value.is_empty() {
-                    bail!("--ext {name} 的选项是空的");
+                    bail!("组件 {name} 的选项是空的");
                 }
                 if let Some(version) = value.strip_prefix("version:") {
                     if version.is_empty() {
-                        bail!("--ext {name} 的 version: 后面缺少版本线");
+                        bail!("组件 {name} 的 version: 后面缺少版本线");
                     }
-                    ext.version = Some(version.to_owned());
+                    component.version = Some(version.to_owned());
                 }
             }
             current = Some(out.len());
-            out.push(ext);
+            out.push(component);
         }
     }
     Ok(out)
 }
 
-/// 命令行 `--ext` 的选择结果。
+/// 命令行 `--component` 的选择结果。
 #[derive(Debug, Clone, Default)]
 pub struct Selection {
-    pub per_ext: BTreeMap<String, ExtSpec>,
+    pub per_component: BTreeMap<String, ComponentSpec>,
 }
 
 impl Selection {
@@ -552,24 +693,30 @@ impl Selection {
         let mut sel = Selection::default();
 
         for spec in specs {
-            // 逗号既分隔扩展，也分隔同一个扩展的选项；[] 里的逗号不参与切分。
+            // 逗号既分隔组件，也分隔同一个组件的选项；[] 里的逗号不参与切分。
             let mut chunks: Vec<String> = Vec::new();
             for raw in split_top(spec, ',')? {
                 let part = raw.trim();
                 if part.is_empty() {
-                    bail!("--ext {spec} 里有空的片段");
+                    bail!("组件 spec {spec} 里有空的片段");
                 }
-                if part.starts_with("link:")
+                if part.starts_with("mode:")
                     || part.starts_with("dep:")
                     || part.starts_with("feature:")
                     || part.starts_with("version:")
                 {
-                    let last = chunks
-                        .last_mut()
-                        .ok_or_else(|| anyhow!("--ext {spec} 的第一个片段不能是 {part}"))?;
+                    let Some(last) = chunks.last_mut() else {
+                        bail!("组件 spec {spec} 的第一个片段不能是 {part}");
+                    };
                     last.push(',');
                     last.push_str(part);
                 } else {
+                    if !chunks.is_empty() {
+                        bail!(
+                            "一次只能指定一个组件：{spec} 里的 {part} 是第二个组件名；\
+                             多个组件请分多条命令"
+                        );
+                    }
                     chunks.push(part.to_owned());
                 }
             }
@@ -580,97 +727,95 @@ impl Selection {
                     None => (chunk.as_str(), None),
                 };
                 if name.is_empty() {
-                    bail!("--ext {chunk} 缺少扩展名");
+                    bail!("组件 spec {chunk} 缺少组件名");
                 }
-                let ext = reg.ext(name)?;
-                if sel.per_ext.contains_key(name) {
-                    bail!("--ext 里重复指定了扩展 {name}");
+                let component = reg.component(name)?;
+                if sel.per_component.contains_key(name) {
+                    bail!("组件 spec 里重复指定了组件 {name}");
                 }
 
-                let mut spec = ExtSpec::default();
+                let mut spec = ComponentSpec::default();
                 if let Some(value) = value {
                     if value.is_empty() {
-                        bail!("--ext {name} 的选项是空的");
+                        bail!("组件 {name} 的选项是空的");
                     }
                     for item in split_top(value, ',')? {
                         let item = item.trim();
-                        if let Some(m) = item.strip_prefix("link:") {
-                            spec.link = Some(Mode::parse(m)?);
+                        if let Some(m) = item.strip_prefix("mode:") {
+                            if !component.modes.iter().any(|mode| mode == m) {
+                                bail!(
+                                    "component:{name} 契约不支持 mode:{m}（支持：{}）",
+                                    component.modes.join(",")
+                                );
+                            }
+                            reg.product_mode(component, m)?;
+                            spec.mode = Some(m.to_owned());
                         } else if let Some(rest) = item.strip_prefix("dep:") {
-                            let (dep, features) = parse_dep(reg, ext, rest)?;
+                            let (dep, features) = parse_dep(reg, component, rest)?;
                             if spec.deps.insert(dep.clone(), features).is_some() {
-                                bail!("--ext {name} 里重复指定了 dep:{dep}");
+                                bail!("组件 {name} 里重复指定了 dep:{dep}");
                             }
                         } else if let Some(rest) = item.strip_prefix("feature:") {
-                            let feats = parse_feature(reg, ext, rest)?;
+                            let feats = parse_feature(reg, component, rest)?;
                             let set = spec.features.get_or_insert_with(BTreeSet::new);
                             for f in feats {
                                 set.insert(f);
                             }
                         } else if let Some(version) = item.strip_prefix("version:") {
                             if version.is_empty() {
-                                bail!("--ext {name} 的 version: 后面缺少版本线");
+                                bail!("组件 {name} 的 version: 后面缺少版本线");
                             }
                             if spec.version.replace(version.to_owned()).is_some() {
-                                bail!("--ext {name} 里重复指定了 version:");
+                                bail!("组件 {name} 里重复指定了 version:");
                             }
                         } else {
                             bail!(
-                                "--ext {name} 里未知选项 {item}\
-                                 （只支持 link: / dep: / feature: / version:）"
+                                "组件 {name} 里未知选项 {item}\
+                                 （只支持 mode: / dep: / feature: / version:）"
                             );
                         }
                     }
                 }
 
-                if let Some(link) = spec.link
-                    && !ext.link.iter().any(|m| m == link.as_str())
-                {
-                    bail!(
-                        "ext:{name} 契约不支持 {}（支持：{}）",
-                        link.as_str(),
-                        ext.link.join(",")
-                    );
-                }
-                sel.per_ext.insert(name.to_owned(), spec);
+                sel.per_component.insert(name.to_owned(), spec);
             }
         }
         Ok(sel)
     }
 
-    pub fn mode_of(&self, ext: &Target) -> Result<Mode> {
-        match self.per_ext.get(&ext.name).and_then(|s| s.link) {
-            Some(m) => Ok(m),
-            None => ext.default_mode(),
-        }
+    pub fn mode_of(&self, component: &Target) -> String {
+        self.per_component
+            .get(&component.name)
+            .and_then(|s| s.mode.clone())
+            .unwrap_or_else(|| component.default_mode.clone())
     }
 
     pub fn deps_of<'a>(
         &'a self,
-        ext: &Target,
+        component: &Target,
     ) -> impl Iterator<Item = (&'a String, &'a Vec<String>)> + 'a {
-        self.per_ext
-            .get(&ext.name)
+        self.per_component
+            .get(&component.name)
             .map(|s| s.deps.iter())
             .into_iter()
             .flatten()
     }
 
-    /// 选中的扩展 feature；None 表示没写，Some(空) 表示显式关闭。
-    pub fn features_of(&self, ext: &Target) -> Option<&BTreeSet<String>> {
-        self.per_ext
-            .get(&ext.name)
+    /// 选中的组件 feature；None 表示没写，Some(空) 表示显式关闭。
+    pub fn features_of(&self, component: &Target) -> Option<&BTreeSet<String>> {
+        self.per_component
+            .get(&component.name)
             .and_then(|s| s.features.as_ref())
     }
 
-    /// 选中的扩展 feature 额外需要的依赖；没选中就返回空。
-    pub fn feature_needs<'a>(&'a self, ext: &'a Target) -> Vec<&'a String> {
-        let Some(selected) = self.features_of(ext) else {
+    /// 选中的组件 feature 额外需要的依赖；没选中就返回空。
+    pub fn feature_needs<'a>(&'a self, component: &'a Target) -> Vec<&'a String> {
+        let Some(selected) = self.features_of(component) else {
             return Vec::new();
         };
         let mut out = Vec::new();
         for name in selected {
-            if let Some(def) = ext.features.get(name) {
+            if let Some(def) = component.features.get(name) {
                 out.extend(def.needs.iter());
             }
         }
@@ -680,9 +825,9 @@ impl Selection {
     /// 本次选择给各 dep 带来的 feature 并集。
     pub fn features(&self, reg: &Registry) -> BTreeMap<String, Vec<String>> {
         let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for ext in reg.of_kind(Kind::Ext) {
-            for (dep, feats) in self.deps_of(ext) {
-                if !ext.dep_configure.contains_key(dep) || feats.is_empty() {
+        for component in reg.of_kind(Kind::Component) {
+            for (dep, feats) in self.deps_of(component) {
+                if !component.dep_configure.contains_key(dep) || feats.is_empty() {
                     continue;
                 }
                 let entry = out.entry(dep.clone()).or_default();
@@ -701,42 +846,51 @@ impl Selection {
 }
 
 /// `dep:NAME` 或 `dep:NAME[f1,f2]`；名字是依赖名，方括号里的 feature 转给该依赖。
-fn parse_dep(reg: &Registry, ext: &Target, rest: &str) -> Result<(String, Vec<String>)> {
+fn parse_dep(reg: &Registry, component: &Target, rest: &str) -> Result<(String, Vec<String>)> {
     let (name, list) = match rest.find('[') {
         Some(i) => {
             if !rest.ends_with(']') {
-                bail!("ext:{} 的 dep: 写法不完整：dep:{rest}", ext.name);
+                bail!(
+                    "component:{} 的 dep: 写法不完整：dep:{rest}",
+                    component.name
+                );
             }
             (&rest[..i], Some(&rest[i + 1..rest.len() - 1]))
         }
         None => (rest, None),
     };
     if name.is_empty() {
-        bail!("ext:{} 的 dep: 后面缺少依赖名", ext.name);
+        bail!("component:{} 的 dep: 后面缺少依赖名", component.name);
     }
-    if !ext.dep_configure.contains_key(name) {
-        let available: Vec<&str> = ext.dep_configure.keys().map(String::as_str).collect();
+    if !component.dep_configure.contains_key(name) {
+        let available: Vec<&str> = component.dep_configure.keys().map(String::as_str).collect();
         let hint = if available.is_empty() {
             "无".to_owned()
         } else {
             available.join(", ")
         };
         bail!(
-            "ext:{} 没有依赖集成 {name}（可写：{hint}）；\
+            "component:{} 没有依赖集成 {name}（可写：{hint}）；\
              需要在 recipe 的 dep_configure 里声明",
-            ext.name
+            component.name
         );
     }
-    let dep = reg
-        .get(&format!("dep:{name}"))
-        .ok_or_else(|| anyhow!("ext:{} 的 dep:{name} 指向不存在的依赖", ext.name))?;
+    let dep = reg.get(&format!("dep:{name}")).ok_or_else(|| {
+        anyhow!(
+            "component:{} 的 dep:{name} 指向不存在的依赖",
+            component.name
+        )
+    })?;
 
     let mut features = Vec::new();
     if let Some(list) = list {
         for f in list.split([',', '+']) {
             let f = f.trim();
             if f.is_empty() {
-                bail!("ext:{} 的 dep:{name} 的 feature 列表里有空项", ext.name);
+                bail!(
+                    "component:{} 的 dep:{name} 的 feature 列表里有空项",
+                    component.name
+                );
             }
             if !dep.features.contains_key(f) {
                 bail!("dep:{} 契约没有 feature {f}", dep.name);
@@ -751,14 +905,17 @@ fn parse_dep(reg: &Registry, ext: &Target, rest: &str) -> Result<(String, Vec<St
 }
 
 /// `feature:[f1,f2]`；必须带方括号，空列表表示显式关闭全部 feature。
-fn parse_feature(reg: &Registry, ext: &Target, rest: &str) -> Result<Vec<String>> {
+fn parse_feature(reg: &Registry, component: &Target, rest: &str) -> Result<Vec<String>> {
     let list = match rest.strip_prefix('[') {
-        Some(inner) => inner
-            .strip_suffix(']')
-            .ok_or_else(|| anyhow!("ext:{} 的 feature: 写法不完整：feature:{rest}", ext.name))?,
+        Some(inner) => inner.strip_suffix(']').ok_or_else(|| {
+            anyhow!(
+                "component:{} 的 feature: 写法不完整：feature:{rest}",
+                component.name
+            )
+        })?,
         None => bail!(
-            "ext:{} 的 feature: 后面必须写方括号，例如 feature:[argon2]",
-            ext.name
+            "component:{} 的 feature: 后面必须写方括号，例如 feature:[argon2]",
+            component.name
         ),
     };
 
@@ -769,18 +926,21 @@ fn parse_feature(reg: &Registry, ext: &Target, rest: &str) -> Result<Vec<String>
     for f in list.split(',') {
         let f = f.trim();
         if f.is_empty() {
-            bail!("ext:{} 的 feature 列表里有空项", ext.name);
+            bail!("component:{} 的 feature 列表里有空项", component.name);
         }
-        if !ext.features.contains_key(f) {
-            let available: Vec<&str> = ext.features.keys().map(String::as_str).collect();
+        if !component.features.contains_key(f) {
+            let available: Vec<&str> = component.features.keys().map(String::as_str).collect();
             let hint = if available.is_empty() {
                 "无".to_owned()
             } else {
                 available.join(", ")
             };
-            bail!("ext:{} 没有 feature {f}（可用：{hint}）", ext.name);
+            bail!(
+                "component:{} 没有 feature {f}（可用：{hint}）",
+                component.name
+            );
         }
-        feature_available(reg, ext, f)?;
+        feature_available(reg, component, f)?;
         if !features.iter().any(|x| x == f) {
             features.push(f.to_owned());
         }
@@ -788,31 +948,34 @@ fn parse_feature(reg: &Registry, ext: &Target, rest: &str) -> Result<Vec<String>
     Ok(features)
 }
 
-/// 检查 ext 的一个 feature 在当前 PHP 系列和依赖线下是否可用。
-pub(crate) fn feature_available(reg: &Registry, ext: &Target, name: &str) -> Result<()> {
-    let Some(def) = ext.features.get(name) else {
+/// 检查一个 feature 在当前产品系列和依赖线下是否可用。
+pub(crate) fn feature_available(reg: &Registry, target: &Target, name: &str) -> Result<()> {
+    let Some(def) = target.features.get(name) else {
         return Ok(());
     };
     let req = &def.requires;
-    if req.php.is_empty() && req.dep.is_empty() && req.commands.is_empty() {
+    if req.product.is_empty() && req.dep.is_empty() && req.commands.is_empty() {
         return Ok(());
     }
 
-    if !req.php.is_empty() {
-        let php = reg.php()?;
-        if !req.php.iter().any(|s| s == &php.series) {
+    if !req.product.is_empty() {
+        let product = reg.product_any()?;
+        if !req.product.iter().any(|s| s == &product.series) {
             bail!(
-                "{} 的 feature {name} 需要 PHP {}，当前 PHP {}",
-                ext.id(),
-                req.php.join(", "),
-                php.series
+                "{} 的 feature {name} 需要产品系列 {}，当前 {}",
+                target.id(),
+                req.product.join(", "),
+                product.series
             );
         }
     }
     for (dep_name, lines) in &req.dep {
-        let dep = reg
-            .get(&format!("dep:{dep_name}"))
-            .ok_or_else(|| anyhow!("{} 的 feature {name} 需要不存在的 dep:{dep_name}", ext.id()))?;
+        let dep = reg.get(&format!("dep:{dep_name}")).ok_or_else(|| {
+            anyhow!(
+                "{} 的 feature {name} 需要不存在的 dep:{dep_name}",
+                target.id()
+            )
+        })?;
         if !lines.iter().any(|l| l == &dep.line) {
             let current = if dep.line.is_empty() {
                 "未绑定".to_owned()
@@ -821,7 +984,7 @@ pub(crate) fn feature_available(reg: &Registry, ext: &Target, name: &str) -> Res
             };
             bail!(
                 "{} 的 feature {name} 需要 dep:{dep_name} {}，当前 {current}",
-                ext.id(),
+                target.id(),
                 lines.join(", ")
             );
         }
@@ -830,7 +993,7 @@ pub(crate) fn feature_available(reg: &Registry, ext: &Target, name: &str) -> Res
         if !command_available(command) {
             bail!(
                 "{} 的 feature {name} 需要命令 {command}（Fedora: sudo dnf install {command}）",
-                ext.id()
+                target.id()
             );
         }
     }
@@ -908,20 +1071,56 @@ impl Registry {
         self.targets.values().filter(move |t| t.kind == kind)
     }
 
-    pub fn php(&self) -> Result<&Target> {
-        let mut it = self.of_kind(Kind::Php);
+    /// 本次加载的产品；每次只允许一个。
+    pub fn product_any(&self) -> Result<&Target> {
+        let mut it = self.of_kind(Kind::Product);
         let first = it
             .next()
-            .ok_or_else(|| anyhow!("recipes 里没有 php recipe"))?;
+            .ok_or_else(|| anyhow!("recipes 里没有 product recipe"))?;
         if it.next().is_some() {
-            bail!("当前一次只能加载一个 PHP 系列");
+            bail!("当前一次只能加载一个产品");
         }
         Ok(first)
     }
 
-    pub fn ext(&self, name: &str) -> Result<&Target> {
-        self.get(&format!("ext:{name}"))
-            .ok_or_else(|| anyhow!("未知扩展 ext:{name}"))
+    pub fn product(&self, name: &str) -> Result<&Target> {
+        let product = self.product_any()?;
+        if product.name != name {
+            bail!("当前加载的产品是 {}，不是 {name}", product.name);
+        }
+        Ok(product)
+    }
+
+    pub fn component(&self, name: &str) -> Result<&Target> {
+        self.get(&format!("component:{name}"))
+            .ok_or_else(|| anyhow!("未知组件 component:{name}"))
+    }
+
+    /// 组件默认挂载方式，来自产品 profile 的 defaults。
+    pub fn default_mode(&self, component: &Target) -> Result<String> {
+        let product = self.product(&component.product)?;
+        let mode = product
+            .profile
+            .defaults
+            .get(&component.source)
+            .ok_or_else(|| {
+                anyhow!(
+                    "产品 {} 的 profile.defaults 没有声明 {} 组件的默认挂载方式",
+                    product.name,
+                    component.source
+                )
+            })?;
+        Ok(mode.clone())
+    }
+
+    /// 校验并返回产品 profile 里的挂载方式定义。
+    pub fn product_mode<'a>(&'a self, component: &Target, mode: &str) -> Result<&'a ProfileMode> {
+        let product = self.product(&component.product)?;
+        product
+            .profile
+            .modes
+            .get(mode)
+            .ok_or_else(|| anyhow!("产品 {} 的 profile 没有挂载方式 {mode}", product.name))
     }
 
     pub fn resolve_name(&self, name: &str) -> Result<String> {
@@ -931,7 +1130,12 @@ impl Registry {
         let matches: Vec<&String> = self
             .targets
             .keys()
-            .filter(|id| id.split_once(':').map(|(_, n)| n) == Some(name))
+            .filter(|id| {
+                let Some((_, suffix)) = id.split_once(':') else {
+                    return false;
+                };
+                suffix == name || suffix.split('@').next() == Some(name)
+            })
             .collect();
         match matches.as_slice() {
             [] => bail!("未知目标 {name}"),
@@ -968,17 +1172,55 @@ impl Registry {
                     }
                 }
             }
-            for ext in &t.exts {
-                let id = format!("ext:{ext}");
-                if !self.targets.contains_key(&id) {
-                    bail!("{} 的 exts 指向不存在的扩展 {id}", t.id());
-                }
-            }
             for dep in t.dep_configure.keys() {
                 let id = format!("dep:{dep}");
                 if !self.targets.contains_key(&id) {
                     bail!("{} 的 dep_configure 指向不存在的依赖 {id}", t.id());
                 }
+            }
+            match t.kind {
+                Kind::Product => {
+                    for name in &t.components {
+                        let id = format!("component:{name}");
+                        let Some(component) = self.targets.get(&id) else {
+                            bail!("{} 的 components 指向不存在的组件 {id}", t.id());
+                        };
+                        if component.product != t.name {
+                            bail!("{id} 不属于产品 {}", t.name);
+                        }
+                    }
+                    for name in &t.bundled {
+                        let id = format!("component:{name}");
+                        if let Some(component) = self.targets.get(&id)
+                            && component.source != "bundled"
+                        {
+                            bail!("{} 的 bundled 里 {name} 不是 bundled 组件", t.id());
+                        }
+                    }
+                    for mode in t.profile.modes.keys() {
+                        t.profile.strategy(mode)?;
+                    }
+                }
+                Kind::Component => {
+                    let product = self.product(&t.product)?;
+                    for mode in &t.modes {
+                        self.product_mode(t, mode)?;
+                    }
+                    if !t.default_mode.is_empty() {
+                        self.product_mode(t, &t.default_mode)?;
+                        if !t.modes.iter().any(|m| m == &t.default_mode) {
+                            bail!("{} 的默认挂载方式 {} 不在 modes 里", t.id(), t.default_mode);
+                        }
+                    }
+                    if t.source == "bundled" && !product.bundled.contains(&t.name) {
+                        bail!(
+                            "{} 是 bundled，但产品 {} 的 bundled 列表里没有它",
+                            t.id(),
+                            product.name
+                        );
+                    }
+                }
+                Kind::Dep => {}
             }
         }
         Ok(())
@@ -992,81 +1234,105 @@ pub fn load_meta(dir: &Path, catalog: &Catalog) -> Result<Vec<RecipeMeta>> {
     let dialect = Dialect::Standard;
     let mut metas = Vec::new();
 
-    for path in recipe_files(dir)? {
-        let (kind, name) = classify(&path)?;
-        let src =
-            fs::read_to_string(&path).with_context(|| format!("读不到 {}", path.display()))?;
-        let raw = eval_meta(&path, &defs, &src, &globals, &dialect)?;
+    for file in recipe_files(dir)? {
+        let src = fs::read_to_string(&file.path)
+            .with_context(|| format!("读不到 {}", file.path.display()))?;
+        let raw = eval_meta(&file.path, &defs, &src, &globals, &dialect)?;
         let lines = match raw.lines_json {
-            Some(value) => {
-                parse_lines(value).with_context(|| format!("{}: LINES 不合法", path.display()))?
-            }
+            Some(value) => parse_lines(value)
+                .with_context(|| format!("{}: LINES 不合法", file.path.display()))?,
             None => BTreeMap::new(),
         };
-        let php_lines = match raw.php_lines_json {
-            Some(value) => parse_php_lines(value)
-                .with_context(|| format!("{}: PHP_LINES 不合法", path.display()))?,
+        let product_lines = match raw.product_lines_json {
+            Some(value) => parse_product_lines(value)
+                .with_context(|| format!("{}: PRODUCT_LINES 不合法", file.path.display()))?,
             None => BTreeMap::new(),
         };
-        let php_dep_lines = match raw.php_dep_lines_json {
-            Some(value) => parse_php_dep_lines(value)
-                .with_context(|| format!("{}: PHP_DEP_LINES 不合法", path.display()))?,
+        let product_dep_lines = match raw.product_dep_lines_json {
+            Some(value) => parse_product_dep_lines(value)
+                .with_context(|| format!("{}: PRODUCT_DEP_LINES 不合法", file.path.display()))?,
             None => BTreeMap::new(),
         };
-        if kind == Kind::Dep && (!lines.is_empty() || !php_lines.is_empty()) {
+        if file.kind == Kind::Dep && (!lines.is_empty() || !product_lines.is_empty()) {
             bail!(
-                "{}: dep recipe 不能声明 LINES/PHP_LINES（库与 PHP 无关）",
-                path.display()
+                "{}: dep recipe 不能声明 LINES/PRODUCT_LINES（库与产品无关）",
+                file.path.display()
             );
         }
-        if kind != Kind::Ext && !php_dep_lines.is_empty() {
-            bail!("{}: PHP_DEP_LINES 只用于 ext recipe", path.display());
+        if file.kind != Kind::Component && !product_dep_lines.is_empty() {
+            bail!(
+                "{}: PRODUCT_DEP_LINES 只用于 component recipe",
+                file.path.display()
+            );
+        }
+        if file.kind == Kind::Component {
+            for (line, meta) in &lines {
+                if meta.product.is_empty() {
+                    bail!(
+                        "{}: LINES.{line} 缺少 product 数组（组件必须声明支持哪些产品系列）",
+                        file.path.display()
+                    );
+                }
+            }
         }
 
-        let mut builtin_exts = Vec::new();
-        let series = if kind == Kind::Php {
+        let mut bundled = Vec::new();
+        if file.kind == Kind::Product {
             if raw.is_function {
-                bail!("{}: php recipe 的 TARGET 不能是函数", path.display());
+                bail!(
+                    "{}: 产品 recipe 的 TARGET 必须直接是 product(...)，不能是函数",
+                    file.path.display()
+                );
             }
             let value = raw
                 .target_json
-                .ok_or_else(|| anyhow!("{}: 缺少 TARGET", path.display()))?;
+                .ok_or_else(|| anyhow!("{}: 缺少 TARGET", file.path.display()))?;
             let obj = value
                 .as_object()
-                .ok_or_else(|| anyhow!("{}: TARGET 必须是 dict", path.display()))?;
-            if obj.get("kind").and_then(|v| v.as_str()) != Some("php") {
-                bail!("{}: 根目录的 recipe 必须是 php", path.display());
+                .ok_or_else(|| anyhow!("{}: TARGET 必须是 dict", file.path.display()))?;
+            if obj.get("kind").and_then(|v| v.as_str()) != Some("product") {
+                bail!(
+                    "{}: products/<产品>/<系列>.star 的 kind 必须是 product",
+                    file.path.display()
+                );
             }
             let series = obj
                 .get("series")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("{}: php TARGET 缺少 series", path.display()))?
-                .to_owned();
-            if series != name {
+                .ok_or_else(|| anyhow!("{}: product TARGET 缺少 series", file.path.display()))?;
+            if Some(series) != file.series.as_deref() {
                 bail!(
-                    "{}: 文件名 php{name}.star 与 series={series} 不一致",
-                    path.display()
+                    "{}: 文件名 {} 与 series={series} 不一致",
+                    file.path.display(),
+                    file.name
                 );
             }
-            builtin_exts = obj
-                .get("builtin_exts")
+            if let Some(name) = obj.get("name").and_then(|v| v.as_str())
+                && Some(name) != file.product.as_deref()
+            {
+                bail!(
+                    "{}: TARGET.name={name} 与目录 {} 不一致",
+                    file.path.display(),
+                    file.product.clone().unwrap_or_default()
+                );
+            }
+            bundled = obj
+                .get("bundled")
                 .map(|v| serde_json::from_value(v.clone()))
                 .transpose()
-                .with_context(|| format!("{}: builtin_exts 不合法", path.display()))?
+                .with_context(|| format!("{}: bundled 不合法", file.path.display()))?
                 .unwrap_or_default();
-            Some(series)
-        } else {
-            None
-        };
+        }
 
         metas.push(RecipeMeta {
-            kind,
-            name,
-            series,
+            kind: file.kind,
+            name: file.name,
+            series: file.series,
+            product: file.product,
             lines,
-            php_lines,
-            php_dep_lines,
-            builtin_exts,
+            product_lines,
+            product_dep_lines,
+            bundled,
         });
     }
 
@@ -1078,106 +1344,175 @@ pub fn load_meta(dir: &Path, catalog: &Catalog) -> Result<Vec<RecipeMeta>> {
 pub fn load_targets(
     dir: &Path,
     catalog: &Catalog,
+    product_name: &str,
     series: &str,
     metas: &[RecipeMeta],
     lines: &BTreeMap<String, String>,
     base_ctx: &serde_json::Value,
-    builtin_exts: &[String],
 ) -> Result<Registry> {
     let defs = read_defs(dir)?;
     let globals = Globals::standard();
     let dialect = Dialect::Standard;
+    let files = recipe_files(dir)?;
     let mut targets = Vec::new();
 
-    for path in recipe_files(dir)? {
-        let (kind, name) = classify(&path)?;
-        if kind == Kind::Php && name != series {
+    let product_meta = metas
+        .iter()
+        .find(|meta| {
+            meta.kind == Kind::Product
+                && meta.name == product_name
+                && meta.series.as_deref() == Some(series)
+        })
+        .ok_or_else(|| anyhow!("没有找到产品 {product_name}@{series} 的 recipe 元数据"))?;
+    let bundled = product_meta.bundled.clone();
+
+    // 产品先加载：组件的默认挂载方式来自产品 profile。
+    for file in files.iter().filter(|file| {
+        file.kind == Kind::Product
+            && file.name == product_name
+            && file.series.as_deref() == Some(series)
+    }) {
+        let src = fs::read_to_string(&file.path)
+            .with_context(|| format!("读不到 {}", file.path.display()))?;
+        let mut ctx = base_ctx.clone();
+        ctx["is_bundled"] = serde_json::Value::Bool(false);
+        let json = eval_target(&file.path, &defs, &src, &globals, &dialect, &ctx)?;
+        let mut target: Target = serde_json::from_value(json)
+            .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
+        if target.kind != Kind::Product {
+            bail!("{}: TARGET.kind 必须是 product", file.path.display());
+        }
+        let artifact = catalog
+            .get(product_name, series)
+            .ok_or_else(|| anyhow!("catalog 里没有 {product_name} {series}"))?;
+        target.name = product_name.to_owned();
+        target.version = artifact.version.clone();
+        target.url = artifact.url.clone();
+        target.sha256 = artifact.sha256.clone();
+        target.series = series.to_owned();
+        target.line = series.to_owned();
+        target.validate(&file.path)?;
+        targets.push(target);
+    }
+    let product = targets
+        .iter()
+        .find(|t| t.kind == Kind::Product)
+        .cloned()
+        .ok_or_else(|| anyhow!("没有找到产品 {product_name}@{series} 的 recipe"))?;
+
+    for file in files.iter().filter(|file| file.kind == Kind::Dep) {
+        let src = fs::read_to_string(&file.path)
+            .with_context(|| format!("读不到 {}", file.path.display()))?;
+        let self_value = base_ctx
+            .get("deps")
+            .and_then(|deps| deps.get(&file.name))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        // 没绑定版本线的多线依赖库不加载；真实流程里消费它的组件会把线约束进来。
+        if self_value.is_null() {
             continue;
         }
-        let src =
-            fs::read_to_string(&path).with_context(|| format!("读不到 {}", path.display()))?;
+        let mut ctx = base_ctx.clone();
+        ctx["is_bundled"] = serde_json::Value::Bool(false);
+        ctx["self"] = self_value;
+        let json = eval_target(&file.path, &defs, &src, &globals, &dialect, &ctx)?;
+        let mut target: Target = serde_json::from_value(json)
+            .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
+        if target.kind != Kind::Dep {
+            bail!("{}: TARGET.kind 与目录不一致", file.path.display());
+        }
+        if target.name != file.name {
+            bail!(
+                "{}: TARGET.name={} 与文件名 {} 不一致",
+                file.path.display(),
+                target.name,
+                file.name
+            );
+        }
+        target.line = lines.get(&file.name).cloned().unwrap_or_default();
+        target.validate(&file.path)?;
+        targets.push(target);
+    }
 
-        let is_builtin = kind == Kind::Ext && builtin_exts.iter().any(|item| item == &name);
-        let self_value = if kind == Kind::Php {
+    for file in files.iter().filter(|file| {
+        file.kind == Kind::Component && file.product.as_deref() == Some(product_name)
+    }) {
+        let is_bundled = bundled.iter().any(|item| item == &file.name);
+        let src = fs::read_to_string(&file.path)
+            .with_context(|| format!("读不到 {}", file.path.display()))?;
+        let self_value = if is_bundled {
             serde_json::Value::Null
         } else {
             base_ctx
                 .get("deps")
-                .and_then(|deps| deps.get(&name))
+                .and_then(|deps| deps.get(&file.name))
                 .cloned()
                 .unwrap_or(serde_json::Value::Null)
         };
-        // 既不是当前 PHP 的内置扩展，也没有 catalog 记录的扩展在当前系列不可用。
-        // 例如 gd 只写进了 8.5 的 builtin_exts；其他系列不加载它的 recipe。
-        if kind == Kind::Ext && !is_builtin && self_value.is_null() {
-            continue;
-        }
-        // 没绑定版本线的多线依赖库（如 catalog 里同时有 7.88 / 8.23 的 libcurl）
-        // 不加载；真实流程里消费它的扩展会把线约束进来，未绑定说明这次方案用不到它。
-        if kind == Kind::Dep && self_value.is_null() {
+        // 外部组件没有绑定版本线（多线且这次没选）时不加载。
+        if !is_bundled && self_value.is_null() {
             continue;
         }
         let mut ctx = base_ctx.clone();
-        ctx["is_builtin"] = serde_json::Value::Bool(is_builtin);
-        if kind != Kind::Php {
-            ctx["self"] = self_value;
-        }
-
-        let json = eval_target(&path, &defs, &src, &globals, &dialect, &ctx)?;
+        ctx["is_bundled"] = serde_json::Value::Bool(is_bundled);
+        ctx["self"] = self_value;
+        let json = eval_target(&file.path, &defs, &src, &globals, &dialect, &ctx)?;
         let mut target: Target = serde_json::from_value(json)
-            .with_context(|| format!("{}: TARGET 字段不合法", path.display()))?;
-
-        match kind {
-            Kind::Php => {
-                if target.kind != Kind::Php {
-                    bail!("{}: TARGET.kind 必须是 php", path.display());
-                }
-                let artifact = catalog
-                    .get("php", series)
-                    .ok_or_else(|| anyhow!("catalog 里没有 PHP {series}"))?;
-                target.name = artifact.version.clone();
-                target.version = artifact.version.clone();
-                target.url = artifact.url.clone();
-                target.sha256 = artifact.sha256.clone();
-                target.series = series.to_owned();
-                target.line = series.to_owned();
-            }
-            Kind::Dep | Kind::Ext => {
-                if target.kind != kind {
-                    bail!("{}: TARGET.kind 与目录不一致", path.display());
-                }
-                if target.name != name {
-                    bail!(
-                        "{}: TARGET.name={} 与文件名 {} 不一致",
-                        path.display(),
-                        target.name,
-                        name
-                    );
-                }
-                if kind == Kind::Ext {
-                    target.origin = if is_builtin {
-                        "builtin".to_owned()
-                    } else {
-                        "pecl".to_owned()
-                    };
-                }
-                let versioned = metas
-                    .iter()
-                    .any(|m| m.kind == kind && m.name == name && !m.lines.is_empty());
-                if versioned || kind == Kind::Dep {
-                    target.line = lines.get(&name).cloned().unwrap_or_default();
-                }
-            }
+            .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
+        if target.kind != Kind::Component {
+            bail!("{}: TARGET.kind 与目录不一致", file.path.display());
         }
-
-        target.validate(&path)?;
+        if target.name != file.name {
+            bail!(
+                "{}: TARGET.name={} 与文件名 {} 不一致",
+                file.path.display(),
+                target.name,
+                file.name
+            );
+        }
+        target.product = product_name.to_owned();
+        target.source = if is_bundled {
+            "bundled".to_owned()
+        } else {
+            "external".to_owned()
+        };
+        target.default_mode = default_mode_of(&product, &target, &file.path)?;
+        target.line = lines.get(&file.name).cloned().unwrap_or_default();
+        target.validate(&file.path)?;
         targets.push(target);
     }
 
-    if !targets.iter().any(|t| t.kind == Kind::Php) {
-        bail!("没有找到 PHP {series} 的 recipe");
+    if !targets.iter().any(|t| t.kind == Kind::Product) {
+        bail!("没有找到产品 {product_name}@{series} 的 recipe");
     }
     Registry::from_targets(targets)
+}
+
+fn default_mode_of(product: &Target, component: &Target, path: &Path) -> Result<String> {
+    let mode = product
+        .profile
+        .defaults
+        .get(&component.source)
+        .cloned()
+        .or_else(|| component.modes.first().cloned())
+        .ok_or_else(|| {
+            anyhow!(
+                "{}: component:{} 没有 modes，产品 {} 的 profile.defaults 也没有 {} 的默认方式",
+                path.display(),
+                component.name,
+                product.name,
+                component.source
+            )
+        })?;
+    if !component.modes.iter().any(|m| m == &mode) {
+        bail!(
+            "{}: component:{} 的默认挂载方式 {mode} 不在 modes 里（{}）",
+            path.display(),
+            component.name,
+            component.modes.join(", ")
+        );
+    }
+    Ok(mode)
 }
 
 fn read_defs(dir: &Path) -> Result<String> {
@@ -1185,28 +1520,73 @@ fn read_defs(dir: &Path) -> Result<String> {
     fs::read_to_string(&path).with_context(|| format!("读不到 {}", path.display()))
 }
 
-fn recipe_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    for sub in ["dep", "ext"] {
-        let d = dir.join(sub);
-        if d.is_dir() {
-            files.extend(star_files(&d)?);
+struct RecipeFile {
+    path: PathBuf,
+    kind: Kind,
+    name: String,
+    /// 产品 / 组件所属的产品名。
+    product: Option<String>,
+    /// 产品系列。
+    series: Option<String>,
+}
+
+fn recipe_files(dir: &Path) -> Result<Vec<RecipeFile>> {
+    if dir.join("ext").is_dir() {
+        bail!(
+            "{} 还留着旧的 ext/ 目录；组件 recipe 已改到 components/<产品>/",
+            dir.display()
+        );
+    }
+    for path in star_files(dir)? {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if stem.starts_with("php") {
+            bail!(
+                "{} 是旧的产品 recipe 路径；已改到 products/php/<系列>.star",
+                path.display()
+            );
         }
     }
-    for f in star_files(dir)? {
-        if f.file_name().and_then(|s| s.to_str()) != Some("defs.star") {
-            files.push(f);
+
+    let mut files = Vec::new();
+    for file in star_files(&dir.join("dep"))? {
+        files.push(classify(&file)?);
+    }
+    for (sub, kind) in [("components", Kind::Component), ("products", Kind::Product)] {
+        let root = dir.join(sub);
+        if !root.is_dir() {
+            continue;
+        }
+        for entry in
+            fs::read_dir(&root).with_context(|| format!("读不到目录 {}", root.display()))?
+        {
+            let product_dir = entry?.path();
+            if !product_dir.is_dir() {
+                continue;
+            }
+            for file in star_files(&product_dir)? {
+                let classified = classify(&file)?;
+                if classified.kind != kind {
+                    bail!("{}: 目录和 recipe 类型不一致", file.display());
+                }
+                files.push(classified);
+            }
         }
     }
     if files.is_empty() {
         bail!("{} 下没有任何 recipe", dir.display());
     }
-    files.sort();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
 }
 
 fn star_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut v = Vec::new();
+    if !dir.is_dir() {
+        return Ok(v);
+    }
     for entry in fs::read_dir(dir).with_context(|| format!("读不到目录 {}", dir.display()))? {
         let path = entry?.path();
         if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("star") {
@@ -1217,7 +1597,7 @@ fn star_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(v)
 }
 
-fn classify(path: &Path) -> Result<(Kind, String)> {
+fn classify(path: &Path) -> Result<RecipeFile> {
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1225,25 +1605,50 @@ fn classify(path: &Path) -> Result<(Kind, String)> {
     let parent = path
         .parent()
         .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str());
-    match parent {
-        Some("dep") => Ok((Kind::Dep, stem.to_owned())),
-        Some("ext") => Ok((Kind::Ext, stem.to_owned())),
-        _ => {
-            let series = stem
-                .strip_prefix("php")
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow!("{}: 根目录只允许 php<系列>.star", path.display()))?;
-            Ok((Kind::Php, series.to_owned()))
-        }
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let grand = path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    if parent == "dep" {
+        return Ok(RecipeFile {
+            path: path.to_path_buf(),
+            kind: Kind::Dep,
+            name: stem.to_owned(),
+            product: None,
+            series: None,
+        });
+    }
+    match grand {
+        "components" => Ok(RecipeFile {
+            path: path.to_path_buf(),
+            kind: Kind::Component,
+            name: stem.to_owned(),
+            product: Some(parent.to_owned()),
+            series: None,
+        }),
+        "products" => Ok(RecipeFile {
+            path: path.to_path_buf(),
+            kind: Kind::Product,
+            name: parent.to_owned(),
+            product: Some(parent.to_owned()),
+            series: Some(stem.to_owned()),
+        }),
+        _ => bail!(
+            "{}: recipe 必须放在 dep/、components/<产品>/ 或 products/<产品>/ 下",
+            path.display()
+        ),
     }
 }
 
 struct MetaRaw {
     target_json: Option<serde_json::Value>,
     lines_json: Option<serde_json::Value>,
-    php_lines_json: Option<serde_json::Value>,
-    php_dep_lines_json: Option<serde_json::Value>,
+    product_lines_json: Option<serde_json::Value>,
+    product_dep_lines_json: Option<serde_json::Value>,
     is_function: bool,
 }
 
@@ -1284,21 +1689,21 @@ fn eval_meta(
             .map(|value| value.to_json_value())
             .transpose()
             .with_context(|| format!("{name}: LINES 无法转成 JSON"))?;
-        let php_lines_json = module
-            .get("PHP_LINES")
+        let product_lines_json = module
+            .get("PRODUCT_LINES")
             .map(|value| value.to_json_value())
             .transpose()
-            .with_context(|| format!("{name}: PHP_LINES 无法转成 JSON"))?;
-        let php_dep_lines_json = module
-            .get("PHP_DEP_LINES")
+            .with_context(|| format!("{name}: PRODUCT_LINES 无法转成 JSON"))?;
+        let product_dep_lines_json = module
+            .get("PRODUCT_DEP_LINES")
             .map(|value| value.to_json_value())
             .transpose()
-            .with_context(|| format!("{name}: PHP_DEP_LINES 无法转成 JSON"))?;
+            .with_context(|| format!("{name}: PRODUCT_DEP_LINES 无法转成 JSON"))?;
         Ok(MetaRaw {
             target_json,
             lines_json,
-            php_lines_json,
-            php_dep_lines_json,
+            product_lines_json,
+            product_dep_lines_json,
             is_function,
         })
     })
@@ -1348,64 +1753,64 @@ fn eval_target(
     })
 }
 
-fn parse_php_lines(value: serde_json::Value) -> Result<BTreeMap<String, Vec<String>>> {
+fn parse_product_lines(value: serde_json::Value) -> Result<BTreeMap<String, Vec<String>>> {
     let obj = value
         .as_object()
-        .ok_or_else(|| anyhow!("PHP_LINES 必须是 dict"))?;
+        .ok_or_else(|| anyhow!("PRODUCT_LINES 必须是 dict"))?;
     let mut out = BTreeMap::new();
-    for (php, value) in obj {
+    for (series, value) in obj {
         let list = value
             .as_array()
-            .ok_or_else(|| anyhow!("PHP_LINES.{php} 必须是数组"))?;
+            .ok_or_else(|| anyhow!("PRODUCT_LINES.{series} 必须是数组"))?;
         let lines: Vec<String> = list
             .iter()
             .map(|v| {
                 v.as_str()
                     .map(str::to_owned)
-                    .ok_or_else(|| anyhow!("PHP_LINES.{php} 里必须是字符串"))
+                    .ok_or_else(|| anyhow!("PRODUCT_LINES.{series} 里必须是字符串"))
             })
             .collect::<Result<_>>()?;
         if lines.is_empty() {
-            bail!("PHP_LINES.{php} 不能为空");
+            bail!("PRODUCT_LINES.{series} 不能为空");
         }
-        out.insert(php.clone(), lines);
+        out.insert(series.clone(), lines);
     }
     Ok(out)
 }
 
-fn parse_php_dep_lines(
+fn parse_product_dep_lines(
     value: serde_json::Value,
 ) -> Result<BTreeMap<String, BTreeMap<String, Vec<String>>>> {
     let obj = value
         .as_object()
-        .ok_or_else(|| anyhow!("PHP_DEP_LINES 必须是 dict"))?;
+        .ok_or_else(|| anyhow!("PRODUCT_DEP_LINES 必须是 dict"))?;
     let mut out = BTreeMap::new();
-    for (php, value) in obj {
+    for (series, value) in obj {
         let deps = value
             .as_object()
-            .ok_or_else(|| anyhow!("PHP_DEP_LINES.{php} 必须是 dict"))?;
+            .ok_or_else(|| anyhow!("PRODUCT_DEP_LINES.{series} 必须是 dict"))?;
         let mut parsed = BTreeMap::new();
         for (dep, value) in deps {
             let list = value
                 .as_array()
-                .ok_or_else(|| anyhow!("PHP_DEP_LINES.{php}.{dep} 必须是数组"))?;
+                .ok_or_else(|| anyhow!("PRODUCT_DEP_LINES.{series}.{dep} 必须是数组"))?;
             let lines: Vec<String> = list
                 .iter()
                 .map(|v| {
                     v.as_str()
                         .map(str::to_owned)
-                        .ok_or_else(|| anyhow!("PHP_DEP_LINES.{php}.{dep} 里必须是字符串"))
+                        .ok_or_else(|| anyhow!("PRODUCT_DEP_LINES.{series}.{dep} 里必须是字符串"))
                 })
                 .collect::<Result<_>>()?;
             if lines.is_empty() {
-                bail!("PHP_DEP_LINES.{php}.{dep} 不能为空");
+                bail!("PRODUCT_DEP_LINES.{series}.{dep} 不能为空");
             }
             parsed.insert(dep.clone(), lines);
         }
         if parsed.is_empty() {
-            bail!("PHP_DEP_LINES.{php} 不能为空");
+            bail!("PRODUCT_DEP_LINES.{series} 不能为空");
         }
-        out.insert(php.clone(), parsed);
+        out.insert(series.clone(), parsed);
     }
     Ok(out)
 }
@@ -1419,24 +1824,24 @@ fn parse_lines(value: serde_json::Value) -> Result<BTreeMap<String, LineMeta>> {
         let line_obj = value
             .as_object()
             .ok_or_else(|| anyhow!("LINES.{line} 必须是 dict"))?;
-        let php = line_obj
-            .get("php")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow!("LINES.{line} 缺少 php 数组"))?;
-        let php: Vec<String> = php
-            .iter()
+        let product = line_obj
+            .get("product")
             .map(|v| {
-                v.as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| anyhow!("LINES.{line}.php 必须是字符串"))
+                v.as_array()
+                    .ok_or_else(|| anyhow!("LINES.{line}.product 必须是数组"))?
+                    .iter()
+                    .map(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| anyhow!("LINES.{line}.product 必须是字符串"))
+                    })
+                    .collect::<Result<Vec<_>>>()
             })
-            .collect::<Result<_>>()?;
-        if php.is_empty() {
-            bail!("LINES.{line}.php 不能为空");
-        }
+            .transpose()?
+            .unwrap_or_default();
         let mut deps = BTreeMap::new();
         for (key, value) in line_obj {
-            if key == "php" {
+            if key == "product" {
                 continue;
             }
             let list = value
@@ -1452,31 +1857,37 @@ fn parse_lines(value: serde_json::Value) -> Result<BTreeMap<String, LineMeta>> {
                 .collect::<Result<_>>()?;
             deps.insert(key.clone(), list);
         }
-        out.insert(line.clone(), LineMeta { php, deps });
+        out.insert(line.clone(), LineMeta { product, deps });
     }
     Ok(out)
 }
 
 fn validate_meta_catalog(metas: &[RecipeMeta], catalog: &Catalog) -> Result<()> {
-    let recipe_php: BTreeSet<String> = metas
+    let product_names: BTreeSet<String> = metas
         .iter()
-        .filter(|m| m.kind == Kind::Php)
-        .filter_map(|m| m.series.clone())
+        .filter(|m| m.kind == Kind::Product)
+        .map(|m| m.name.clone())
         .collect();
-    let catalog_php: BTreeSet<String> = catalog
-        .lines("php")
-        .map(|l| l.keys().cloned().collect())
-        .unwrap_or_default();
-    if recipe_php != catalog_php {
-        bail!(
-            "catalog 的 PHP 系列与 recipe 不一致：recipe={:?} catalog={:?}",
-            recipe_php,
-            catalog_php
-        );
+
+    for name in &product_names {
+        let recipe_series: BTreeSet<String> = metas
+            .iter()
+            .filter(|m| m.kind == Kind::Product && &m.name == name)
+            .filter_map(|m| m.series.clone())
+            .collect();
+        let catalog_series: BTreeSet<String> = catalog
+            .lines(name)
+            .map(|l| l.keys().cloned().collect())
+            .unwrap_or_default();
+        if recipe_series != catalog_series {
+            bail!(
+                "catalog 的 {name} 系列与 recipe 不一致：recipe={recipe_series:?} catalog={catalog_series:?}"
+            );
+        }
     }
 
     for (name, lines) in &catalog.components {
-        if name == "php" {
+        if product_names.contains(name) {
             continue;
         }
         let meta = metas
@@ -1485,7 +1896,7 @@ fn validate_meta_catalog(metas: &[RecipeMeta], catalog: &Catalog) -> Result<()> 
             .or_else(|| {
                 metas
                     .iter()
-                    .find(|m| m.kind == Kind::Ext && &m.name == name)
+                    .find(|m| m.kind == Kind::Component && &m.name == name)
             })
             .ok_or_else(|| anyhow!("catalog 里的 {name} 没有 recipe"))?;
         if !meta.lines.is_empty() {
@@ -1493,86 +1904,102 @@ fn validate_meta_catalog(metas: &[RecipeMeta], catalog: &Catalog) -> Result<()> 
             let catalog_lines: BTreeSet<&String> = lines.keys().collect();
             if recipe_lines != catalog_lines {
                 bail!(
-                    "{name} 的 LINES 与 catalog 不一致：recipe={:?} catalog={:?}",
-                    recipe_lines,
-                    catalog_lines
+                    "{name} 的 LINES 与 catalog 不一致：recipe={recipe_lines:?} catalog={catalog_lines:?}"
                 );
             }
         }
     }
 
-    for meta in metas.iter().filter(|m| m.kind != Kind::Php) {
+    for meta in metas.iter().filter(|m| m.kind == Kind::Component) {
+        let product = meta.product.clone().unwrap_or_default();
+        let product_series: BTreeSet<String> = metas
+            .iter()
+            .filter(|m| m.kind == Kind::Product && m.name == product)
+            .filter_map(|m| m.series.clone())
+            .collect();
+        if product_series.is_empty() {
+            bail!(
+                "组件 {} 的 product={product} 没有对应的产品 recipe",
+                meta.name
+            );
+        }
         if !meta.lines.is_empty() && !catalog.components.contains_key(&meta.name) {
             bail!("{} 声明了 LINES，但 catalog 没有同名组件", meta.name);
         }
-        if !meta.php_lines.is_empty() {
+        for (line, lm) in &meta.lines {
+            for series in &lm.product {
+                if !product_series.contains(series) {
+                    bail!(
+                        "组件 {} 的 LINES.{line}.product 里有未知产品系列 {series}",
+                        meta.name
+                    );
+                }
+            }
+        }
+        if !meta.product_lines.is_empty() {
             let Some(component) = catalog.lines(&meta.name) else {
-                bail!("{} 声明了 PHP_LINES，但 catalog 没有同名组件", meta.name);
+                bail!(
+                    "{} 声明了 PRODUCT_LINES，但 catalog 没有同名组件",
+                    meta.name
+                );
             };
-            for (php, allowed) in &meta.php_lines {
-                if !catalog_php.contains(php) {
-                    bail!("{} 的 PHP_LINES 里有未知 PHP {php}", meta.name);
+            for (series, allowed) in &meta.product_lines {
+                if !product_series.contains(series) {
+                    bail!("{} 的 PRODUCT_LINES 里有未知产品系列 {series}", meta.name);
                 }
                 if allowed.is_empty() {
-                    bail!("{} 的 PHP_LINES.{php} 不能为空", meta.name);
+                    bail!("{} 的 PRODUCT_LINES.{series} 不能为空", meta.name);
                 }
                 for line in allowed {
                     if !component.contains_key(line) {
                         bail!(
-                            "{} 的 PHP_LINES.{php} 引用了 catalog 里不存在的线 {line}",
+                            "{} 的 PRODUCT_LINES.{series} 引用了 catalog 里不存在的线 {line}",
                             meta.name
                         );
                     }
                 }
             }
-            for php in &catalog_php {
-                if !meta.php_lines.contains_key(php) {
-                    bail!("{} 的 PHP_LINES 缺少 PHP {php}", meta.name);
-                }
-            }
         }
-        if meta.php_dep_lines.is_empty() {
+        if meta.product_dep_lines.is_empty() {
             continue;
         }
-        if meta.kind != Kind::Ext {
-            bail!("{} 声明了 PHP_DEP_LINES，但只有 ext recipe 允许", meta.name);
-        }
-        for (php, deps) in &meta.php_dep_lines {
-            if !catalog_php.contains(php) {
-                bail!("{} 的 PHP_DEP_LINES 里有未知 PHP {php}", meta.name);
+        for (series, deps) in &meta.product_dep_lines {
+            if !product_series.contains(series) {
+                bail!(
+                    "{} 的 PRODUCT_DEP_LINES 里有未知产品系列 {series}",
+                    meta.name
+                );
             }
             for (dep_name, allowed) in deps {
                 if allowed.is_empty() {
-                    bail!("{} 的 PHP_DEP_LINES.{php}.{dep_name} 不能为空", meta.name);
+                    bail!(
+                        "{} 的 PRODUCT_DEP_LINES.{series}.{dep_name} 不能为空",
+                        meta.name
+                    );
                 }
                 let is_dep = metas
                     .iter()
                     .any(|m| m.kind == Kind::Dep && m.name == *dep_name);
                 if !is_dep {
                     bail!(
-                        "{} 的 PHP_DEP_LINES.{php}.{dep_name} 不是 dep recipe",
+                        "{} 的 PRODUCT_DEP_LINES.{series}.{dep_name} 不是 dep recipe",
                         meta.name
                     );
                 }
                 let Some(component) = catalog.lines(dep_name) else {
                     bail!(
-                        "{} 的 PHP_DEP_LINES 引用了 catalog 里不存在的 dep {dep_name}",
+                        "{} 的 PRODUCT_DEP_LINES 引用了 catalog 里不存在的 dep {dep_name}",
                         meta.name
                     );
                 };
                 for line in allowed {
                     if !component.contains_key(line) {
                         bail!(
-                            "{} 的 PHP_DEP_LINES.{php}.{dep_name} 引用了 catalog 里不存在的线 {line}",
+                            "{} 的 PRODUCT_DEP_LINES.{series}.{dep_name} 引用了 catalog 里不存在的线 {line}",
                             meta.name
                         );
                     }
                 }
-            }
-        }
-        for php in &catalog_php {
-            if !meta.php_dep_lines.contains_key(php) {
-                bail!("{} 的 PHP_DEP_LINES 缺少 PHP {php}", meta.name);
             }
         }
     }
@@ -1636,93 +2063,110 @@ mod tests {
         selected: &[&str],
         pins: &[(&str, &str)],
     ) -> Result<(Registry, bind::Bindings)> {
+        load_product("php", series, selected, pins)
+    }
+
+    fn load_product(
+        product: &str,
+        series: &str,
+        selected: &[&str],
+        pins: &[(&str, &str)],
+    ) -> Result<(Registry, bind::Bindings)> {
         let dir = dir();
         let catalog = Catalog::load(&dir.join("catalog.toml"))?;
         let metas = load_meta(&dir, &catalog)?;
-        let bundle = Bundle::load(&dir.join("bundles").join(format!("php{series}.toml")))?;
+        let bundle = Bundle::load(
+            &dir.join("bundles")
+                .join(product)
+                .join(format!("{series}.toml")),
+        )?;
         let mut pin_map = BTreeMap::new();
         for (name, line) in pins {
             pin_map.insert((*name).to_owned(), (*line).to_owned());
         }
         let selected: Vec<String> = selected.iter().map(|s| (*s).to_owned()).collect();
-        // 测试直接调 bind::resolve；CLI 流程在这里之前会把 bundle 默认集 seed 进
-        // selected，这里同样补上，保证测试覆盖的是真实方案的约束。
         let mut selected = selected;
-        for name in bundle.default_exts.keys() {
+        for name in bundle.default_components.keys() {
             if !selected.contains(name) {
                 selected.push(name.clone());
             }
         }
-        let bindings = bind::resolve(&catalog, &bundle, &metas, series, &selected, &pin_map)?;
-        let php_version = catalog.php_version(series)?.to_owned();
-        let ctx = bind::context(series, &php_version, &bindings);
-        let builtin_exts = metas
-            .iter()
-            .find(|meta| meta.kind == Kind::Php && meta.series.as_deref() == Some(series))
-            .map(|meta| meta.builtin_exts.clone())
-            .unwrap_or_default();
+        let bindings = bind::resolve(
+            &catalog, &bundle, &metas, product, series, &selected, &pin_map,
+        )?;
+        let version = catalog.product_version(product, series)?.to_owned();
+        let ctx = bind::context(product, series, &version, &bindings);
         let reg = load_targets(
             &dir,
             &catalog,
+            product,
             series,
             &metas,
             &bindings.lines,
             &ctx,
-            &builtin_exts,
         )?;
         Ok((reg, bindings))
     }
 
     #[test]
-    fn builtin_facts_come_from_the_php_recipe() {
+    fn bundled_facts_come_from_the_product_recipe() {
         let (reg, _) = load("8.5", &[], &[]).unwrap();
-        let php = reg.php().unwrap();
-        assert!(php.builtin_exts.contains(&"openssl".to_owned()));
-        assert!(php.builtin_exts.contains(&"libxml".to_owned()));
+        let product = reg.product_any().unwrap();
+        assert!(product.bundled.contains(&"openssl".to_owned()));
+        assert!(product.bundled.contains(&"libxml".to_owned()));
         assert_eq!(
-            php.builtin_disable.get("libxml").map(String::as_str),
+            product.bundled_disable.get("libxml").map(String::as_str),
             Some("--without-libxml")
         );
-        assert_eq!(reg.ext("openssl").unwrap().origin, "builtin");
-        assert!(reg.ext("openssl").unwrap().url.is_empty());
-        assert_eq!(reg.ext("swoole").unwrap().origin, "pecl");
-        assert!(!reg.ext("swoole").unwrap().url.is_empty());
+        assert_eq!(reg.component("openssl").unwrap().source, "bundled");
+        assert!(reg.component("openssl").unwrap().url.is_empty());
+        assert_eq!(reg.component("swoole").unwrap().source, "external");
+        assert!(!reg.component("swoole").unwrap().url.is_empty());
     }
 
     #[test]
     fn default_selection_comes_from_the_bundle_table() {
         let dir = dir();
-        let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php/8.5.toml")).unwrap();
         let (reg, _) = load("8.5", &[], &[]).unwrap();
         let sel = crate::bundle::selection(&reg, &bundle, "8.5").unwrap();
-        assert_eq!(sel.mode_of(reg.ext("curl").unwrap()).unwrap(), Mode::Static);
-        assert_eq!(sel.per_ext["curl"].deps["libcurl"], vec!["ssl".to_owned()]);
         assert_eq!(
-            sel.features_of(reg.ext("openssl").unwrap()),
+            sel.mode_of(reg.component("curl").unwrap()),
+            "static".to_owned()
+        );
+        assert_eq!(
+            sel.per_component["curl"].deps["libcurl"],
+            vec!["ssl".to_owned()]
+        );
+        assert_eq!(
+            sel.features_of(reg.component("openssl").unwrap()),
             Some(&BTreeSet::from(["argon2".to_owned()]))
         );
     }
 
     #[test]
-    fn argon2_requires_the_right_php_and_openssl_line() {
+    fn argon2_requires_the_right_series_and_openssl_line() {
         let (reg, _) = load("8.5", &["openssl"], &[]).unwrap();
-        assert!(reg.ext("openssl").unwrap().features.contains_key("argon2"));
+        assert!(
+            reg.component("openssl")
+                .unwrap()
+                .features
+                .contains_key("argon2")
+        );
         assert!(Selection::parse(&reg, &["openssl=feature:[argon2]".into()]).is_ok());
 
-        // openssl 线不满足：feature 仍然声明，但选择时报错。
         let (reg, _) = load("8.5", &["openssl"], &[("openssl", "3.0")]).unwrap();
         let err = Selection::parse(&reg, &["openssl=feature:[argon2]".into()])
             .unwrap_err()
             .to_string();
         assert!(err.contains("需要 dep:openssl 3.5, 4.0，当前 3.0"), "{err}");
 
-        // PHP 系列不满足。
         let (reg, _) = load("8.2", &["openssl"], &[]).unwrap();
         let err = Selection::parse(&reg, &["openssl=feature:[argon2]".into()])
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("需要 PHP 8.4, 8.5, 8.6，当前 PHP 8.2"),
+            err.contains("需要产品系列 8.4, 8.5, 8.6，当前 8.2"),
             "{err}"
         );
     }
@@ -1732,13 +2176,13 @@ mod tests {
         let (reg, _) = load("8.5", &[], &[]).unwrap();
         let sel = Selection::parse(&reg, &["openssl=feature:[argon2]".into()]).unwrap();
         assert_eq!(
-            sel.features_of(reg.ext("openssl").unwrap()),
+            sel.features_of(reg.component("openssl").unwrap()),
             Some(&BTreeSet::from(["argon2".to_owned()]))
         );
 
         let sel = Selection::parse(&reg, &["openssl=feature:[]".into()]).unwrap();
         assert_eq!(
-            sel.features_of(reg.ext("openssl").unwrap()),
+            sel.features_of(reg.component("openssl").unwrap()),
             Some(&BTreeSet::from([]))
         );
 
@@ -1752,13 +2196,16 @@ mod tests {
     fn every_series_builds_with_bundle_defaults() {
         let dir = dir();
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
-        for series in catalog.php_series() {
+        for series in catalog.product_series("php") {
             let (reg, bindings) = load(&series, &["swoole", "openssl", "xdebug"], &[]).unwrap();
-            let php = reg.php().unwrap();
-            assert_eq!(php.version, catalog.php_version(&series).unwrap());
-            assert_eq!(php.line, series);
+            let product = reg.product_any().unwrap();
+            assert_eq!(
+                product.version,
+                catalog.product_version("php", &series).unwrap()
+            );
+            assert_eq!(product.line, series);
             assert!(reg.get("dep:swoole").is_none());
-            let swoole = reg.ext("swoole").unwrap();
+            let swoole = reg.component("swoole").unwrap();
             assert_eq!(swoole.line, bindings.lines["swoole"]);
             assert_eq!(swoole.version, bindings.artifacts["swoole"].version);
             assert!(
@@ -1803,35 +2250,38 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_php_line_is_an_error() {
+    fn unsupported_product_line_is_an_error() {
         let err = load("8.5", &["swoole"], &[("swoole", "4.8")])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("不支持 PHP 8.5"), "{err}");
+        assert!(err.contains("不支持产品 8.5"), "{err}");
     }
 
     #[test]
     fn preparse_reads_version_option() {
         let raw =
-            preparse(&["swoole=link:shared,dep:libcurl[ssl],version:6.2".to_owned()]).unwrap();
+            preparse(&["swoole=mode:shared,dep:libcurl[ssl],version:6.2".to_owned()]).unwrap();
         assert_eq!(raw.len(), 1);
         assert_eq!(raw[0].name, "swoole");
         assert_eq!(raw[0].version.as_deref(), Some("6.2"));
+    }
 
-        let raw = preparse(&["curl,openssl=version:4.0".to_owned()]).unwrap();
-        assert_eq!(raw.len(), 2);
-        assert_eq!(raw[0].name, "curl");
-        assert_eq!(raw[1].version.as_deref(), Some("4.0"));
+    #[test]
+    fn preparse_rejects_two_components_in_one_spec() {
+        let err = preparse(&["curl,openssl=version:4.0".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("一次只能指定一个组件"), "{err}");
     }
 
     #[test]
     fn gd_preset_is_used_for_explicit_selection() {
         let dir = dir();
         let (reg, _) = load("8.5", &[], &[]).unwrap();
-        let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php/8.5.toml")).unwrap();
         let presets = crate::bundle::presets(&reg, &bundle, "8.5").unwrap();
         assert_eq!(
-            presets.per_ext["gd"].features,
+            presets.per_component["gd"].features,
             Some(BTreeSet::from([
                 "freetype".to_owned(),
                 "jpeg".to_owned(),
@@ -1839,69 +2289,70 @@ mod tests {
             ]))
         );
         assert_eq!(
-            presets.per_ext["openssl"].features,
+            presets.per_component["openssl"].features,
             Some(BTreeSet::from(["argon2".to_owned()]))
         );
         assert_eq!(
-            presets.per_ext["curl"].deps["libcurl"],
+            presets.per_component["curl"].deps["libcurl"],
             vec!["ssl".to_owned()]
         );
     }
 
     #[test]
-    fn default_ext_ref_uses_preset_and_local_link() {
+    fn default_component_ref_uses_preset_and_local_mode() {
         let (reg, _) = load("8.5", &[], &[]).unwrap();
         let path =
             std::env::temp_dir().join(format!("phprt-bundle-gd-ref-{}.toml", std::process::id()));
         std::fs::write(
             &path,
             r#"
-php = "8.5"
-[ext_presets]
+product = "php"
+[component_presets]
 gd = { features = ["jpeg", "webp", "freetype"] }
-[default_exts]
-gd = { ref = "ext_presets.gd", link = "shared" }
+[default_components]
+gd = { ref = "component_presets.gd", mode = "shared" }
 "#,
         )
         .unwrap();
         let bundle = Bundle::load(&path).unwrap();
         let sel = crate::bundle::selection(&reg, &bundle, "8.5").unwrap();
         assert_eq!(
-            sel.per_ext["gd"].features,
+            sel.per_component["gd"].features,
             Some(BTreeSet::from([
                 "freetype".to_owned(),
                 "jpeg".to_owned(),
                 "webp".to_owned(),
             ]))
         );
-        assert_eq!(sel.per_ext["gd"].link, Some(Mode::Shared));
+        assert_eq!(sel.per_component["gd"].mode.as_deref(), Some("shared"));
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn gd_loads_for_series_with_builtin_facts() {
+    fn gd_loads_for_series_with_bundled_facts() {
         for series in ["8.0", "8.1", "8.2", "8.3", "8.4", "8.5"] {
             let (reg, _) = load(series, &[], &[]).unwrap();
-            assert!(reg.get("ext:gd").is_some(), "{series} 应该加载 gd");
+            assert!(reg.get("component:gd").is_some(), "{series} 应该加载 gd");
         }
 
-        // 7.4 / 8.6 还没适配内置事实，gd 不加载。
         for series in ["7.4", "8.6"] {
             let (reg, _) = load(series, &[], &[]).unwrap();
-            assert!(reg.get("ext:gd").is_none(), "{series} 不该加载 gd");
+            assert!(reg.get("component:gd").is_none(), "{series} 不该加载 gd");
         }
     }
 
     #[test]
-    fn default_exts_are_the_same_for_adapted_series() {
-        // 8.3 / 8.4 / 8.5 的默认集是同一份（只有 php / swoole 线不同）；
-        // 具体名单是 bundle 的配置，不在这里重复一份固定清单。
+    fn default_components_are_the_same_for_adapted_series() {
         let dir = dir();
         let mut keys: Option<BTreeSet<String>> = None;
         for series in ["8.3", "8.4", "8.5"] {
-            let bundle = Bundle::load(&dir.join("bundles").join(format!("php{series}.toml")))
-                .unwrap_or_else(|e| panic!("{series} bundle: {e}"));
-            let this: BTreeSet<String> = bundle.default_exts.keys().cloned().collect();
+            let bundle = Bundle::load(
+                &dir.join("bundles")
+                    .join("php")
+                    .join(format!("{series}.toml")),
+            )
+            .unwrap_or_else(|e| panic!("{series} bundle: {e}"));
+            let this: BTreeSet<String> = bundle.default_components.keys().cloned().collect();
             match &keys {
                 None => keys = Some(this),
                 Some(first) => assert_eq!(
@@ -1915,36 +2366,36 @@ gd = { ref = "ext_presets.gd", link = "shared" }
     }
 
     #[test]
-    fn gd_php_dep_lines_cover_every_php_series() {
+    fn gd_product_dep_lines_cover_every_series() {
         let dir = dir();
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
         let mut metas = load_meta(&dir, &catalog).unwrap();
         let gd = metas
             .iter()
-            .find(|m| m.kind == Kind::Ext && m.name == "gd")
+            .find(|m| m.kind == Kind::Component && m.name == "gd")
             .unwrap();
-        for php in catalog.php_series() {
+        for series in catalog.product_series("php") {
             assert!(
-                gd.php_dep_lines.contains_key(&php),
-                "gd 的 PHP_DEP_LINES 缺少 PHP {php}"
+                gd.product_dep_lines.contains_key(&series),
+                "gd 的 PRODUCT_DEP_LINES 缺少 {series}"
             );
         }
-        assert_eq!(gd.php_dep_lines["8.5"]["jpeg"], vec!["3.1".to_owned()]);
+        assert_eq!(gd.product_dep_lines["8.5"]["jpeg"], vec!["3.1".to_owned()]);
 
-        metas
+        let gd = metas
             .iter_mut()
-            .find(|m| m.kind == Kind::Ext && m.name == "gd")
-            .unwrap()
-            .php_dep_lines
-            .remove("8.6");
+            .find(|m| m.kind == Kind::Component && m.name == "gd")
+            .unwrap();
+        gd.product_dep_lines
+            .insert("9.9".to_owned(), BTreeMap::new());
         let err = validate_meta_catalog(&metas, &catalog)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("PHP_DEP_LINES 缺少 PHP 8.6"), "{err}");
+        assert!(err.contains("PRODUCT_DEP_LINES"), "{err}");
     }
 
     #[test]
-    fn gd_php_dep_lines_reject_other_lines() {
+    fn gd_product_dep_lines_reject_other_lines() {
         let dir = dir();
         let mut catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
         catalog.components.get_mut("jpeg").unwrap().insert(
@@ -1956,13 +2407,21 @@ gd = { ref = "ext_presets.gd", link = "shared" }
             },
         );
         let metas = load_meta(&dir, &catalog).unwrap();
-        let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php/8.5.toml")).unwrap();
         let mut pins = BTreeMap::new();
         pins.insert("jpeg".to_owned(), "4.0".to_owned());
-        let err = crate::bind::resolve(&catalog, &bundle, &metas, "8.5", &["gd".into()], &pins)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("jpeg 4.0 与当前 PHP/扩展选择冲突"), "{err}");
+        let err = crate::bind::resolve(
+            &catalog,
+            &bundle,
+            &metas,
+            "php",
+            "8.5",
+            &["gd".into()],
+            &pins,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("jpeg 4.0 与当前产品/组件选择冲突"), "{err}");
     }
 
     #[test]
@@ -1974,17 +2433,17 @@ gd = { ref = "ext_presets.gd", link = "shared" }
 
         let sel = Selection::parse(&reg, &["gd=feature:[jpeg,webp,freetype]".into()]).unwrap();
         let features = sel.features(&reg);
-        let php = reg.php().unwrap();
-        let php_id = format!("php:{}", php.version);
-        reg.targets.get_mut(&php_id).unwrap().exts = vec!["gd".into()];
-        let order = crate::plan::resolve(&reg, &php_id, &sel, &features).unwrap();
+        let product = reg.product_any().unwrap();
+        let product_id = product.id();
+        reg.targets.get_mut(&product_id).unwrap().components = vec!["gd".into()];
+        let order = crate::plan::resolve(&reg, &product_id, &sel, &features).unwrap();
         let ids: Vec<String> = order.iter().map(|t| t.id()).collect();
         let pos = |id: &str| ids.iter().position(|x| x == id).unwrap();
         assert!(pos("dep:zlib") < pos("dep:libpng"));
         assert!(pos("dep:libpng") < pos("dep:freetype"));
         assert!(pos("dep:libpng") < pos("dep:jpeg"));
-        assert!(pos("ext:gd") < pos("php:8.5.12"));
-        assert!(pos("dep:jpeg") < pos("ext:gd"));
+        assert!(pos("component:gd") < pos(&product_id));
+        assert!(pos("dep:jpeg") < pos("component:gd"));
     }
 
     #[test]
@@ -1994,31 +2453,18 @@ gd = { ref = "ext_presets.gd", link = "shared" }
         let metas = load_meta(&dir, &catalog).unwrap();
         let bindings = crate::bind::resolve(
             &catalog,
-            &Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap(),
+            &Bundle::load(&dir.join("bundles/php/8.5.toml")).unwrap(),
             &metas,
+            "php",
             "8.5",
             &[],
             &BTreeMap::new(),
         )
         .unwrap();
-        let php_version = catalog.php_version("8.5").unwrap().to_owned();
-        let ctx = crate::bind::context("8.5", &php_version, &bindings);
-        let builtin_exts = metas
-            .iter()
-            .find(|m| m.kind == Kind::Php && m.series.as_deref() == Some("8.5"))
-            .unwrap()
-            .builtin_exts
-            .clone();
-        let mut reg = load_targets(
-            &dir,
-            &catalog,
-            "8.5",
-            &metas,
-            &bindings.lines,
-            &ctx,
-            &builtin_exts,
-        )
-        .unwrap();
+        let version = catalog.product_version("php", "8.5").unwrap().to_owned();
+        let ctx = crate::bind::context("php", "8.5", &version, &bindings);
+        let mut reg =
+            load_targets(&dir, &catalog, "php", "8.5", &metas, &bindings.lines, &ctx).unwrap();
         let id = "dep:jpeg".to_owned();
         let dep = reg.targets.get_mut(&id).unwrap();
         dep.features.insert(
@@ -2041,7 +2487,7 @@ gd = { ref = "ext_presets.gd", link = "shared" }
     }
 
     #[test]
-    fn ext_openssl_php_lines_are_enforced() {
+    fn component_openssl_product_lines_are_enforced() {
         let (_, bindings) = load("7.4", &["openssl"], &[]).unwrap();
         assert_eq!(bindings.lines["openssl"], "1.1.1");
 
@@ -2055,7 +2501,7 @@ gd = { ref = "ext_presets.gd", link = "shared" }
     }
 
     #[test]
-    fn dep_recipes_have_no_php_relationship() {
+    fn dep_recipes_have_no_product_relationship() {
         let dir = dir();
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
         let metas = load_meta(&dir, &catalog).unwrap();
@@ -2064,17 +2510,20 @@ gd = { ref = "ext_presets.gd", link = "shared" }
             .find(|m| m.kind == Kind::Dep && m.name == "openssl")
             .unwrap();
         assert!(dep.lines.is_empty());
-        assert!(dep.php_lines.is_empty());
+        assert!(dep.product_lines.is_empty());
 
-        let ext = metas
+        let component = metas
             .iter()
-            .find(|m| m.kind == Kind::Ext && m.name == "openssl")
+            .find(|m| m.kind == Kind::Component && m.name == "openssl")
             .unwrap();
-        assert_eq!(ext.php_lines["8.5"], vec!["1.1.1", "3.0", "3.5", "4.0"]);
+        assert_eq!(
+            component.product_lines["8.5"],
+            vec!["1.1.1", "3.0", "3.5", "4.0"]
+        );
     }
 
     #[test]
-    fn dep_recipe_cannot_declare_php_relations() {
+    fn dep_recipe_cannot_declare_product_relations() {
         let dir = std::env::temp_dir().join(format!("phprt-dep-lines-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("dep")).unwrap();
@@ -2082,7 +2531,7 @@ gd = { ref = "ext_presets.gd", link = "shared" }
         std::fs::write(
             dir.join("dep/foo.star"),
             r#"
-LINES = {"1": {"php": ["8.5"]}}
+LINES = {"1": {"product": ["8.5"]}}
 
 def target(ctx):
     return {"kind": "dep", "name": "foo", "version": "1", "url": "https://example.com/foo.tar.gz"}
@@ -2099,11 +2548,28 @@ TARGET = target
     }
 
     #[test]
+    fn old_recipe_layout_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("phprt-old-layout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("ext")).unwrap();
+        std::fs::write(dir.join("defs.star"), "").unwrap();
+        std::fs::write(dir.join("php8.5.star"), "TARGET = {}").unwrap();
+        let err = load_meta(&dir, &Catalog::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("旧的 ext/ 目录"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn catalog_rejects_unknown_versions() {
         let dir = dir();
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
-        assert_eq!(catalog.find_php_series("8.5").unwrap(), "8.5");
-        assert_eq!(catalog.find_php_series("php:8.5.12").unwrap(), "8.5");
-        assert!(catalog.find_php_series("8.9").is_err());
+        assert_eq!(catalog.find_product_series("php", "8.5").unwrap(), "8.5");
+        assert_eq!(
+            catalog.find_product_series("php", "php@8.5.12").unwrap(),
+            "8.5"
+        );
+        assert!(catalog.find_product_series("php", "8.9").is_err());
     }
 }

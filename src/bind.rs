@@ -36,8 +36,9 @@ pub fn resolve(
     catalog: &Catalog,
     bundle: &Bundle,
     metas: &[RecipeMeta],
-    php_series: &str,
-    selected_exts: &[String],
+    product: &str,
+    series: &str,
+    selected_components: &[String],
     pins: &BTreeMap<String, String>,
 ) -> Result<Bindings> {
     // 1. 显式指定的线必须存在。
@@ -53,9 +54,9 @@ pub fn resolve(
         }
     }
 
-    for (name, line) in &bundle.ext_lines {
-        let Some(meta) = ext_meta(metas, name) else {
-            bail!("bundle 里的 {name} 不是扩展");
+    for (name, line) in &bundle.component_lines {
+        let Some(meta) = component_meta(metas, name) else {
+            bail!("bundle 里的 {name} 不是组件");
         };
         if meta.lines.is_empty() {
             if metas
@@ -63,11 +64,11 @@ pub fn resolve(
                 .any(|meta| meta.kind == Kind::Dep && meta.name == *name)
             {
                 bail!(
-                    "bundle 里的 {name} 是内置扩展，没有自己的版本线；\
+                    "bundle 里的 {name} 是内置组件，没有自己的版本线；\
                      依赖库 {name} 的默认线请写进 [deps]"
                 );
             }
-            bail!("bundle 里的 {name} 是内置扩展，没有自己的版本线");
+            bail!("bundle 里的 {name} 是内置组件，没有自己的版本线");
         }
         let Some(lines) = catalog.lines(name) else {
             bail!("bundle 里的 {name} 不在 catalog 中");
@@ -84,8 +85,8 @@ pub fn resolve(
             .iter()
             .any(|meta| meta.kind == Kind::Dep && meta.name == *name);
         if !is_dep {
-            if ext_meta(metas, name).is_some() {
-                bail!("bundle [deps] 里的 {name} 是扩展，默认线请写在顶层");
+            if component_meta(metas, name).is_some() {
+                bail!("bundle [deps] 里的 {name} 是组件，默认线请写在顶层");
             }
             bail!("bundle [deps] 里的 {name} 不是依赖库");
         }
@@ -99,17 +100,27 @@ pub fn resolve(
             );
         }
     }
-    for name in bundle.ext_lines.keys() {
+    for name in bundle.component_lines.keys() {
         if bundle.dep_lines.contains_key(name) {
             bail!("bundle 里的 {name} 同时写在了顶层和 [deps]");
         }
     }
-    let mut defaults = bundle.ext_lines.clone();
+    let mut defaults = bundle.component_lines.clone();
     defaults.extend(bundle.dep_lines.clone());
+
+    let product_names: BTreeSet<&str> = metas
+        .iter()
+        .filter(|meta| meta.kind == Kind::Product)
+        .map(|meta| meta.name.as_str())
+        .collect();
 
     // 2. 初始选择：pins > bundle > 唯一的线。
     let mut choices: BTreeMap<String, Choice> = BTreeMap::new();
-    for name in catalog.components.keys().filter(|name| *name != "php") {
+    for name in catalog
+        .components
+        .keys()
+        .filter(|name| !product_names.contains(name.as_str()))
+    {
         let lines = catalog.lines(name).expect("catalog 刚刚校验过");
         let choice = if let Some(line) = pins.get(name) {
             Some(Choice {
@@ -146,33 +157,32 @@ pub fn resolve(
         }
     }
 
-    // 3. 每一条已绑定的线都要满足它自己的 PHP 兼容表。
+    // 3. 每一条已绑定的线都要满足它自己的产品兼容表。
     // skipped 记录「只有一条线但不支持当前系列」的组件，供第 4 步给出准确报错。
     let mut skipped: BTreeMap<String, String> = BTreeMap::new();
     let notes = {
         let mut notes = Vec::new();
         for (name, choice) in choices.clone() {
-            let Some(meta) = component_meta(metas, &name) else {
+            let Some(meta) = component_meta_of(metas, product, &name) else {
                 continue;
             };
             if meta.lines.is_empty() {
                 continue;
             }
-            let allowed = allowed_lines(catalog, meta, php_series);
+            let allowed = allowed_lines(catalog, meta, series);
             if allowed.contains(&choice.line) {
                 continue;
             }
             if choice.source == Source::Pinned {
                 bail!(
-                    "{name} {} 不支持 PHP {php_series}（可用：{}）",
+                    "{name} {} 不支持产品 {series}（可用：{}）",
                     choice.line,
                     list(&allowed)
                 );
             }
             if choice.source == Source::Single {
                 // catalog 里只有一条线的组件会被自动绑定；如果这条线不支持当前
-                // 系列，就当作该系列没有这个扩展，不加载它的 recipe。
-                // （例如 protobuf 只有 5.36 一条线，最低要求 PHP 8.2。）
+                // 系列，就当作该系列没有这个组件，不加载它的 recipe。
                 skipped.insert(name.clone(), choice.line.clone());
                 choices.remove(&name);
                 continue;
@@ -180,7 +190,7 @@ pub fn resolve(
             if choice.source == Source::Bundle && allowed.len() == 1 {
                 let line = allowed.iter().next().expect("刚刚判断只有一个").clone();
                 notes.push(format!(
-                    "{name} 的默认线 {} 不适用于 PHP {php_series}，自动改用 {line}",
+                    "{name} 的默认线 {} 不适用于产品 {series}，自动改用 {line}",
                     choice.line
                 ));
                 choices.insert(
@@ -193,7 +203,7 @@ pub fn resolve(
                 continue;
             }
             bail!(
-                "{name} {} 不支持 PHP {php_series}（可用：{}）",
+                "{name} {} 不支持产品 {series}（可用：{}）",
                 choice.line,
                 list(&allowed)
             );
@@ -202,34 +212,53 @@ pub fn resolve(
     };
     let mut notes = notes;
 
-    // 4. 收集被选扩展对依赖线的约束。内置扩展一定会加载（is_builtin），
-    //    即便不在本次方案里，它的 PHP_LINES / PHP_DEP_LINES 也要参与约束，
+    // 4. 收集被选组件和产品本身对依赖线的约束。内置组件一定会加载（is_bundled），
+    //    即便不在本次方案里，它的 PRODUCT_LINES / PRODUCT_DEP_LINES 也要参与约束，
     //    否则多线依赖库（如 libcurl）会留在未绑定状态。
-    let builtin_exts = metas
+    let product_meta = metas
         .iter()
-        .find(|meta| meta.kind == Kind::Php)
-        .map(|meta| meta.builtin_exts.clone())
-        .unwrap_or_default();
-    let mut considered: Vec<String> = selected_exts.to_vec();
-    for name in &builtin_exts {
-        if !considered.contains(name) {
+        .find(|meta| {
+            meta.kind == Kind::Product
+                && meta.name == product
+                && meta.series.as_deref() == Some(series)
+        })
+        .ok_or_else(|| anyhow::anyhow!("没有找到产品 {product}@{series} 的 recipe 元数据"))?;
+    let bundled = product_meta.bundled.clone();
+    let mut considered: Vec<String> = selected_components.to_vec();
+    for name in &bundled {
+        // 没有 recipe 的内置组件只影响产品 configure，不参与依赖线约束。
+        if component_meta_of(metas, product, name).is_some() && !considered.contains(name) {
             considered.push(name.clone());
         }
     }
     let mut constraints: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
-    for ext_name in &considered {
-        let Some(meta) = ext_meta(metas, ext_name) else {
-            bail!("未知扩展 ext:{ext_name}");
+
+    // 产品自己的版本线可以约束依赖（如 nginx 1.29 允许哪些 OpenSSL / PCRE2）。
+    if let Some(line_meta) = product_meta.lines.get(series) {
+        for (dep, allowed) in &line_meta.deps {
+            if !catalog.components.contains_key(dep) {
+                bail!("产品 {product}@{series} 依赖 {dep}，但 catalog 没有这个组件");
+            }
+            constraints
+                .entry(dep.clone())
+                .or_default()
+                .push(allowed.clone());
+        }
+    }
+
+    for component_name in &considered {
+        let Some(meta) = component_meta_of(metas, product, component_name) else {
+            bail!("未知组件 component:{component_name}");
         };
-        // builtin 扩展（如 ext:openssl）没有自己的版本线，
-        // 用 PHP_LINES 约束同名的依赖库。
-        if !meta.php_lines.is_empty() {
-            let Some(allowed) = meta.php_lines.get(php_series) else {
-                bail!("ext:{ext_name} 没有声明 PHP {php_series} 的兼容线");
+        // 内置组件（如 component:openssl）没有自己的版本线，
+        // 用 PRODUCT_LINES 约束同名的依赖库。
+        if !meta.product_lines.is_empty() {
+            let Some(allowed) = meta.product_lines.get(series) else {
+                bail!("component:{component_name} 没有声明产品 {series} 的兼容线");
             };
             if !catalog.components.contains_key(&meta.name) {
                 bail!(
-                    "ext:{ext_name} 声明了 PHP_LINES，但 catalog 没有同名组件 {}",
+                    "component:{component_name} 声明了 PRODUCT_LINES，但 catalog 没有同名组件 {}",
                     meta.name
                 );
             }
@@ -238,13 +267,15 @@ pub fn resolve(
                 .or_default()
                 .push(allowed.clone());
         }
-        if !meta.php_dep_lines.is_empty() {
-            let Some(deps) = meta.php_dep_lines.get(php_series) else {
-                bail!("ext:{ext_name} 没有声明 PHP {php_series} 的依赖兼容线");
+        if !meta.product_dep_lines.is_empty() {
+            let Some(deps) = meta.product_dep_lines.get(series) else {
+                bail!("component:{component_name} 没有声明产品 {series} 的依赖兼容线");
             };
             for (dep, allowed) in deps {
                 if !catalog.components.contains_key(dep) {
-                    bail!("ext:{ext_name} 的 PHP_DEP_LINES 引用了 catalog 没有的 {dep}");
+                    bail!(
+                        "component:{component_name} 的 PRODUCT_DEP_LINES 引用了 catalog 没有的 {dep}"
+                    );
                 }
                 constraints
                     .entry(dep.clone())
@@ -255,22 +286,25 @@ pub fn resolve(
         if meta.lines.is_empty() {
             continue;
         }
-        if let Some(line) = skipped.get(ext_name) {
-            bail!("ext:{ext_name} {line} 不支持 PHP {php_series}，该系列不加载这个扩展");
+        if let Some(line) = skipped.get(component_name) {
+            bail!("component:{component_name} {line} 不支持产品 {series}，该系列不加载这个组件");
         }
-        let Some(choice) = choices.get(ext_name) else {
+        let Some(choice) = choices.get(component_name) else {
             bail!(
-                "请为扩展 {ext_name} 指定版本线，例如 --ext {ext_name}=version:{}",
+                "请为组件 {component_name} 指定版本线，例如 --component {component_name}=version:{}",
                 meta.lines.keys().next().cloned().unwrap_or_default()
             );
         };
         let Some(line_meta) = meta.lines.get(&choice.line) else {
-            bail!("ext:{ext_name} 的 recipe 没有声明版本线 {}", choice.line);
+            bail!(
+                "component:{component_name} 的 recipe 没有声明版本线 {}",
+                choice.line
+            );
         };
         for (dep, allowed) in &line_meta.deps {
             if !catalog.components.contains_key(dep) {
                 bail!(
-                    "ext:{ext_name} 的版本线 {} 依赖 {dep}，但 catalog 没有这个组件",
+                    "component:{component_name} 的版本线 {} 依赖 {dep}，但 catalog 没有这个组件",
                     choice.line
                 );
             }
@@ -290,7 +324,7 @@ pub fn resolve(
             } else {
                 meta.lines
                     .iter()
-                    .filter(|(line, lm)| dep_lines.contains_key(*line) && php_in(lm, php_series))
+                    .filter(|(line, lm)| dep_lines.contains_key(*line) && product_in(lm, series))
                     .map(|(line, _)| line.clone())
                     .collect()
             }
@@ -306,7 +340,7 @@ pub fn resolve(
             Some(choice) if allowed.contains(&choice.line) => {}
             Some(choice) if choice.source == Source::Pinned => {
                 bail!(
-                    "{dep} {} 与当前 PHP/扩展选择冲突（可用：{}）",
+                    "{dep} {} 与当前产品/组件选择冲突（可用：{}）",
                     choice.line,
                     list(&allowed)
                 );
@@ -327,7 +361,7 @@ pub fn resolve(
             }
             Some(choice) => {
                 bail!(
-                    "{dep} {} 与当前 PHP/扩展选择冲突（可用：{}）",
+                    "{dep} {} 与当前产品/组件选择冲突（可用：{}）",
                     choice.line,
                     list(&allowed)
                 );
@@ -344,7 +378,7 @@ pub fn resolve(
                         },
                     );
                 } else if allowed.is_empty() {
-                    bail!("没有 {dep} 版本线同时满足 PHP {php_series} 和已选扩展");
+                    bail!("没有 {dep} 版本线同时满足产品 {series} 和已选组件");
                 } else {
                     bail!("请用 --dep {dep}=<线> 指定版本（可用：{}）", list(&allowed));
                 }
@@ -369,7 +403,12 @@ pub fn resolve(
 }
 
 /// 生成注入给 recipe 的公共 ctx；每个 recipe 还会再补一个 self。
-pub fn context(php_series: &str, php_version: &str, bindings: &Bindings) -> serde_json::Value {
+pub fn context(
+    product: &str,
+    product_series: &str,
+    product_version: &str,
+    bindings: &Bindings,
+) -> serde_json::Value {
     let mut deps = serde_json::Map::new();
     for (name, artifact) in &bindings.artifacts {
         deps.insert(
@@ -381,8 +420,9 @@ pub fn context(php_series: &str, php_version: &str, bindings: &Bindings) -> serd
         );
     }
     serde_json::json!({
-        "php_series": php_series,
-        "php_version": php_version,
+        "product": product,
+        "product_series": product_series,
+        "product_version": product_version,
         "bindings": bindings.lines,
         "deps": deps,
     })
@@ -397,6 +437,19 @@ pub fn artifact_json(line: &str, artifact: &Artifact) -> serde_json::Value {
     })
 }
 
+/// 某产品下的组件元数据；同名依赖库不参与匹配。
+fn component_meta_of<'a>(
+    metas: &'a [RecipeMeta],
+    product: &str,
+    name: &str,
+) -> Option<&'a RecipeMeta> {
+    metas.iter().find(|meta| {
+        meta.kind == Kind::Component
+            && meta.name == name
+            && meta.product.as_deref() == Some(product)
+    })
+}
+
 fn component_meta<'a>(metas: &'a [RecipeMeta], name: &str) -> Option<&'a RecipeMeta> {
     metas
         .iter()
@@ -404,25 +457,19 @@ fn component_meta<'a>(metas: &'a [RecipeMeta], name: &str) -> Option<&'a RecipeM
         .or_else(|| {
             metas
                 .iter()
-                .find(|meta| meta.kind == Kind::Ext && meta.name == name)
+                .find(|meta| meta.kind == Kind::Component && meta.name == name)
         })
 }
 
-fn ext_meta<'a>(metas: &'a [RecipeMeta], name: &str) -> Option<&'a RecipeMeta> {
-    metas
-        .iter()
-        .find(|meta| meta.kind == Kind::Ext && meta.name == name)
+fn product_in(line: &crate::recipe::LineMeta, series: &str) -> bool {
+    line.product.iter().any(|p| p == series)
 }
 
-fn php_in(line: &crate::recipe::LineMeta, php_series: &str) -> bool {
-    line.php.iter().any(|p| p == php_series)
-}
-
-fn allowed_lines(catalog: &Catalog, meta: &RecipeMeta, php_series: &str) -> BTreeSet<String> {
+fn allowed_lines(catalog: &Catalog, meta: &RecipeMeta, series: &str) -> BTreeSet<String> {
     let lines = catalog.lines(&meta.name).cloned().unwrap_or_default();
     meta.lines
         .iter()
-        .filter(|(line, lm)| lines.contains_key(*line) && php_in(lm, php_series))
+        .filter(|(line, lm)| lines.contains_key(*line) && product_in(lm, series))
         .map(|(line, _)| line.clone())
         .collect()
 }
@@ -444,55 +491,81 @@ mod tests {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
         let metas = crate::recipe::load_meta(&dir, &catalog).unwrap();
-        let bundle = Bundle::load(&dir.join("bundles/php8.5.toml")).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php/8.5.toml")).unwrap();
         (catalog, bundle, metas)
     }
 
     #[test]
-    fn builtin_extension_line_belongs_in_deps_table() {
+    fn bundled_component_line_belongs_in_deps_table() {
         let (catalog, mut bundle, metas) = setup();
         bundle
-            .ext_lines
+            .component_lines
             .insert("openssl".to_owned(), "3.5".to_owned());
-        let err = resolve(&catalog, &bundle, &metas, "8.5", &[], &BTreeMap::new())
-            .unwrap_err()
-            .to_string();
+        let err = resolve(
+            &catalog,
+            &bundle,
+            &metas,
+            "php",
+            "8.5",
+            &[],
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("[deps]"), "{err}");
     }
 
     #[test]
-    fn dependency_line_must_not_name_an_extension() {
+    fn dependency_line_must_not_name_a_component() {
         let (catalog, mut bundle, metas) = setup();
         bundle
             .dep_lines
             .insert("swoole".to_owned(), "6.2".to_owned());
-        let err = resolve(&catalog, &bundle, &metas, "8.5", &[], &BTreeMap::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("是扩展"), "{err}");
+        let err = resolve(
+            &catalog,
+            &bundle,
+            &metas,
+            "php",
+            "8.5",
+            &[],
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("是组件"), "{err}");
     }
 
     #[test]
-    fn single_line_ext_not_for_this_series_is_skipped() {
+    fn single_line_component_not_for_this_series_is_skipped() {
         let (catalog, mut bundle, metas) = setup();
-        // 不走 bundle 默认线，让单线组件走「catalog 只有一条线」的自动绑定。
-        bundle.ext_lines.remove("protobuf");
-        bundle.ext_lines.remove("ssh2");
-        // protobuf 只有 5.36 一条线，最低支持 PHP 8.2；7.4 下直接不绑定。
-        let bindings = resolve(&catalog, &bundle, &metas, "7.4", &[], &BTreeMap::new())
-            .expect("7.4 加载成功，只是不绑定 protobuf");
+        bundle.component_lines.remove("protobuf");
+        bundle.component_lines.remove("ssh2");
+        let bindings = resolve(
+            &catalog,
+            &bundle,
+            &metas,
+            "php",
+            "7.4",
+            &[],
+            &BTreeMap::new(),
+        )
+        .expect("7.4 加载成功，只是不绑定 protobuf");
         assert!(!bindings.lines.contains_key("protobuf"));
 
         let err = resolve(
             &catalog,
             &bundle,
             &metas,
+            "php",
             "7.4",
             &["protobuf".to_owned()],
             &BTreeMap::new(),
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("ext:protobuf 5.36 不支持 PHP 7.4"), "{err}");
+        assert!(
+            err.contains("component:protobuf 5.36 不支持产品 7.4"),
+            "{err}"
+        );
     }
 }

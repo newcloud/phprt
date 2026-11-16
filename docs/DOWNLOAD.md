@@ -9,11 +9,11 @@
 ```bash
 phprt install 8.5                 # 下载（命中跳过）→ 解压 → 写 state
 phprt install 8.5 --downloads     # 只下载，不解压、不写 state
-phprt install 8.5 --ext swoole --downloads
-phprt install 7.4 --ext swoole --offline
+phprt install php@8.5 --component swoole --downloads
+phprt install php@7.4 --component swoole --offline
 ```
 
-- 方案 = state 里的扩展 ∪ 本次 `--ext` 点名的扩展，和 `install` 完全一致。
+- 方案 = state 里的组件 ∪ 本次 `--component` 点名的组件，和 `install` 完全一致。
 - 下载清单直接来自求解结果，不单独再算一遍；缓存命中就跳过。
 - 下载失败时命令退出 1，**不写 state**，也不会进入解压。
 - `--downloads` 成功时只打印缓存位置，不改 state。
@@ -148,9 +148,9 @@ proxy_urls = [
 ```text
 源码缓存: .phprt/downloads
 并发: 10 个文件（每站点 2），单文件分片 4（≥8 MB 才启用）
-  [php] 8.5.12                     [██████████░░░░]  72%  10.1 MB / 13.9 MB  3.4 MB/s
+  [product] php 8.5.12             [██████████░░░░]  72%  10.1 MB / 13.9 MB  3.4 MB/s
   [deps] openssl 3.5.9             ⠹ 1.2 MB
-  [ext] swoole 6.2.5               ⠸ 等待
+  [component] swoole 6.2.5         ⠸ 等待
 ```
 
 - 未知总长时显示转圈和已下载字节数。
@@ -167,7 +167,7 @@ proxy_urls = [
     https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz
     原因: 连接超时
     镜像: https://gh-proxy.com/https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz
-  [ext] swoole 6.2.5
+  [component] swoole 6.2.5
     https://pecl.php.net/get/swoole-6.2.5.tgz
     原因: SHA256 不匹配（期望 ...，实际 ...）
 ```

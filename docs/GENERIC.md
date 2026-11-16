@@ -18,8 +18,9 @@
 本文只给设计和迁移顺序，不修改代码。示例里的 nginx / CPython 参数是示意，落地时按
 上游 `configure --help` 核对。
 
-本文描述的是目标形态：其中的命令、路径和 recipe 字段尚未实现，不能直接当作当前
-`cargo run` 的用法。现有 PHP 行为以 [DESIGN.md](DESIGN.md) 和各子文档为准。
+本文是通用化的完整走查。PHP 和 nginx 已经按此落地；CPython 仍是示例，用来验证
+产品模型不依赖 autoconf/make 的固定组合。字段和命令以 [CONTRACT.md](CONTRACT.md)、
+[CLI.md](CLI.md) 为准。
 
 ## 1. 现在哪些地方是 PHP 专用的
 
@@ -30,7 +31,7 @@ PHP 的装载方式。
 | --- | --- | --- |
 | `src/catalog.rs` | `validate()` 强制存在 `[php]`；`php_series()` / `php_version()` / `find_php_series()` / `highest_php_series()` 都以 `php` 为组件名 | 产品组件由 recipe 发现；查询改成 `product_series(name)` / `product_version(name, series)`；不再强制 `[php]` |
 | `src/recipe.rs` | `Kind` 只有 `Dep` / `Ext` / `Php`；根目录只允许 `php<系列>.star`；`classify()` 去掉 `php` 前缀；`Registry::php()` 要求恰好一个 PHP | 增加 `Product`；根 recipe 固定为 `products/<产品>/<系列>.star`；`Registry::product(name)`；不再识别旧的 `php<系列>.star` |
-| `src/recipe.rs` | `Target.builtin_exts` / `builtin_disable`、`shared_from`、`ini`、`modules`、`origin=builtin/pecl` 都是 PHP 语义 | 产品级改成 `bundled` / `bundled_disable`；组件来源改成 `bundled` / `external`；`shared_from` / `ini` 交给产品 profile 解释 |
+| `src/recipe.rs` | `Target.builtin_exts` / `builtin_disable`、`shared_from`、`ini`、`modules`、`origin=builtin/pecl` 都是 PHP 语义 | 产品级改成 `bundled` / `bundled_disable`；组件来源改成 `bundled` / `external`；`source_path` / `ini` 交给产品 profile 解释 |
 | `src/recipe.rs` | `LineMeta.php` 是 `LINES[线]` 的必填键；`PHP_LINES` / `PHP_DEP_LINES` 按 PHP 系列建表 | `LineMeta.product`；`PRODUCT_LINES` / `PRODUCT_DEP_LINES`；不再接受 `php` 键和旧表名 |
 | `src/bind.rs` | `resolve(..., php_series, ...)`；`php_in()` 过滤 `LineMeta.php`；`builtin_exts` 自动参与依赖约束 | 参数改成 `product_series`；约束按产品线求交；产品本身也进入约束集合 |
 | `src/bundle.rs` | `Bundle.php` 必填；文件固定为 `bundles/php<系列>.toml`；`[ext_presets]` / `[default_exts]` | `Bundle.product`；路径改成 `bundles/<产品>/<系列>.toml`；表名改成 `[component_presets]` / `[default_components]` |
@@ -174,17 +175,17 @@ php_profile = product_profile(
             strategy = "standalone",
             steps = [
                 "phpize",
-                "./configure --with-php-config={product}/bin/php-config {flags}",
+                "./configure --with-php-config={tree}/bin/php-config {flags}",
                 "make",
                 "make install",
             ],
             artifacts = ["lib/php/extensions/*/{name}.so"],
         ),
     },
-    # fold 策略下，产品 configure 追加的参数模板
-    fold = {
-        "static": [],
-    },
+    # 组件来源 -> 默认挂载方式
+    defaults = {"bundled": "static", "external": "shared"},
+    # bundled 组件在产品源码树里的默认目录
+    bundled_path = "ext/{name}",
     # 运行时整理
     runtime = runtime(
         lib_dir = "lib/phprt",
@@ -201,11 +202,13 @@ php_profile = product_profile(
     verify = ["{tree}/bin/php", "-v"],
     verify_modules = "{tree}/bin/php -m",
     entry = "myphp-{series}",
+    entry_template = "myphp",
     env = {
         "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
         "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
     },
     audit = "php-config-m4",
+    config = "php",
 )
 ```
 
@@ -221,9 +224,10 @@ nginx_profile = product_profile(
         "dynamic": mode(
             strategy = "fold",
             configure = ["--add-dynamic-module={component_source}"],
-            artifacts = ["modules/*/{name}.so"],
+            artifacts = ["modules/*.so"],
         ),
     },
+    defaults = {"bundled": "builtin", "external": "dynamic"},
     runtime = runtime(
         lib_dir = "lib/phprt",
         rpath = {
@@ -233,7 +237,7 @@ nginx_profile = product_profile(
     ),
     verify = ["{tree}/sbin/nginx", "-V"],
     entry = "",
-    audit = "configure-help",
+    audit = "none",
 )
 ```
 
@@ -241,16 +245,19 @@ profile 字段的含义：
 
 | 字段 | 说明 |
 | --- | --- |
-| `modes` | 产品支持的挂载方式 → 策略。`fold` 表示组件只贡献参数/源码，`standalone` 表示产品之后单独构建 |
-| `fold` | 模式 → 追加到产品 `configure` 的参数模板；`{component_source}` 是组件源码根 |
-| `standalone.steps` | 独立构建的步骤模板；`{flags}` 是组件的 configure 参数，`{name}` 是组件名 |
-| `standalone.artifacts` | 独立构建的产物模式 |
+| `modes` | 产品支持的挂载方式 → `mode(strategy, steps, artifacts, configure)`；`fold` 表示组件只贡献参数/源码，`standalone` 表示产品之后单独构建 |
+| `modes.*.configure` | fold 时追加到产品 `configure` 的参数模板；`{component_source}` 是组件源码根 |
+| `modes.*.steps` | standalone 的步骤模板；`{flags}` 是组件的 configure 参数，`{name}` 是组件名 |
+| `modes.*.artifacts` | 独立构建的产物模式 |
+| `defaults` | 组件来源（bundled / external）→ 默认挂载方式 |
+| `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |
 | `register` | 组件装好后怎么让产品看见它，如写 ini、装到 `site-packages`、改 nginx 配置 |
 | `runtime` | 运行时库目录和 rpath 模板 |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 可以检查组件是否真的加载 |
-| `entry` | 项目入口文件名模板；PHP 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；nginx 可以不生成，CPython 可以是 `python3.5` |
+| `entry` / `entry_template` | 项目入口文件名模板和内置模板；PHP 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；nginx 不生成，CPython 可以是 `python3.5` |
 | `env` | 产品专用环境变量；PHP 的 `PHP_AUTOCONF` 不再污染其他节点 |
-| `audit` | 选项清单来源：`php-config-m4` / `configure-help` / `setup-py` / `none` |
+| `audit` | 选项清单来源：`php-config-m4` / `configure-help` / `none` |
+| `config` | 安装后配置动作：PHP 用 `php`，其他产品留空 |
 
 profile 只声明，不执行命令；步骤仍然由 `crates/build` 执行，签名和日志规则不变。
 
@@ -274,7 +281,7 @@ LINES = {
 LINES = {
     "1.29": {
         "openssl": ["3.0", "3.5", "4.0"],
-        "pcre2": ["10.45"],
+        "pcre2": ["10.49"],
     },
 }
 ```
@@ -331,10 +338,10 @@ catalog 结构不变：仍然是“组件 + 线 → 补丁 + 下载地址”。�
 "8.5" = { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "..." }
 
 [nginx]
-"1.29" = { version = "1.29.3", url = "https://nginx.org/download/nginx-1.29.3.tar.gz", sha256 = "..." }
+"1.29" = { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz", sha256 = "..." }
 
 [pcre2]
-"10.45" = { version = "10.45", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.45/pcre2-10.45.tar.gz", sha256 = "..." }
+"10.49" = { version = "10.49", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz", sha256 = "..." }
 
 [openssl]
 "3.5" = { version = "3.5.9", url = "...", sha256 = "..." }
@@ -351,7 +358,7 @@ bundle 从“PHP 系列的默认策略”变成“产品系列的默认策略”
 
 ```toml
 product = "nginx"
-pcre2 = "10.45"
+pcre2 = "10.49"
 
 [deps]
 openssl = "3.5"
@@ -578,7 +585,7 @@ error: install 只接受一个产品，例如 phprt install php@8.5
 
 命名冲突仍然用 `kind:name`：`dep:openssl` 是 OpenSSL 库，`component:openssl` 是 PHP 的
 openssl 扩展，`product:openssl` 如果将来存在则是产品。裸名有多个候选时报歧义。
-产品节点写成 `product:<产品>@<补丁>`（如 `product:nginx@1.29.3`），组件和依赖仍用
+产品节点写成 `product:<产品>@<补丁>`（如 `product:nginx@1.29.8`），组件和依赖仍用
 `component:<名字>` / `dep:<名字>`，这样同一个名字出现在不同层时不会混淆。
 
 ### 4.4 为什么没有 `phprt.toml`
@@ -624,11 +631,11 @@ ctx 的通用字段：
 {
     "product": "nginx",
     "product_series": "1.29",
-    "product_version": "1.29.3",
-    "bindings": {"openssl": "3.5", "pcre2": "10.45"},
+    "product_version": "1.29.8",
+    "bindings": {"openssl": "3.5", "pcre2": "10.49"},
     "deps": {
         "openssl": {"line": "3.5", "version": "3.5.9", "url": "...", "sha256": "..."},
-        "pcre2": {"line": "10.45", "version": "10.45", "url": "...", "sha256": "..."},
+        "pcre2": {"line": "10.49", "version": "10.49", "url": "...", "sha256": "..."},
     },
     "self": {...},
     "is_bundled": True,
@@ -720,10 +727,10 @@ profile 的 `fold` / `standalone`：
 
 ```toml
 [nginx]
-"1.29" = { version = "1.29.3", url = "https://nginx.org/download/nginx-1.29.3.tar.gz", sha256 = "..." }
+"1.29" = { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz", sha256 = "..." }
 
 [pcre2]
-"10.45" = { version = "10.45", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.45/pcre2-10.45.tar.gz", sha256 = "..." }
+"10.49" = { version = "10.49", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz", sha256 = "..." }
 
 [openssl]
 "3.5" = { version = "3.5.9", url = "...", sha256 = "..." }
@@ -751,7 +758,7 @@ def target(ctx):
             "--enable-static",
         ],
         make = ["make", "make install"],
-        artifacts = ["lib/libpcre2-8.a", "bin/pcre2-config"],
+        artifacts = ["lib/libpcre2-8.a"],
         desc = "PCRE2，供 nginx 正则使用",
     )
 
@@ -766,78 +773,69 @@ OpenSSL 复用现有 `recipes/dep/openssl.star`，线由 bundle 或 `--dep opens
 LINES = {
     "1.29": {
         "openssl": ["3.0", "3.5", "4.0"],
-        "pcre2": ["10.45"],
+        "pcre2": ["10.49"],
     },
 }
 
-Nginx = product_profile(
-    modes = {
-        "builtin": mode(strategy = "fold", configure = ["--add-module={component_source}"]),
-        "dynamic": mode(
-            strategy = "fold",
-            configure = ["--add-dynamic-module={component_source}"],
-            artifacts = ["modules/*/{name}.so"],
-        ),
-    },
-    fold = {
-        "builtin": ["--add-module={component_source}"],
-        "dynamic": ["--add-dynamic-module={component_source}"],
-    },
-    runtime = runtime(
-        lib_dir = "lib/phprt",
-        rpath = {
-            "sbin/nginx": "$ORIGIN/../lib/phprt",
-            "modules/*.so": "$ORIGIN/../lib/phprt",
+def nginx_profile():
+    return product_profile(
+        modes = {
+            "builtin": mode(strategy = "fold", configure = ["--add-module={component_source}"]),
+            "dynamic": mode(
+                strategy = "fold",
+                configure = ["--add-dynamic-module={component_source}"],
+                artifacts = ["modules/*.so"],
+            ),
         },
-    ),
-    verify = ["{tree}/sbin/nginx", "-V"],
-    entry = "",
-    audit = "configure-help",
-)
-
-def target(ctx):
-    self = ctx["self"]
-    return product(
-        name = "nginx",
-        series = "1.29",
-        version = self["version"],
-        url = self["url"],
-        sha256 = self["sha256"],
-        needs = ["pcre2", "openssl"],
-        configure = [
-            "./configure",
-            "--prefix={tree}",
-            "--sbin-path={tree}/sbin/nginx",
-            "--with-pcre={dep:pcre2}",
-            "--with-cc-opt=-I{dep:openssl}/include",
-            "--with-ld-opt=-L{dep:openssl}/lib",
-            "--with-http_ssl_module",
-            "--with-http_v2_module",
-        ],
-        make = ["make", "make install"],
-        artifacts = ["sbin/nginx"],
-        profile = Nginx,
-        desc = "nginx 1.29",
+        defaults = {"bundled": "builtin", "external": "dynamic"},
+        runtime = runtime(
+            lib_dir = "lib/phprt",
+            rpath = {
+                "sbin/nginx": "$ORIGIN/../lib/phprt",
+                "modules/*.so": "$ORIGIN/../lib/phprt",
+            },
+        ),
+        verify = ["{tree}/sbin/nginx", "-V"],
+        entry = "",
+        audit = "none",
     )
 
-TARGET = target
+TARGET = product(
+    name = "nginx",
+    series = "1.29",
+    needs = ["pcre2", "openssl"],
+    configure = [
+        "./configure",
+        "--prefix={tree}",
+        "--sbin-path={tree}/sbin/nginx",
+        "--with-cc-opt=-I{dep:openssl}/include -I{dep:pcre2}/include",
+        "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib",
+        "--with-http_ssl_module",
+        "--with-http_v2_module",
+    ],
+    make = ["make", "make install"],
+    artifacts = ["sbin/nginx"],
+    profile = nginx_profile(),
+    desc = "nginx 1.29 本体",
+)
 ```
 
 要点：
 
-- nginx 的 `--with-pcre=DIR` 可以指向已安装的 PCRE2 前缀；如果实际版本只接受源码目录，
-  就把 `{dep:pcre2}` 换成 `{source:pcre2}`（见 6.4）。
+- nginx 用 `--with-cc-opt` / `--with-ld-opt` 指向已安装的 PCRE2 前缀，
+  让 PCRE2 只编一份（`dep:pcre2`）。动态模块和 nginx 本体共用这份共享库，
+  pcre2 符号不会缺失。
 - nginx 的 `--with-openssl=DIR` 期望的是 **OpenSSL 源码目录**，不是安装前缀。用它会让
   nginx 自己再编一份 OpenSSL，和 phprt 的 `dep:openssl` 重复。推荐不传
   `--with-openssl`，用 `--with-cc-opt` / `--with-ld-opt` 指向已安装的 OpenSSL；
   如果确实要 nginx 内置 OpenSSL，才用 `{source:openssl}`。
 - `needs = ["pcre2", "openssl"]` 让产品的 `CPPFLAGS` / `LDFLAGS` / `LD_LIBRARY_PATH`
-  带上两个库；这条边现在 `build.rs` 只对 ext 和 dep 处理，产品也要走同一套链接闭包。
+  带上两个库；产品的 `needs` 和 fold 组件的 `needs` 都进入链接闭包。
 
-### 6.4 需要补的占位符
+### 6.4 通用占位符
 
-现在只有 `{tree}` / `{deps}` / `{build}` / `{prefix}` / `{dep:名字}`。nginx 模块需要
-“另一个节点的源码根”，要补一个通用占位符：
+除了 `{tree}` / `{deps}` / `{build}` / `{prefix}` / `{dep:名字}`，nginx 模块还需要
+“另一个节点的源码根”：
 
 | 占位符 | 含义 | 例子 |
 | --- | --- | --- |
@@ -845,7 +843,7 @@ TARGET = target
 | `{product}` | 当前产品安装树 | nginx 的 `--with-cc-opt` 可以用 |
 | `{product_bin}` / 产品自定义 | 产品 profile 定义的路径 | CPython 的 `python3.5` |
 
-`{source:名字}` 的解析顺序是 dep / component；找不到就报错，不允许猜。
+`{source:名字}` 的解析顺序是 dep / component；找不到就报错，不允许猜。已实现。
 
 ### 6.5 nginx 模块
 
@@ -910,28 +908,21 @@ CPython = product_profile(
     audit = "setup-py",
 )
 
-def target(ctx):
-    self = ctx["self"]
-    return product(
-        name = "cpython",
-        series = "3.5",
-        version = self["version"],
-        url = self["url"],
-        sha256 = self["sha256"],
-        needs = ["openssl", "zlib"],
-        configure = [
-            "./configure",
-            "--prefix={tree}",
-            "--enable-shared",
-            "--with-ensurepip=install",
-        ],
-        make = ["make", "make install"],
-        artifacts = ["bin/python3.5"],
-        profile = CPython,
-        desc = "CPython 3.5",
-    )
-
-TARGET = target
+TARGET = product(
+    name = "cpython",
+    series = "3.5",
+    needs = ["openssl", "zlib"],
+    configure = [
+        "./configure",
+        "--prefix={tree}",
+        "--enable-shared",
+        "--with-ensurepip=install",
+    ],
+    make = ["make", "make install"],
+    artifacts = ["bin/python3.5"],
+    profile = CPython,
+    desc = "CPython 3.5",
+)
 ```
 
 ### 7.2 C 扩展组件
@@ -950,7 +941,7 @@ TARGET = component(
 ```
 
 - 产品先构建，组件依赖产品的 `bin/python3.5`；拓扑序自动满足。
-- 组件不需要 `phpize` / `ini` / `shared_from`，这些字段不会出现在 CPython 的 profile 里。
+- 组件不需要 `phpize` / `ini` / `source_path`，这些字段不会出现在 CPython 的 profile 里。
 - `artifacts` 用 `site-packages` 模式检查；具体路径按 CPython 版本核对。
 
 CPython 3.5 在现代工具链和 OpenSSL 3 上未必能直接编过；这里只验证产品模型，
@@ -958,8 +949,10 @@ CPython 3.5 在现代工具链和 OpenSSL 3 上未必能直接编过；这里只
 
 ## 8. 实现顺序
 
-这次是破坏性变更：最终版本不保留旧命令、旧 recipe 路径和旧 state。下面只是代码落地
-顺序，不是兼容承诺。
+这次是破坏性变更：最终版本不保留旧命令、旧 recipe 路径和旧 state。
+
+当前落地状态：第 1～5 步、第 7 步已经完成（PHP 和 nginx 真构建通过）；第 6 步
+CPython 仍未实现，只保留为模型示例。
 
 ### 第 1 步：产品模型
 
@@ -979,7 +972,7 @@ CPython 3.5 在现代工具链和 OpenSSL 3 上未必能直接编过；这里只
 ### 第 3 步：契约改名
 
 - `php()` → `product()`；`ext()` → `component()`；`builtin_exts` → `bundled`；
-  `shared_from` → `bundled` 路径；`origin` → `source`；`is_builtin` → `is_bundled`。
+  `source_path` 取代 `shared_from`；`origin` → `source`；`is_builtin` → `is_bundled`。
 - `LINES[].php` → `LINES[].product`；`PHP_LINES` → `PRODUCT_LINES`；
   `PHP_DEP_LINES` → `PRODUCT_DEP_LINES`。
 - 一次改完 recipe 和 loader，不留旧 key 的读取分支。
@@ -989,7 +982,8 @@ CPython 3.5 在现代工具链和 OpenSSL 3 上未必能直接编过；这里只
 - 产品 `needs` / `deps` 进入链接闭包；
 - `{source:名字}` 占位符；
 - 产品级 `LINES` 约束依赖线；
-- profile 的 `modes` / `fold` / `standalone` / `runtime` / `register` / `verify` / `entry`。
+- profile 的 `modes` / `defaults` / `bundled_path` / `runtime` / `register` /
+  `verify` / `entry` / `env` / `audit` / `config`。
 
 ### 第 5 步：nginx
 
@@ -1024,15 +1018,16 @@ CPython 3.5 在现代工具链和 OpenSSL 3 上未必能直接编过；这里只
    `builtin/dynamic`、`native`）。旧写法直接报错，不做转换。
 4. **多产品共享依赖库不做。** 第一版每个产品一棵安装树，下载缓存共享；跨产品共享
    同一份 OpenSSL 会引入 ABI 和 rpath 耦合，留到以后。
-5. **`audit` 的选项来源不是所有产品都有。** 没有 `configure --help` / `config.m4` /
-   `setup.py` 的产品记 `none`，不把“拿不到清单”当成失败；组件仍然按现有规则要求
-   处置或 `ignored`。
+5. **`audit` 的选项来源不是所有产品都有。** 没有 `configure --help` / `config.m4`
+   的产品把 profile 的 `audit` 记 `none`，该产品的组件不要求盘点选项；PHP 用
+   `php-config-m4`，继续按现有规则要求处置或 `ignored`。
 6. **CPython 3.5 只当模型示例。** 不推导它对现代编译器、OpenSSL 3 的兼容性。
 7. **名称冲突。** `product:openssl` / `component:openssl` / `dep:openssl` 可以同时存在，
    裸名必须报歧义；这沿用现有 `kind:name` 规则。
 8. **`make distclean` 是执行器的假设。** 签名变化时 `crates/build` 会先跑
-   `make distclean` 并忽略失败；nginx / CPython 没有这个目标时要确认残留对象不会
-   影响重新 configure，必要时把清理命令写进 profile。
+   `make distclean` 并忽略失败；CMake 源码内构建没有 distclean，执行器随后会删
+   `CMakeCache.txt` / `CMakeFiles`。其他构建系统如有残留对象，需要把清理命令写进
+   对应的构建步骤。
 
 ## 10. 验收
 
@@ -1050,13 +1045,14 @@ cargo run -- list php@8.5
 
 # 2. nginx
 cargo run -- install nginx@1.29 --dep openssl=3.5
-./.phprt/nginx-1.29.3/sbin/nginx -V
-ldd ./.phprt/nginx-1.29.3/sbin/nginx | grep -E 'ssl|crypto|pcre2'
-ls ./.phprt/nginx-1.29.3/modules/ 2>/dev/null || true
+./.phprt/nginx-1.29.8/sbin/nginx -V
+ldd ./.phprt/nginx-1.29.8/sbin/nginx | grep -E 'ssl|crypto|pcre2'
+ls ./.phprt/nginx-1.29.8/modules/ 2>/dev/null || true
 
-# 3. CPython（示例）
-cargo run -- install cpython@3.5
-./.phprt/cpython-3.5.10/bin/python3.5 -V
+# 3. nginx 组件
+cargo run -- add nginx@1.29 lua-nginx-module
+cargo run -- install nginx@1.29
+ls .phprt/nginx-1.29.8/modules/
 
 # 4. 路径和状态
 test -f .phprt/php-8.5/state.json
@@ -1074,9 +1070,9 @@ ls .phprt/downloads | sort | uniq -d   # 不应有重复文件名
 - PHP 的 `plan` 节点、线、依赖顺序、configure 参数、产物、ini 和验证结果与设计前一致；
   入口是 `myphp-8.5`，只有一个 PHP 系列时才额外生成 `myphp`。
 - nginx 的 `plan` 里 `dep:pcre2` / `dep:openssl` 在 `product:nginx` 之前；nginx 的
-  configure 能看到 `--with-pcre` 和 OpenSSL 的 include/lib；构建产物 `sbin/nginx` 存在。
-- CPython 的 `product:cpython` 在 `dep:openssl` / `dep:zlib` 之后；`native` 组件在
-  `product:cpython` 之后。
+  configure 能看到 OpenSSL / PCRE2 的 include/lib；构建产物 `sbin/nginx` 存在。
+- nginx 的动态模块 `modules/ngx_http_lua_module.so` 存在，`nginx -V` 能看到
+  `--add-dynamic-module`。
 - `--downloads` 跨产品共用 `.phprt/downloads`，不重复下载同一个 URL。
 - 失败仍然不写 state；签名跳过、日志末尾、产物检查规则不变。
 

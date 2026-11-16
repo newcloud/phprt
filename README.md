@@ -1,20 +1,21 @@
 # phprtv3
 
-phprt v3 的最小原型：**Starlark 写 recipe，Rust 做版本解析、求解、下载和构建**。
+phprt v3 的原型：**Starlark 写 recipe，Rust 做版本解析、求解、下载和构建**。
+模型是三层：产品（PHP、nginx）、组件（PHP 扩展、nginx 模块）、依赖库（OpenSSL、PCRE2）。
 
 `plan` 算出依赖闭包、拓扑顺序和每个节点的参数。`install` / `update` 默认把方案里的
-源码包下载到 `.phprt/downloads/`，按构建顺序解压到 `build/<组件>/<补丁>/`，编译安装到
-`.phprt/php-<php 版本>/`，最后写状态并生成项目入口 `./myphp`。`--downloads` 只下载
-源码，不解压、不编译、不写状态。
+源码包下载到 `.phprt/downloads/`，按构建顺序解压到 `build/<名字>/<补丁>/`，编译安装到
+`.phprt/<产品>-<版本>/`，最后写状态。PHP 还会生成项目入口 `./myphp-<系列>`。
+`--downloads` 只下载源码，不解压、不编译、不写状态。
 
 构建环境、日志、跳过规则和运行时库整理见 [docs/BUILD.md](docs/BUILD.md)。
 
 版本和默认策略分成三层：
 
 ```text
-bundle       php8.5 扩展默认线 swoole 6.2，[deps] 里 openssl 库 3.5；默认启用 v2 那套常用内置扩展
+bundle       php/8.5：swoole 默认线 6.2，[deps] 里 openssl 库 3.5；默认启用常用内置扩展
 catalog      6.2 → 6.2.5 + 下载地址；3.5 → 3.5.9 + 下载地址
-recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
+recipe       6.2 支持产品系列 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
 ```
 
 补丁更新只改 `recipes/catalog.toml`，bundle 和 recipe 不会过期。
@@ -23,62 +24,74 @@ recipe       6.2 支持 PHP 8.4/8.5/8.6，需要 libcurl/openssl，怎么编
 
 ## 快速开始
 
+所有命令都写 `产品@系列`；一条命令只处理一个产品。
+
 ```bash
-cargo run -- install 8.5                 # 默认集：PHP 8.5.12 + v2 那套常用内置扩展
-                                         # （openssl/curl/libxml/zlib/sqlite3/mysqli/
-                                         # pdo_mysql/mbstring/zip/sodium/gettext/pcntl/
-                                         # sockets/shmop/sysv*，posix 走 PHP 默认）
-./myphp -v                               # 用项目自己的 PHP
-cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
-cargo run -- install 8.5 --downloads     # 只下载源码包
-cargo run -- install 8.5 --ext swoole --downloads   # 只下载扩展和依赖
-cargo run -- install 8.5 --ext swoole --ext xdebug  # 再加两个 PECL 扩展
-cargo run -- install 8.5 --ext swoole    # swoole 6.2.5 + libcurl + openssl 3.5.9
-cargo run -- install 8.5 --ext 'openssl=feature:[argon2]'   # 打开 argon2
-cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
-cargo run -- install 8.5 --ext gd        # gd preset：JPEG/PNG/WebP/FreeType
-cargo run -- install 8.5 --ext 'gd=feature:[]'  # 清空 preset，只保留 PNG
-cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'  # preset + JPEG SIMD
-cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'  # 再加 AVIF（需要 nasm）
-cargo run -- install 7.4 --ext swoole    # swoole 4.8.13 + openssl 1.1.1w
-cargo run -- --php 8.5 audit               # 检查上游开关是否都已处置
-cargo run -- --php 8.5 ext list           # 查看扩展和版本
-cargo run -- --php 8.5 ext add xdebug     # 加入方案（待安装）
-cargo run -- --php 8.5 install 8.5        # 装方案里的扩展
-cargo run -- --php 8.5 update             # 在记录的线内更新补丁
+cargo run -- install php@8.5               # PHP 8.5.12 + 默认内置扩展
+./myphp-8.5 -v                             # 用项目自己的 PHP
+
+cargo run -- install php@8.5 --downloads   # 只下载源码包
+cargo run -- add php@8.5 swoole            # 加入方案（待安装）
+cargo run -- add php@8.5 xdebug
+cargo run -- install php@8.5               # 装方案里的组件
+cargo run -- remove php@8.5 xdebug
+cargo run -- list php@8.5
+
+cargo run -- install nginx@1.29            # nginx 1.29.8 + PCRE2 + OpenSSL
+.phprt/nginx-1.29.8/sbin/nginx -V
+cargo run -- add nginx@1.29 lua-nginx-module
+cargo run -- install nginx@1.29            # 动态模块 modules/ngx_http_lua_module.so
 ```
 
-gd 只在 PHP 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 下加载，且不在默认扩展集里；选中 gd 时使用
-`recipes/bundles/php8.4.toml` / `php8.5.toml` 的 `[ext_presets].gd`，自动带 JPEG/WebP/FreeType。
-PNG 由 libpng 固定提供，`avif` 默认关闭。`dep:jpeg[simd]` 需要宿主机有 `nasm`，
-不写就生成非 SIMD 的 libjpeg。
+只装 PHP 本体：
 
-`install` 必须指定 PHP；不带时报错并给出示例：
+```bash
+cargo run -- install php@8.5 \
+  --disable-default-component openssl \
+  --disable-default-component curl \
+  --disable-default-component libxml
+```
+
+gd 只在 PHP 8.0 ~ 8.5 下加载，且不在默认组件集里；选中 gd 时使用
+`recipes/bundles/php/8.5.toml` 的 `[component_presets].gd`，自动带 JPEG/WebP/FreeType。
+PNG 由 libpng 固定提供，`avif` 默认关闭。`dep:jpeg[simd]` 需要宿主机有 `nasm`。
+
+## 目标
+
+```bash
+phprt install php@8.5       # 一个产品
+phprt install nginx@1.29
+phprt list                  # 再看装了哪些
+```
+
+不支持一次装多个产品：
 
 ```text
-error: 请指定 PHP 版本，例如：phprt install 8.5（可用：7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6）
+error: install 只接受一个产品，例如 phprt install php@8.5；多个产品请分多条命令
 ```
+
+也没有默认版本或当前上下文；`phprt install 8.5`、`phprt add swoole` 都直接报错。
 
 ## 版本线
 
 ```bash
-# 不写 version：用 php8.5 bundle 的默认线（swoole 6.2）
-cargo run -- install 8.5 --ext swoole
+# 不写 version：用 php/8.5 bundle 的默认线（swoole 6.2）
+cargo run -- add php@8.5 swoole
 
 # 显式选线：6.0.x 的最新补丁从 catalog 取
-cargo run -- install 8.2 --ext swoole=version:6.0
+cargo run -- install php@8.2 --component swoole=version:6.0
 
-# 只改依赖库的线，不额外安装扩展
-cargo run -- install 8.5 --ext swoole --dep openssl=4.0
+# 只改依赖库的线，不额外安装组件
+cargo run -- install php@8.5 --component swoole --dep openssl=4.0
 
-# 不支持当前 PHP 的线直接失败
-cargo run -- install 8.5 --ext swoole=version:4.8
-# error: swoole 4.8 不支持 PHP 8.5（可用：6.2）
+# 不支持当前产品的线直接失败
+cargo run -- install php@8.5 --component swoole=version:4.8
+# error: swoole 4.8 不支持产品 8.5（可用：6.2）
 ```
 
 `version:` 只接受线（`6.2`），不接受补丁（`6.2.5`）；补丁由 catalog 决定。
 
-多个扩展约束同一个库时取交集。bundle 默认线冲突且只有一个候选时会自动切换并打印
+多个组件约束同一个库时取交集。bundle 默认线冲突且只有一个候选时会自动切换并打印
 提示；显式 `--dep` 冲突则直接报错。
 
 ## recipe
@@ -86,32 +99,28 @@ cargo run -- install 8.5 --ext swoole=version:4.8
 recipe 只声明版本关系、依赖和构建参数；版本号、下载地址从 ctx 注入：
 
 ```python
-# recipes/ext/swoole.star
+# recipes/components/php/swoole.star
 LINES = {
     "6.2": {
-        "php": ["8.4", "8.5", "8.6"],
+        "product": ["8.4", "8.5", "8.6"],
         "openssl": ["1.1.1", "3.0", "3.5", "4.0"],
     },
-}
-
-LINES = {
-    "6.2": {"php": ["8.4", "8.5", "8.6"], "openssl": ["1.1.1", "3.0", "3.5", "4.0"]},
 }
 
 
 def target(ctx):
     self = ctx["self"]
     line = self["line"]
-    # needs 和 configure 都从同一张 LINES 表推导，兼容信息只有一份
     needs = ["libcurl"]
     configure = []
     if "openssl" in LINES[line]:
         needs = ["libcurl", "openssl"]
         configure = ["--enable-swoole", "--with-openssl-dir={dep:openssl}", "--disable-brotli"]
-    return ext(
+    return component(
         name="swoole",
-        modules=["swoole"],
-        link=["shared"],
+        product="php",
+        source="external",
+        modes=["shared"],
         needs=needs,
         tools=["autoconf"],
         dep_configure={"libcurl": ["--enable-swoole-curl"]},
@@ -122,52 +131,60 @@ def target(ctx):
 TARGET = target
 ```
 
-- `LINES`：扩展自己的线支持哪些 PHP、允许哪些依赖线。
-- `PHP_LINES`：builtin 扩展的 PHP 系列 → 允许的依赖库线（如 ext:openssl）。
-- dep recipe 不声明 PHP 关系；库版本由 bundle/CLI/消费扩展决定。
+- `LINES`：组件自己的线支持哪些产品系列、允许哪些依赖线。
+- `PRODUCT_LINES`：bundled 组件的产品系列 → 允许的同名依赖库线（如 component:openssl）。
+- `PRODUCT_DEP_LINES`：bundled 组件的产品系列 → 不同名依赖线（如 gd 的 libpng/jpeg）。
+- dep recipe 不声明产品关系；库版本由 bundle/CLI/消费组件决定。
 - `target(ctx)`：只负责构建参数，不再判断“能不能配”。
-- `ctx["is_builtin"]`：由 php recipe 的 `builtin_exts` 推导，不在 ext recipe 里写 `origin`。
-- `TARGET` 也可以是普通 dict。
+- `ctx["is_bundled"]`：由产品 recipe 的 `bundled` 推导，不在组件 recipe 里写 origin。
+- `TARGET` 也可以是普通 dict；产品 recipe 必须是 dict。
+- 挂载方式由产品 profile 定义：PHP `static` / `shared`，nginx `builtin` / `dynamic`。
 
 ### 依赖集成与 feature
 
-`dep:` 打开扩展对某个依赖的集成，方括号里的 feature 转给该依赖：
+`dep:` 打开组件对某个依赖的集成，方括号里的 feature 转给该依赖：
 
 ```bash
-cargo run -- install 8.2 --ext swoole=version:6.0,dep:libcurl[ssl,nghttp2]
+cargo run -- install php@8.2 --component swoole=version:6.0,dep:libcurl[ssl,nghttp2]
 ```
 
 - `dep:libcurl` 给 swoole 加 recipe 里 `dep_configure` 声明的参数（`--enable-swoole-curl`）。
 - `[ssl,nghttp2]` 转给 libcurl，具体编译参数由 libcurl 的 `features` 决定。
 - 不写 `dep:libcurl` → 开关和转发都不发生。
 
-`feature:` 是扩展自己的开关，和依赖无关：
+`feature:` 是组件自己的开关，和依赖无关：
 
 ```bash
-cargo run -- install 8.5 --ext 'openssl=feature:[argon2]'
-cargo run -- install 8.5 --ext 'openssl=feature:[]'   # 关掉默认开的 feature
+cargo run -- install php@8.5 --component 'openssl=feature:[argon2]'
+cargo run -- install php@8.5 --component 'openssl=feature:[]'   # 关掉默认开的 feature
 ```
 
 - 必须带方括号；多个 feature 用逗号分隔。
-- 有条件的能力在 recipe 里用 `requires` 声明；版本不满足时选择会直接报错。
+- 有条件的能力在 recipe 里用 `requires` 声明；产品系列 / 依赖线不满足时选择直接报错。
 
 ### 占位符
 
 | 占位符 | 含义 |
 | --- | --- |
-| `{tree}` | `.phprt/php-<php 版本>` |
+| `{tree}` / `{product}` | `.phprt/<产品>-<产品版本>` |
 | `{deps}` | `{tree}/deps` |
 | `{build}` | 当前节点的解压目录 |
 | `{prefix}` | 当前节点的安装前缀 |
 | `{dep:名字}` | 指定依赖的安装前缀，如 `{dep:openssl}` |
+| `{source:名字}` | 对应 dep / component 的解压源码根 |
 
 ## 当前版本表
 
-PHP：7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
+产品：PHP 7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6；nginx 1.29。
 
 | 组件 | 线 | 默认使用 |
 | --- | --- | --- |
 | openssl | 1.1.1 / 3.0 / 3.5 / 4.0 | 8.5 用 3.5；4.0 允许但不默认 |
+| pcre2 | 10.49 | 10.49（nginx） |
+| luajit | 2.1 | OpenResty LuaJIT2 v2.1-20261107（lua-nginx-module） |
+| lua-resty-core | 0.1 | 0.1.32（lua-nginx-module 运行期必需） |
+| lua-resty-lrucache | 0.15 | 0.15（lua-resty-core 运行期必需） |
+| lua-nginx-module | 0.10 | 0.10.29（nginx 动态模块） |
 | swoole | 4.8 / 5.1 / 6.0 / 6.2 | 7.4→4.8，8.0→5.1，8.1/8.2/8.3→6.0，8.4+→6.2 |
 | xdebug | 3.1 / 3.5 | 7.4→3.1，8.x→3.5 |
 | libcurl | 7.88 / 8.23 | 8.23.0；7.4 / 8.0 用 7.88（配 openssl 1.1.1） |
@@ -204,53 +221,59 @@ PHP：7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
 
 ## 状态文件
 
-`install` / `update` / `ext add` / `ext remove` 写
-`.phprt/php-<系列>/state.json`，`plan` / `list` / `ext list` 只读。
+`install` / `update` / `add` / `remove` 写 `.phprt/<产品>-<系列>/state.json`；
+`plan` / `list` 只读。`install --component` 只影响本次构建，不把临时组件写进 state。
 
 状态记录：
 
-- 构建方案（哪些扩展、link、installed）
+- 构建方案（哪些组件、mode、installed）
 - 显式指定的版本线 `bindings`
-- 每个扩展/依赖实际使用的线和小版本
+- 每个组件/依赖实际使用的线和小版本
 - dep 的 feature 并集
 
-bundle 默认线不写进 `bindings`；显式 `version:` 会写入并保留。默认扩展集合只在
-首次写 state 时 materialize；`update` 只在已记录的线内更新补丁。详见
+bundle 默认线不写进 `bindings`；显式 `version:` 会写入并保留。默认组件集合只在首次写
+state 时 materialize；`update` 只在已记录的线内更新补丁。详见
 [docs/STATE.md](docs/STATE.md)。
 
 ## 已做的校验
 
-- `install` 必须指定 PHP；`--php` 与 install 参数冲突时报错。
-- 扩展声明 `LINES` 时，线集合必须和 catalog 一致；dep 不允许声明 `LINES`/`PHP_LINES`。
-- `PHP_LINES` 和 `PHP_DEP_LINES` 必须覆盖所有 PHP 系列，引用的线必须存在于 catalog。
-- 每条线必须支持当前 PHP；显式线不满足直接报错。
+- 每个命令只接受一个 `产品@系列`；目标必须带 `@`。
+- 组件声明 `LINES` 时，线集合必须和 catalog 一致；dep 不允许声明
+  `LINES`/`PRODUCT_LINES`/`PRODUCT_DEP_LINES`。
+- `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 引用的产品系列和线必须存在于 catalog。
+- 每条线必须支持当前产品系列；显式线不满足直接报错。
 - feature 的 `requires.commands` 会在选择 / state 校验时检查 PATH；缺命令时显式选择报错，
   bundle 默认丢弃并提示。
 - 依赖线取交集；显式 pin 冲突报错，bundle 软默认只在唯一候选时自动切换。
 - 版本线不存在、组件没有版本表、`version:` 写成补丁号都会报错。
-- ext 契约：`link` 非空且默认值必须在 `link` 里；shared 必须有 `ini`；
-  内置扩展还要 `shared_from`，非内置还要 `url`+`version`；origin 由 `builtin_exts` 推导。
-- php recipe 的 `builtin_exts` 非空无重复；`builtin_disable` 的 key 必须是内置扩展，
-  值必须是单个 `--without-*` / `--disable-*`。
-- bundle `[default_exts]` 是表（`link` / `features` / `deps`）；名字必须是内置扩展且有 recipe，
-  不允许 `version:`；条件 feature 不满足时提示并丢弃。
-- `[ext_presets]` 只提供选中扩展时的默认配置；`default_exts` 的 `ref` 必须是
-  `"ext_presets.<同名扩展>"`，不能和本地 `features`/`deps` 同时写。
+- 组件契约：`modes` 非空且默认 mode 在 `modes` 里；external 必须有 `url`+`version`；
+  bundled 必须有产品 `bundled` 条目；mode 必须由产品 profile 定义。
+- 产品 recipe 的 `bundled` 无重复；`bundled_disable` 的 key 必须是 bundled 组件，
+  值必须是单个 `--without-*` / `--disable-*`；profile 的 `strategy` 合法。
+- bundle `[default_components]` 是表（`mode` / `features` / `deps`）；名字必须是 bundled
+  组件且有 recipe，不允许 `version:`；条件 feature 不满足时提示并丢弃。
+- `[component_presets]` 只提供选中组件时的默认配置；`default_components` 的 `ref` 必须是
+  `"component_presets.<同名组件>"`，不能和本地 `features`/`deps` 同时写。
 - `dep_configure` 的 key 必须在 `needs` 或某个 feature 的 `needs` 里；方括号里的 feature
   必须在该 dep 的 `features` 里。
-- ext 的 `features` 只允许 `needs` / `configure` / `requires`；`requires` 不满足时显式选择直接报错。
-- `audit` 对照上游选项清单：扩展有未处置的选项、或 `ignored` 写了不存在的选项时退出码 1；
+- 组件的 `features` 只允许 `needs` / `configure` / `requires`；`requires` 不满足时显式
+  选择直接报错。
+- `audit` 对照上游选项清单：组件有未处置的选项、或 `ignored` 写了不存在的选项时退出码 1；
   处置规则和默认值判据见 [docs/FEATURES.md](docs/FEATURES.md)。
 - 下载缓存命中跳过；有 sha256 的文件按哈希判断，没有 sha256 时按远端大小判断。
 - `--downloads` 只下载，不解压、不编译、不写状态；下载、解压或编译失败都不写状态。
-- 解压目标 `build/<组件>/<补丁>/` 已存在时跳过。
-- 编译按节点签名跳过已完成的部分；签名变化先 `make distclean`。
-- 编译结束写 `myphp`、`.phprt/current`，并校验 `php -v` 和 `php -m`。
+- 解压目标 `build/<名字>/<补丁>/` 已存在时跳过。
+- 编译按节点签名跳过已完成的部分；签名变化先 `make distclean`，CMake 依赖再清
+  `CMakeCache.txt` / `CMakeFiles`。
+- PHP 编译结束写 `myphp-<系列>`（只有一个 PHP 系列时另写 `myphp`），并校验
+  `php -v` 和 `php -m`；nginx 校验 `nginx -V`。
 - 目标名重复、未知目标、裸名歧义、依赖成环都报错。
 
 ## 还没做
 
 - 在线更新 catalog（目前是文件）。
 - 精确补丁 pin / lock 文件。
+- 项目清单、当前产品、默认版本。
+- 一条命令安装多个产品；跨产品共享安装树。
+- CPython 产品（设计见 [docs/GENERIC.md](docs/GENERIC.md)，当前只落地 PHP 和 nginx）。
 - `--static-all`、多 PHP 同时构建、LTO。
-- 除 8.5 以外 PHP 系列的默认扩展集和真构建验收。

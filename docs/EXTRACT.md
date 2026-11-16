@@ -8,7 +8,7 @@
 
 ```bash
 phprt install 8.5                    # 下载 → 解压 → 编译 → 写 state
-phprt install 8.5 --ext swoole       # 扩展和依赖一起下载、解压
+phprt install php@8.5 --component swoole       # 组件和依赖一起下载、解压
 phprt install 8.5 --downloads        # 只下载，不解压
 phprt update --offline               # 用缓存下载，再解压
 ```
@@ -86,8 +86,8 @@ phprt update --offline               # 用缓存下载，再解压
 
 ```text
 解压源码（按构建顺序，3 个）
-[1/3] [php] 8.5.12 解压 php-8.5.12.tar.xz → build/php/php-8.5.12
-[php] 8.5.12 ✓ 解压完成
+[1/3] [product] php 8.5.12 解压 php-8.5.12.tar.xz → build/php/php-8.5.12
+[product] php 8.5.12 ✓ 解压完成
 [2/3] [deps] nghttp2 1.64.0 解压 nghttp2-1.64.0.tar.gz → build/nghttp2/nghttp2-1.64.0
 [deps] nghttp2 1.64.0 ✓ 解压完成
 [deps] libcurl 8.23.0 ✓ 已解压

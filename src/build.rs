@@ -9,7 +9,7 @@ use phprt_build::{Cmd, Ini, Step};
 use phprt_ui::Mode;
 
 use crate::layout;
-use crate::recipe::{Kind, Mode as LinkMode, Registry, Selection, Target};
+use crate::recipe::{Kind, Registry, Selection, Strategy, Target};
 use crate::render::{self, Ctx};
 
 const MYPHP: &str = include_str!("../templates/myphp.tmpl");
@@ -31,18 +31,22 @@ pub fn run(
 
     let root = fs::canonicalize(opts.root)
         .with_context(|| format!("读不到项目根 {}", opts.root.display()))?;
-    let php = reg.php()?;
-    let tree = format!("{}/.phprt/php-{}", root.display(), php.version);
+    let product = reg.product_any()?;
+    let tree = format!(
+        "{}/.phprt/{}-{}",
+        root.display(),
+        product.name,
+        product.version
+    );
     let tree_path = PathBuf::from(&tree);
-    let php_build = build_dir(&root, php);
-    let tree_abs = tree_path.clone();
+    let product_build = root.join(layout::build_dir_of(product));
     let jobs = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
     let vendor = fs::canonicalize(opts.recipes.join("../vendor/perl")).ok();
     let tool_names: BTreeSet<String> = reg
-        .of_kind(Kind::Ext)
-        .flat_map(|ext| ext.tools.iter().cloned())
+        .of_kind(Kind::Component)
+        .flat_map(|component| component.tools.iter().cloned())
         .collect();
 
     let autoconf = order
@@ -52,20 +56,24 @@ pub fn run(
 
     let mut steps = Vec::new();
     for target in order {
-        let mode = if target.kind == Kind::Ext {
-            Some(sel.mode_of(target)?)
+        let mode = if target.kind == Kind::Component {
+            Some(sel.mode_of(target))
         } else {
             None
         };
-        if target.kind == Kind::Ext && mode == Some(LinkMode::Static) {
+        let strategy = match (&mode, target.kind) {
+            (Some(mode), Kind::Component) => Some(reg.product_mode(target, mode)?.strategy_kind()?),
+            _ => None,
+        };
+        if strategy == Some(Strategy::Fold) {
             continue;
         }
 
         let prefix = match target.kind {
             Kind::Dep => dep_prefix(&tree_path, target),
-            _ => tree_abs.clone(),
+            _ => tree_path.clone(),
         };
-        let work = work_dir(&root, target, php, mode);
+        let work = work_dir(&root, target, product, strategy, mode.as_deref());
         let deps = link_closure(reg, sel, features, target)?;
         let link_prefixes: Vec<PathBuf> = deps
             .iter()
@@ -80,7 +88,7 @@ pub fn run(
             .map(|dep| dep_prefix(&tree_path, dep))
             .collect();
 
-        // PHP_AUTOCONF / PHP_AUTOHEADER 只影响 phpize 类扩展的构建，
+        // PHP_AUTOCONF / PHP_AUTOHEADER 只影响 phpize 类组件的构建，
         // 其他节点注入会污染签名、触发无关重编。
         let node_autoconf = if target.tools.iter().any(|name| name == "autoconf") {
             autoconf.as_deref()
@@ -88,7 +96,7 @@ pub fn run(
             None
         };
 
-        let env = build_env(
+        let mut env = build_env(
             &tree,
             &link_prefixes,
             &tool_prefixes,
@@ -96,108 +104,144 @@ pub fn run(
             vendor.as_deref(),
             node_autoconf,
         );
+        let node_ctx = ctx(&tree, &work, &prefix);
+        if target.kind != Kind::Dep {
+            env.extend(profile_env(product, target, &node_ctx, order)?);
+        }
+        if target.kind == Kind::Component {
+            env.extend(component_env(reg, target, &node_ctx)?);
+        }
+        if target.kind == Kind::Product {
+            for name in &target.components {
+                let component = reg.component(name)?;
+                let component_mode = sel.mode_of(component);
+                if reg
+                    .product_mode(component, &component_mode)?
+                    .strategy_kind()?
+                    == Strategy::Fold
+                {
+                    let extra = component_env(reg, component, &node_ctx)?;
+                    for (key, value) in extra {
+                        if let Some(previous) = env.get(&key)
+                            && previous != &value
+                        {
+                            bail!(
+                                "组件 {} 的 {key} 与已有环境变量冲突（{previous} / {value}）",
+                                component.name
+                            );
+                        }
+                        env.insert(key, value);
+                    }
+                }
+            }
+        }
 
         let (commands, artifacts) = match target.kind {
             Kind::Dep => {
-                let args = render::dep_configure(
-                    reg,
-                    target,
-                    features.get(&target.name),
-                    &ctx(&tree, &work, &prefix),
-                )?;
+                let args =
+                    render::dep_configure(reg, target, features.get(&target.name), &node_ctx)?;
                 (
-                    dep_commands(args, &target.make, &ctx(&tree, &work, &prefix), reg)?,
-                    &target.artifacts,
+                    program_commands(args, &target.make, &node_ctx, reg)?,
+                    artifacts_expanded(&target.artifacts, target),
                 )
             }
-            Kind::Php => {
-                let mut args = expand_all(&target.configure, &ctx(&tree, &work, &prefix), reg)?;
-                let ext_ctx = ctx(&tree, &php_build, &tree_path);
-                args.extend(render::php_configure_flags(reg, target, sel, &ext_ctx)?);
+            Kind::Product => {
+                let mut args = target
+                    .configure
+                    .iter()
+                    .map(|arg| render::expand(arg, &node_ctx, reg))
+                    .collect::<Result<Vec<_>>>()?;
+                args.extend(render::product_configure_flags(
+                    reg, target, sel, &node_ctx,
+                )?);
                 let mut commands = Vec::new();
                 if !args.is_empty() {
-                    commands.push(Cmd::Program {
-                        program: "./configure".to_owned(),
-                        args,
-                    });
+                    // 产品 recipe 的 configure 可以写 "./configure" 作为第一项，
+                    // 也可以只写参数；两种情况都执行 ./configure。
+                    let program = if args[0] == "./configure" {
+                        args.remove(0)
+                    } else {
+                        "./configure".to_owned()
+                    };
+                    commands.push(Cmd::Program { program, args });
                 }
                 for line in &target.make {
-                    commands.push(Cmd::Shell(render::expand(
-                        line,
-                        &ctx(&tree, &work, &prefix),
-                        reg,
-                    )?));
+                    commands.push(Cmd::Shell(render::expand(line, &node_ctx, reg)?));
                 }
-                (commands, &target.artifacts)
+                let mut artifacts = artifacts_expanded(&target.artifacts, target);
+                for name in &target.components {
+                    let component = reg.component(name)?;
+                    let component_mode = sel.mode_of(component);
+                    let def = reg.product_mode(component, &component_mode)?;
+                    if def.strategy_kind()? == Strategy::Fold {
+                        artifacts.extend(artifacts_expanded(&def.artifacts, component));
+                    }
+                }
+                (commands, artifacts)
             }
-            Kind::Ext => {
-                let ext_ctx = ctx(&tree, &work, &prefix);
+            Kind::Component => {
+                let mode_name = mode.clone().unwrap_or_default();
+                let def = reg.product_mode(target, &mode_name)?;
                 let mut commands = Vec::new();
                 for line in &target.prepare {
-                    commands.push(Cmd::Shell(render::expand(line, &ext_ctx, reg)?));
+                    commands.push(Cmd::Shell(render::expand(line, &node_ctx, reg)?));
                 }
-                let mut args = render::ext_configure(reg, target, sel, &ext_ctx)?;
-                args.insert(0, format!("--with-php-config={}/bin/php-config", tree));
-                commands.push(Cmd::Program {
-                    program: "phpize".to_owned(),
-                    args: Vec::new(),
-                });
-                commands.push(Cmd::Program {
-                    program: "./configure".to_owned(),
-                    args,
-                });
-                commands.push(Cmd::Shell("make".to_owned()));
-                commands.push(Cmd::Shell("make install".to_owned()));
-                (commands, &target.artifacts)
-            }
-        };
-
-        let artifacts: Vec<PathBuf> = if artifacts.is_empty() && target.kind == Kind::Ext {
-            vec![PathBuf::from(format!(
-                "lib/php/extensions/*/{}.so",
-                target.name
-            ))]
-        } else {
-            artifacts.iter().map(PathBuf::from).collect()
-        }
-        .into_iter()
-        .map(|rel| prefix.join(rel))
-        .collect();
-
-        let ini = match (target.kind, mode) {
-            (Kind::Ext, Some(LinkMode::Shared)) => Some(Ini {
-                path: PathBuf::from(&tree).join("etc/conf.d").join(&target.ini),
-                lines: if target.ini_lines.is_empty() {
-                    vec![format!("extension={}.so", target.name)]
+                let flags = render::component_configure(reg, target, sel, &node_ctx)?;
+                for template in &def.steps {
+                    let line = template
+                        .replace("{name}", &target.name)
+                        .replace("{product}", &tree)
+                        .replace("{flags}", &flags.join(" "))
+                        .replace("{build}", &work.display().to_string())
+                        .replace("{prefix}", &tree);
+                    commands.push(Cmd::Shell(render::expand(&line, &node_ctx, reg)?));
+                }
+                let artifacts = if target.artifacts.is_empty() {
+                    artifacts_expanded(&def.artifacts, target)
                 } else {
-                    target.ini_lines.clone()
-                },
-            }),
-            _ => None,
+                    artifacts_expanded(&target.artifacts, target)
+                };
+                (commands, artifacts)
+            }
         };
 
-        let copy_from = match (target.kind, mode, target.origin.as_str()) {
-            (Kind::Ext, Some(LinkMode::Shared), "builtin") => {
-                Some(php_build.join(&target.shared_from))
+        let artifacts: Vec<PathBuf> = artifacts.into_iter().map(|rel| prefix.join(rel)).collect();
+
+        let ini = match (target.kind, mode.as_deref()) {
+            (Kind::Component, Some(mode_name))
+                if register_action(product, mode_name) == Some("php-ini")
+                    && !target.ini.is_empty() =>
+            {
+                Some(Ini {
+                    path: PathBuf::from(&tree).join("etc/conf.d").join(&target.ini),
+                    lines: if target.ini_lines.is_empty() {
+                        vec![format!("extension={}.so", target.name)]
+                    } else {
+                        target.ini_lines.clone()
+                    },
+                })
             }
             _ => None,
         };
-        let sig = signature(target, mode, &commands, &env, &artifacts);
+
+        let copy_from = match (target.kind, target.source.as_str(), strategy) {
+            (Kind::Component, "bundled", Some(Strategy::Standalone)) => {
+                Some(product_build.join(render::bundled_source_path(product, target)?))
+            }
+            _ => None,
+        };
+        let sig = signature(target, strategy, &commands, &env, &artifacts);
 
         steps.push(Step {
             tag: format!(
-                "[{}] {}{}",
+                "[{}] {} {}",
                 match target.kind {
-                    Kind::Php => "php",
+                    Kind::Product => "product",
                     Kind::Dep => "deps",
-                    Kind::Ext => "ext",
+                    Kind::Component => "component",
                 },
                 target.name,
-                if target.kind == Kind::Php {
-                    String::new()
-                } else {
-                    format!(" {}", target.version)
-                }
+                target.version
             ),
             cwd: work.clone(),
             copy_from,
@@ -221,22 +265,28 @@ pub fn run(
     phprt_build::run(&steps, &phprt_build::Options { ui: opts.ui })?;
 
     let tree = PathBuf::from(&tree);
-    deploy_libs(order, &tree)?;
-    write_tree_config(reg, sel, &tree)?;
-    verify(reg, sel, &tree)?;
-    write_entry(&root, &tree, &php.version)?;
+    deploy_libs(product, order, &tree)?;
+    write_tree_config(reg, product, sel, &tree)?;
+    verify(reg, product, &tree)?;
+    let target = format!("{}@{}", product.name, product.series);
+    write_entry(&root, product, &target)?;
     Ok(())
 }
 
-/// `ext remove` 之后立刻停用：删掉这个扩展的 ini。树不存在时什么也不做。
-pub fn disable_ext(root: &Path, php_version: &str, ext: &Target) -> Result<()> {
-    if ext.ini.is_empty() {
+/// `remove` 之后立刻停用：删掉这个组件的登记文件。树不存在时什么也不做。
+pub fn disable_component(
+    root: &Path,
+    product: &Target,
+    component: &Target,
+    mode: &str,
+) -> Result<()> {
+    if register_action(product, mode) != Some("php-ini") || component.ini.is_empty() {
         return Ok(());
     }
     let path = root
-        .join(format!(".phprt/php-{php_version}"))
+        .join(format!(".phprt/{}-{}", product.name, product.version))
         .join("etc/conf.d")
-        .join(&ext.ini);
+        .join(&component.ini);
     if path.exists() {
         fs::remove_file(&path).with_context(|| format!("删不了 {}", path.display()))?;
     }
@@ -251,13 +301,7 @@ fn ctx<'a>(tree: &'a str, build: &Path, prefix: &Path) -> Ctx<'a> {
     }
 }
 
-fn expand_all(args: &[String], ctx: &Ctx<'_>, reg: &Registry) -> Result<Vec<String>> {
-    args.iter()
-        .map(|arg| render::expand(arg, ctx, reg))
-        .collect()
-}
-
-fn dep_commands(
+fn program_commands(
     mut configure: Vec<String>,
     make: &[String],
     ctx: &Ctx<'_>,
@@ -277,9 +321,20 @@ fn dep_commands(
     Ok(commands)
 }
 
+fn artifacts_expanded(patterns: &[String], target: &Target) -> Vec<String> {
+    patterns
+        .iter()
+        .map(|pattern| pattern.replace("{name}", &target.name))
+        .collect()
+}
+
+fn register_action<'a>(product: &'a Target, mode: &str) -> Option<&'a str> {
+    product.profile.register.get(mode).map(String::as_str)
+}
+
 fn signature(
     target: &Target,
-    mode: Option<LinkMode>,
+    strategy: Option<Strategy>,
     commands: &[Cmd],
     env: &BTreeMap<String, String>,
     artifacts: &[PathBuf],
@@ -288,8 +343,8 @@ fn signature(
     out.push_str(&format!("id={}\n", target.id()));
     out.push_str(&format!("version={}\n", target.version));
     out.push_str(&format!(
-        "mode={}\n",
-        mode.map(|m| m.as_str()).unwrap_or("")
+        "strategy={}\n",
+        strategy.map(|s| s.as_str()).unwrap_or("")
     ));
     for cmd in commands {
         match cmd {
@@ -316,18 +371,20 @@ fn dep_prefix(tree: &Path, dep: &Target) -> PathBuf {
         .join(format!("{}-{}", dep.name, dep.version))
 }
 
-fn build_dir(root: &Path, target: &Target) -> PathBuf {
-    let dir = layout::build_dir(&target.name, target.kind, &target.url);
-    root.join(dir)
-}
-
-fn work_dir(root: &Path, target: &Target, php: &Target, mode: Option<LinkMode>) -> PathBuf {
-    match (target.kind, mode, target.origin.as_str()) {
-        (Kind::Ext, Some(LinkMode::Shared), "builtin") => root
+fn work_dir(
+    root: &Path,
+    target: &Target,
+    product: &Target,
+    strategy: Option<Strategy>,
+    mode: Option<&str>,
+) -> PathBuf {
+    let _ = mode;
+    match (target.kind, target.source.as_str(), strategy) {
+        (Kind::Component, "bundled", Some(Strategy::Standalone)) => root
             .join("build")
             .join(&target.name)
-            .join(format!("php-{}", php.version)),
-        _ => build_dir(root, target),
+            .join(format!("{}-{}", product.name, product.version)),
+        _ => root.join(layout::build_dir_of(target)),
     }
 }
 
@@ -340,7 +397,7 @@ fn link_closure(
     let mut out = BTreeSet::new();
     match target.kind {
         Kind::Dep => walk_dep(reg, features, &target.name, &mut out),
-        Kind::Ext => {
+        Kind::Component => {
             for need in &target.needs {
                 walk_dep(reg, features, need, &mut out);
             }
@@ -348,16 +405,20 @@ fn link_closure(
                 walk_dep(reg, features, need, &mut out);
             }
         }
-        Kind::Php => {
-            for name in &target.exts {
-                let ext = reg.ext(name)?;
-                if sel.mode_of(ext)? != LinkMode::Static {
+        Kind::Product => {
+            for need in &target.needs {
+                walk_dep(reg, features, need, &mut out);
+            }
+            for name in &target.components {
+                let component = reg.component(name)?;
+                let mode = sel.mode_of(component);
+                if reg.product_mode(component, &mode)?.strategy_kind()? != Strategy::Fold {
                     continue;
                 }
-                for need in &ext.needs {
+                for need in &component.needs {
                     walk_dep(reg, features, need, &mut out);
                 }
-                for need in sel.feature_needs(ext) {
+                for need in sel.feature_needs(component) {
                     walk_dep(reg, features, need, &mut out);
                 }
             }
@@ -458,6 +519,62 @@ fn build_env(
     env
 }
 
+/// 产品 profile 声明的环境变量；引用了不在本次构建里的工具时跳过。
+/// 产品 profile 的环境变量只注入真正用到对应工具的节点：
+/// PHP 的 PHP_AUTOCONF 只给 tools 里有 autoconf 的 phpize 类组件。
+fn profile_env(
+    product: &Target,
+    node: &Target,
+    ctx: &Ctx<'_>,
+    order: &[&Target],
+) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for (key, value) in &product.profile.env {
+        let Some(expanded) = expand_tool(value, ctx, order, &node.tools)? else {
+            continue;
+        };
+        out.insert(key.clone(), expanded);
+    }
+    Ok(out)
+}
+
+fn component_env(
+    reg: &Registry,
+    component: &Target,
+    ctx: &Ctx<'_>,
+) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for (key, value) in &component.env {
+        out.insert(key.clone(), render::expand(value, ctx, reg)?);
+    }
+    Ok(out)
+}
+
+fn expand_tool(
+    template: &str,
+    ctx: &Ctx<'_>,
+    order: &[&Target],
+    node_tools: &[String],
+) -> Result<Option<String>> {
+    let mut value = template.replace("{tree}", ctx.tree);
+    while let Some(start) = value.find("{tool:") {
+        let after = &value[start + 6..];
+        let Some(end) = after.find('}') else {
+            break;
+        };
+        let name = &after[..end];
+        if !node_tools.iter().any(|tool| tool == name) {
+            return Ok(None);
+        }
+        let Some(dep) = order.iter().find(|t| t.kind == Kind::Dep && t.name == name) else {
+            return Ok(None);
+        };
+        let prefix = format!("{}/deps/{}-{}", ctx.tree, dep.name, dep.version);
+        value.replace_range(start..start + 6 + end + 1, &prefix);
+    }
+    Ok(Some(value))
+}
+
 fn join_env(key: &str, base: &str) -> String {
     let base = base.trim_end();
     match std::env::var(key) {
@@ -473,8 +590,12 @@ fn append_env(key: &str, base: &str) -> String {
     }
 }
 
-fn deploy_libs(order: &[&Target], tree: &Path) -> Result<()> {
-    let flat = tree.join("lib/phprt");
+fn deploy_libs(product: &Target, order: &[&Target], tree: &Path) -> Result<()> {
+    let lib_dir = &product.profile.runtime.lib_dir;
+    if lib_dir.is_empty() {
+        return Ok(());
+    }
+    let flat = tree.join(lib_dir);
     if flat.is_dir() {
         fs::remove_dir_all(&flat).with_context(|| format!("清不了 {}", flat.display()))?;
     }
@@ -523,33 +644,62 @@ fn deploy_libs(order: &[&Target], tree: &Path) -> Result<()> {
         patchelf_rpath(&path, "$ORIGIN")?;
     }
 
-    if let Ok(entries) = fs::read_dir(tree.join("bin")) {
-        for entry in entries {
-            let path = entry?.path();
+    for (pattern, rpath) in &product.profile.runtime.rpath {
+        for path in glob_paths(tree, pattern) {
             if !is_elf(&path) {
                 continue;
             }
-            patchelf_rpath(&path, "$ORIGIN/../lib/phprt")?;
-        }
-    }
-    let ext_root = tree.join("lib/php/extensions");
-    if let Ok(dirs) = fs::read_dir(&ext_root) {
-        for dir in dirs {
-            let dir = dir?.path();
-            if !dir.is_dir() {
-                continue;
-            }
-            if let Ok(entries) = fs::read_dir(&dir) {
-                for entry in entries {
-                    let path = entry?.path();
-                    if is_elf(&path) {
-                        patchelf_rpath(&path, "$ORIGIN/../../../phprt")?;
-                    }
-                }
-            }
+            patchelf_rpath(&path, rpath)?;
         }
     }
     Ok(())
+}
+
+/// 在安装树里展开 `bin/*`、`lib/php/extensions/*/*.so` 这类相对 glob。
+fn glob_paths(root: &Path, pattern: &str) -> Vec<PathBuf> {
+    let parts: Vec<&str> = pattern.split('/').filter(|p| !p.is_empty()).collect();
+    let mut out = Vec::new();
+    walk_glob(root, &parts, &mut out);
+    out
+}
+
+fn walk_glob(dir: &Path, parts: &[&str], out: &mut Vec<PathBuf>) {
+    if parts.is_empty() {
+        if dir.exists() {
+            out.push(dir.to_path_buf());
+        }
+        return;
+    }
+    let (first, rest) = (parts[0], &parts[1..]);
+    if first.contains('*') {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if glob_match(first, &name) {
+                walk_glob(&entry.path(), rest, out);
+            }
+        }
+        return;
+    }
+    let next = dir.join(first);
+    if !next.exists() {
+        return;
+    }
+    walk_glob(&next, rest, out);
+}
+
+fn glob_match(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        Some((prefix, suffix)) => {
+            name.len() >= prefix.len() + suffix.len()
+                && name.starts_with(prefix)
+                && name.ends_with(suffix)
+        }
+        None => pattern == name,
+    }
 }
 
 fn patchelf_rpath(path: &Path, rpath: &str) -> Result<()> {
@@ -573,7 +723,10 @@ fn is_elf(path: &Path) -> bool {
     bytes.starts_with(b"\x7fELF")
 }
 
-fn write_tree_config(reg: &Registry, sel: &Selection, tree: &Path) -> Result<()> {
+fn write_tree_config(reg: &Registry, product: &Target, sel: &Selection, tree: &Path) -> Result<()> {
+    if product.profile.config != "php" {
+        return Ok(());
+    }
     let etc = tree.join("etc");
     let conf = etc.join("conf.d");
     fs::create_dir_all(&conf).with_context(|| format!("建不了 {}", conf.display()))?;
@@ -587,14 +740,15 @@ fn write_tree_config(reg: &Registry, sel: &Selection, tree: &Path) -> Result<()>
         .with_context(|| format!("写不了 {}", ini.display()))?;
     }
 
-    let selected: BTreeSet<&str> = reg.php()?.exts.iter().map(String::as_str).collect();
-    for ext in reg.of_kind(Kind::Ext) {
-        if ext.ini.is_empty() {
+    let selected: BTreeSet<&str> = product.components.iter().map(String::as_str).collect();
+    for component in reg.of_kind(Kind::Component) {
+        if component.ini.is_empty() {
             continue;
         }
-        let enabled = selected.contains(ext.name.as_str()) && sel.mode_of(ext)? == LinkMode::Shared;
+        let enabled = selected.contains(component.name.as_str())
+            && register_action(product, &sel.mode_of(component)) == Some("php-ini");
         if !enabled {
-            let path = conf.join(&ext.ini);
+            let path = conf.join(&component.ini);
             if path.exists() {
                 fs::remove_file(&path)
                     .with_context(|| format!("删不了旧 ini {}", path.display()))?;
@@ -626,39 +780,55 @@ fn write_tree_config(reg: &Registry, sel: &Selection, tree: &Path) -> Result<()>
     Ok(())
 }
 
-fn verify(reg: &Registry, sel: &Selection, tree: &Path) -> Result<()> {
-    let php = tree.join("bin/php");
-    let version = Command::new(&php)
-        .arg("-v")
+fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
+    if product.profile.verify.is_empty() {
+        return Ok(());
+    }
+    let mut argv = Vec::new();
+    for arg in &product.profile.verify {
+        argv.push(arg.replace("{tree}", &tree.display().to_string()));
+    }
+    let program = argv.remove(0);
+    let output = Command::new(&program)
+        .args(&argv)
         .output()
-        .with_context(|| format!("跑不起来 {}", php.display()))?;
-    if !version.status.success() {
+        .with_context(|| format!("跑不起来 {}", program))?;
+    if !output.status.success() {
         bail!(
-            "{} -v 失败:\n{}",
-            php.display(),
-            String::from_utf8_lossy(&version.stderr)
+            "{} {} 失败:\n{}",
+            program,
+            argv.join(" "),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
-    let output = Command::new(&php)
-        .arg("-m")
+    if product.profile.verify_modules.is_empty() {
+        return Ok(());
+    }
+    let command = product
+        .profile
+        .verify_modules
+        .replace("{tree}", &tree.display().to_string());
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
         .output()
-        .with_context(|| format!("跑不起来 {} -m", php.display()))?;
+        .with_context(|| format!("跑不起来 {command}"))?;
     if !output.status.success() {
         bail!(
-            "{} -m 失败:\n{}",
-            php.display(),
+            "{} 失败:\n{}",
+            command,
             String::from_utf8_lossy(&output.stderr)
         );
     }
     let loaded = String::from_utf8_lossy(&output.stdout).to_lowercase();
     let mut missing = Vec::new();
-    for name in &reg.php()?.exts {
-        let ext = reg.ext(name)?;
-        if sel.mode_of(ext)? != LinkMode::Static && sel.mode_of(ext)? != LinkMode::Shared {
+    for name in &product.components {
+        let component = reg.component(name)?;
+        if component.modules.is_empty() {
             continue;
         }
-        for module in &ext.modules {
+        for module in &component.modules {
             if !loaded
                 .lines()
                 .any(|line| line.trim().eq_ignore_ascii_case(module))
@@ -669,7 +839,8 @@ fn verify(reg: &Registry, sel: &Selection, tree: &Path) -> Result<()> {
     }
     if !missing.is_empty() {
         bail!(
-            "PHP 启动后缺少扩展:\n  {}\n{}",
+            "{} 启动后缺少组件模块:\n  {}\n{}",
+            product.name,
             missing.join("\n  "),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -677,21 +848,53 @@ fn verify(reg: &Registry, sel: &Selection, tree: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_entry(root: &Path, tree: &Path, version: &str) -> Result<()> {
-    let myphp = root.join("myphp");
-    fs::write(&myphp, MYPHP).with_context(|| format!("写不了 {}", myphp.display()))?;
-    let mut perms = fs::metadata(&myphp)?.permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&myphp, perms)?;
-
-    let current = root.join(".phprt/current");
-    if current.exists() || fs::symlink_metadata(&current).is_ok() {
-        fs::remove_file(&current).with_context(|| format!("删不了 {}", current.display()))?;
+fn write_entry(root: &Path, product: &Target, target: &str) -> Result<()> {
+    if product.profile.entry.is_empty() {
+        return Ok(());
     }
-    std::os::unix::fs::symlink(format!("php-{version}"), &current)
-        .with_context(|| format!("建不了 {}", current.display()))?;
-    let _ = tree;
+    let name = product.profile.entry.replace("{series}", &product.series);
+    let template = match product.profile.entry_template.as_str() {
+        "myphp" => MYPHP,
+        other => bail!("未知的入口模板 {other}"),
+    };
+    let content = template
+        .replace("@@TREE@@", &format!("{}-{}", product.name, product.version))
+        .replace("@@TARGET@@", target);
+    write_script(&root.join(&name), &content)?;
+
+    if let Some(base) = name.strip_suffix(&format!("-{}", product.series))
+        && !base.is_empty()
+        && only_series(root, product)
+    {
+        write_script(&root.join(base), &content)?;
+    }
     Ok(())
+}
+
+fn write_script(path: &Path, content: &str) -> Result<()> {
+    fs::write(path, content).with_context(|| format!("写不了 {}", path.display()))?;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// 项目里是否只有当前产品的这一个系列（用来决定要不要写不带系列的入口别名）。
+fn only_series(root: &Path, product: &Target) -> bool {
+    let Ok(entries) = fs::read_dir(root.join(".phprt")) else {
+        return true;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(rest) = name.strip_prefix(&format!("{}-", product.name)) else {
+            continue;
+        };
+        if rest != product.series && entry.path().join("state.json").is_file() {
+            return false;
+        }
+    }
+    true
 }
 
 fn need_commands(order: &[&Target], features: &BTreeMap<String, Vec<String>>) -> Result<()> {

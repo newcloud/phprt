@@ -15,49 +15,49 @@
 
 ```bash
 # 1. 先解压一次源码（audit 读上游的 config.m4 / configure --help）
-phprt install 8.5
+phprt install php@8.5
 
 # 2. 对照上游选项清单
-phprt --php 8.5 audit
+phprt audit php@8.5
 
 # 3. 逐个处置：写进 features / dep_configure，或写进 ignored 并给理由
 
 # 4. 再跑一次，直到没有「未处理」
-phprt --php 8.5 audit
+phprt audit php@8.5
 
-# 5. 决定默认值，写进 bundles/php<系列>.toml
+# 5. 决定默认值，写进 bundles/<产品>/<系列>.toml
 ```
 
 `audit` 的输出形态：
 
 ```text
-ext:openssl
+component:openssl
   source  build/php/php-8.5.12/ext/openssl
   --with-openssl                     configure
   --with-openssl-argon2              feature argon2
   --with-openssl-legacy-provider     ignored: 会改变默认 TLS 行为，需要单独验证
   --with-system-ciphers              ignored: 依赖系统 cipher 配置，构建不可复现
-  feature argon2                   默认开  requires php 8.5/8.6，dep:openssl 3.5/4.0
+  feature argon2                   默认开  requires product 8.4/8.5/8.6，dep:openssl 3.5/4.0
   feature jpeg                     预设开  --with-jpeg
 ```
 
 - 扩展 recipe 有「未处理」→ 命令失败（退出码 1）。
-- `默认开` 表示扩展默认安装时就启用；`预设开` 表示只在 `--ext 名字` / `ext add 名字`
-  时由 `[ext_presets]` 启用，不会让扩展默认安装。
+- `默认开` 表示扩展默认安装时就启用；`预设开` 表示只在 `--component 名字` / `add 名字`
+  时由 `[component_presets]` 启用，不会让扩展默认安装。
 - 依赖库只报数量，不失败：库的绝大多数选项由 recipe 固定，不需要全部做成 feature。
 - `ignored` 里写了上游不存在的选项 → 也算未处理（防止拼写错误）。
-- 同一个 ext recipe 覆盖多个版本线（或 PHP 系列）时，上游选项会增删：只在某条线上
-  存在的选项按 `line` / `php_series` 拼进 `ignored`，不要写进所有版本共用的表，
+- 同一个 component recipe 覆盖多个版本线（或产品系列）时，上游选项会增删：只在某条线上
+  存在的选项按 `line` / `product_series` 拼进 `ignored`，不要写进所有版本共用的表，
   否则另一条线的 `audit` 会报「ignored 但上游没有这个选项」。
 - 源码没解压时会提示先安装一次，不会假装通过。
 
-## 2. 扩展 feature 与依赖 feature 的区别
+## 2. 组件 feature 与依赖 feature 的区别
 
-| | 扩展 feature | 依赖 feature |
+| | 组件 feature | 依赖 feature |
 | --- | --- | --- |
 | 归谁 | PHP 扩展自己 | 依赖库 |
-| 怎么开 | `--ext 扩展=feature:[名字]` | `--ext 扩展=dep:依赖[名字]` |
-| 声明位置 | ext 的 `features` | dep 的 `features` |
+| 怎么开 | `--component 组件=feature:[名字]` | `--component 组件=dep:依赖[名字]` |
+| 声明位置 | component 的 `features` | dep 的 `features` |
 | 例子 | openssl 的 `argon2` | libcurl 的 `ssl` / `nghttp2` |
 
 依赖库的 `features.*.configure` 是该 feature 打开时给**库**的编译参数；`disable` 是没打开时给库的
@@ -108,8 +108,8 @@ ext:openssl
 | gd `--with-avif` | 常用但依赖较大 | feature `avif` + `needs=["aom","avif"]`，默认关 |
 | gd `--with-external-gd` / `--with-xpm` / `--enable-gd-jis-conv` | 少用 | ignored |
 | libjpeg-turbo `WITH_SIMD` | 常用（性能） | dep feature `simd`，默认关；`requires.commands=["nasm"]` |
-| libzip `ENABLE_OPENSSL` | 常用（读写 AES 加密的 zip） | dep feature `encryption` + `needs=["openssl"]`，默认开（`[ext_presets].zip`） |
-| sqlite `--column-metadata` | 常用（PDO `getColumnMeta()` 要这些 API） | dep feature `column_metadata`，默认开（`[ext_presets].sqlite3` / `.pdo_sqlite`） |
+| libzip `ENABLE_OPENSSL` | 常用（读写 AES 加密的 zip） | dep feature `encryption` + `needs=["openssl"]`，默认开（`[component_presets].zip`） |
+| sqlite `--column-metadata` | 常用（PDO `getColumnMeta()` 要这些 API） | dep feature `column_metadata`，默认开（`[component_presets].sqlite3` / `.pdo_sqlite`） |
 | redis `--enable-redis-{igbinary,msgpack}` | 少用：要对应序列化扩展 | ignored，序列化用 redis 自带实现 |
 | redis `--enable-redis-{lz4,zstd}` / `--with-lib{lz4,zstd}` | 少用 | ignored，缺依赖（未排期） |
 | redis `--enable-redis-lzf` / `--with-liblzf` | 常用（压缩） | feature `lzf`，默认关（自带 liblzf） |
@@ -144,17 +144,17 @@ feature 可以要求 PATH 里存在某个命令：
 
 ## 4. 要不要默认开启
 
-默认值只写在 `bundles/php<系列>.toml`，不写进 recipe：
+默认值只写在 `bundles/<产品>/<系列>.toml`，不写进 recipe：
 
-- `[default_exts]`：默认安装哪些扩展；
-- `[ext_presets]`：扩展被选中时默认开哪些 feature，不决定是否默认安装。
+- `[default_components]`：默认安装哪些扩展；
+- `[component_presets]`：扩展被选中时默认开哪些 feature，不决定是否默认安装。
 
 四条判据，从强到弱：
 
 1. **不增加新依赖、不改变行为，只是多一个可用能力 → 默认开。**
    例：openssl 的 `argon2`，OpenSSL 已经在编，只是多一个 KDF。
 2. **依赖已经在默认集里 → 默认开，并且必须和依赖一起写。**
-   例：`[ext_presets] curl = { deps = { libcurl = ["ssl"] } }`，libcurl 本来就要编，
+   例：`[component_presets] curl = { deps = { libcurl = ["ssl"] } }`，libcurl 本来就要编，
    ssl 不额外增加组件。
 3. **改变默认行为或安全边界 → 默认关。**
    例：`--with-openssl-legacy-provider`。
@@ -164,7 +164,7 @@ feature 可以要求 PATH 里存在某个命令：
 补充规则：
 
 - 默认开启后用户无法直接“只关这一个”时，必须先确认 `feature:[]` 能清空（当前行为）。
-- 条件 feature 用 `requires` 声明；默认集里写了一条在某个 PHP 系列不满足的条件，
+- 条件 feature 用 `requires` 声明；默认集里写了一条在某个 产品系列不满足的条件，
   命令会提示并丢弃，不会中断。
 - 一件事只有一种判据：不要因为“可能有人要”就默认开。
 
@@ -200,14 +200,14 @@ features = {
 ```bash
 cargo fmt --all
 cargo test --workspace
-phprt --php 8.5 audit        # 必须退出码 0
-phprt --php 8.5 plan         # 检查 features / dep 行和 configure 参数
+phprt audit php@8.5        # 必须退出码 0
+phprt plan php@8.5             # 检查 features / dep 行和 configure 参数
 
 # 带依赖的 feature：选和不选各看一次构建顺序
-phprt --php 8.5 plan                        # 不应出现 dep:c-ares
-phprt --php 8.5 --ext 'swoole=feature:[cares]' plan
+phprt plan php@8.5                          # 不应出现 dep:c-ares
+phprt plan php@8.5 --component 'swoole=feature:[cares]'
                                             # 出现 dep:c-ares，swoole configure 带 --enable-cares
 ```
 
-真构建至少要覆盖一次默认集：`phprt install 8.5`，并确认默认开启的能力在
+真构建至少要覆盖一次默认集：`phprt install php@8.5`，并确认默认开启的能力在
 `php -m` / `php -i` 或对应的 `php -r` 检查里可见。

@@ -1,18 +1,20 @@
 # 添加或更新 recipe
 
-本文件说明新增版本线、升级补丁号、更换下载地址时怎么改，以及 catalog 下载地址的判定规则。
-字段含义见 [CONTRACT.md](CONTRACT.md)，版本数据规则见 `AGENTS.md` 第 4 节。
+本文件说明新增产品、版本线、组件、升级补丁号、更换下载地址时怎么改，以及 catalog
+下载地址的判定规则。字段含义见 [CONTRACT.md](CONTRACT.md)，版本数据规则见 `AGENTS.md`
+第 4 节。
 
 ## 1. 改哪里
 
 | 改什么 | 动哪些文件 |
 | --- | --- |
 | 升补丁号、换下载地址 | `recipes/catalog.toml` |
-| 新增版本线 | `recipes/catalog.toml` + 消费方的 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`，必要时 `recipes/bundles/php<系列>.toml` |
-| 换默认线 | `recipes/bundles/php<系列>.toml` |
-| 新增扩展 / 改构建参数 | `recipes/ext/<名字>.star` |
-| 新增内置扩展事实 | `recipes/php<系列>.star` 的 `builtin_exts` / `builtin_disable` |
-| 默认启用的扩展集合 | `recipes/bundles/php<系列>.toml` 的 `default_exts` |
+| 新增版本线 | `recipes/catalog.toml` + 消费方的 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`，必要时 `recipes/bundles/<产品>/<系列>.toml` |
+| 换默认线 | `recipes/bundles/<产品>/<系列>.toml` |
+| 新增组件 / 改构建参数 | `recipes/components/<产品>/<名字>.star` |
+| 新增 bundled 组件事实 | `recipes/products/<产品>/<系列>.star` 的 `bundled` / `bundled_disable` |
+| 默认启用的组件集合 | `recipes/bundles/<产品>/<系列>.toml` 的 `default_components` |
+| 新产品 | `recipes/catalog.toml` + `recipes/products/<产品>/<系列>.star` + `recipes/bundles/<产品>/<系列>.toml` |
 
 补丁号只写在 `recipes/catalog.toml`。recipe、bundle、state 都不写补丁号。
 
@@ -37,7 +39,7 @@ location: https://github.com/openssl/openssl/releases/download/openssl-3.5.9/ope
 | --- | --- | --- |
 | 跳到另一个站点 | 写**跳转后的最终地址**，并加注释说明从哪跳来 | `openssl.org` → `github.com` |
 | 同一发布方的临时签名或 CDN 跳转 | 写稳定的发布地址，不写带签名参数的临时地址 | `github.com` → `release-assets.githubusercontent.com` |
-| 不跳转 | 写原地址 | `php.net`、`pecl.php.net`、`curl.se` |
+| 不跳转 | 写原地址 | `php.net`、`pecl.php.net`、`curl.se`、`nginx.org` |
 
 跳转后换站点的地址必须写成最终地址，原因是下载器按 catalog 里的原始主机做三件事：
 
@@ -52,7 +54,6 @@ location: https://github.com/openssl/openssl/releases/download/openssl-3.5.9/ope
 ```toml
 # OpenSSL 官方发布页只做跳转：https://www.openssl.org/source/openssl-<版本>.tar.gz
 # 会 301 到 GitHub Releases，所以这里直接写跳转后的最终地址。
-# 注意 1.1.1w 的 tag 是 OpenSSL_1_1_1w，3.0 及以后是 openssl-<版本>。
 [openssl]
 "3.5" = { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "603f5602..." }
 ```
@@ -78,22 +79,87 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 
 除 catalog 外，还要同步：
 
-- 有自己版本线的扩展：`recipes/ext/<名字>.star` 的 `LINES`，线集合必须和 catalog 一致
-- builtin 扩展：`recipes/ext/<名字>.star` 的 `PHP_LINES`（同名依赖）或
-  `PHP_DEP_LINES`（不同名依赖，如 gd 的 libpng/jpeg）
-- 默认线变化：`recipes/bundles/php<系列>.toml`
-- 新增 PHP 系列：`recipes/php<系列>.star` + `recipes/bundles/php<系列>.toml` + catalog `[php]`
+- 有自己版本线的组件：`recipes/components/<产品>/<名字>.star` 的 `LINES`，
+  线集合必须和 catalog 一致
+- bundled 组件：`recipes/components/<产品>/<名字>.star` 的 `PRODUCT_LINES`（同名依赖）
+  或 `PRODUCT_DEP_LINES`（不同名依赖，如 gd 的 libpng/jpeg）
+- 产品自己对依赖的约束：`recipes/products/<产品>/<系列>.star` 的 `LINES`
+- 默认线变化：`recipes/bundles/<产品>/<系列>.toml`
+- 新增产品系列：`recipes/products/<产品>/<系列>.star` +
+  `recipes/bundles/<产品>/<系列>.toml` + catalog 里该产品的线
 
-## 6. 添加扩展
+## 6. 添加产品
 
-### 6.1 PHP 版本事实
+### 6.1 产品 recipe
 
-新增或适配一个 PHP 版本时，在 `recipes/php<系列>.star` 写两组常量：
+路径是 `recipes/products/<产品>/<系列>.star`。`TARGET` 必须是 `product(...)` dict：
 
 ```python
-BUILTIN_EXTS = ["openssl", "curl", "libxml", "dom", ...]
+TARGET = product(
+    name = "nginx",
+    series = "1.29",
+    needs = ["pcre2", "openssl"],
+    configure = ["./configure", "--prefix={tree}", ...],
+    make = ["make", "make install"],
+    artifacts = ["sbin/nginx"],
+    profile = nginx_profile(),
+    desc = "nginx 1.29 本体",
+)
+```
 
-BUILTIN_DISABLE = {
+- `name` 必须和目录名一致，`series` 必须和文件名一致。
+- `version` / `url` / `sha256` 由 catalog 注入，不要写死。
+- `bundled` / `bundled_disable` 是“产品源码包里自带哪些组件、没选中时怎么关闭”。
+- `profile` 定义组件怎么挂到产品上，见 [CONTRACT.md](CONTRACT.md) 第 6 节。
+- 产品自己的 `LINES[系列]` 可以约束依赖线。
+
+### 6.2 组件 recipe
+
+路径是 `recipes/components/<产品>/<名字>.star`：
+
+```python
+def target(ctx):
+    self = ctx["self"]
+    return component(
+        name = "lua-nginx-module",
+        product = "nginx",
+        source = "external",
+        modes = ["dynamic"],
+        version = self["version"],
+        url = self["url"],
+        sha256 = self["sha256"],
+        needs = ["luajit"],
+        env = {
+            "LUAJIT_INC": "{dep:luajit}/include/luajit-2.1",
+            "LUAJIT_LIB": "{dep:luajit}/lib",
+        },
+        desc = "OpenResty lua-nginx-module，动态模块",
+    )
+
+TARGET = target
+```
+
+- `product` 必填；`source` 是 `bundled` / `external`。
+- bundled 组件由产品 recipe 的 `bundled` 列表推导；`source_path` 覆盖产品 profile 的
+  `bundled_path`（PHP 默认 `ext/{name}`）。
+- external 组件必须有 catalog 的 url/version。
+- `modes` 必须在该产品 profile 的 `modes` 里。
+- 组件自己的开关写 `features`；有条件的能力用 `requires` 声明，不要写成
+  `target(ctx)` 里的 `if`。
+- 需要宿主机命令的 feature 用 `requires.commands`，不要塞进 `needs`。
+- 上游源码需要先改再编时，用 `prepare` 写 shell 命令；命令在 standalone 构建前于源码
+  目录执行，幂等（重复执行无副作用），会进构建签名。
+- 依赖的集成参数写 `dep_configure`，key 是 `needs` 里的依赖名，或某个 feature 的
+  `needs` 里的条件依赖。
+
+### 6.3 PHP 版本事实
+
+新增或适配一个 PHP 版本时，在 `recipes/products/php/<系列>.star` 写两组常量：
+
+```python
+BUNDLED = ["openssl", "curl", "libxml", "dom", ...]
+
+BUNDLED_DISABLE = {
     "openssl": "--without-openssl",
     "libxml": "--without-libxml",
     "dom": "--disable-dom",
@@ -103,159 +169,48 @@ BUILTIN_DISABLE = {
 
 规则：
 
-- `builtin_exts` 从该 PHP 版本的 `configure --help` / 源码 `ext/` 查出来，固定成常量；不管当前有没有 recipe。
-- `builtin_disable` 是每个内置扩展的关闭参数，一个扩展一个参数，允许写成字符串，不允许列表或空格。
-- 只列 phprt 需要控制的内置扩展；`--enable-filter` 这类基础参数不放进表里。
-- 未适配的 PHP 系列先写最小 `builtin_exts` 和 `builtin_disable`，等适配时再补全。
+- `bundled` 从该 PHP 版本的 `configure --help` / 源码 `ext/` 查出来，固定成常量；
+  不管当前有没有组件 recipe。
+- `bundled_disable` 是每个 bundled 组件的关闭参数，一个组件一个参数，允许写成字符串，
+  不允许列表或空格。
+- 只列 phprt 需要控制的 bundled 组件；`--enable-filter` 这类基础参数不放进表里。
+- 未适配的 PHP 系列先写最小 `bundled` 和 `bundled_disable`，等适配时再补全。
 
-> 新增或修改 ext / dep recipe 前先读 [FEATURES.md](FEATURES.md)：
-> 上游选项要逐个处置，并决定是否默认开启。
+### 6.4 默认启用
 
-### 6.2 ext recipe
-
-ext recipe 只写构建参数，不写 `origin`、`static_enable`、`static_disable`。是否内置由 `php<系列>.star` 的 `builtin_exts` 推导，通过 `ctx["is_builtin"]` 使用：
-
-```python
-def target(ctx):
-    builtin = ctx["is_builtin"]
-    return ext(
-        name = "openssl",
-        modules = ["openssl"],
-        link = ["static", "shared"],
-        needs = ["openssl"],
-        version = ctx["php_version"] if builtin else ctx["self"]["version"],
-        url = "" if builtin else ctx["self"]["url"],
-        configure = ["--with-openssl={dep:openssl}"],
-        shared_from = "ext/openssl",
-        ini = "20-openssl.ini",
-    )
-```
-
-- 内置扩展默认 static，非内置默认 shared。
-- `configure` 同时用于 PHP static 和扩展自己的 shared 构建。
-- 正向参数写在 ext；负向参数来自 php 版本的 `builtin_disable`。
-- 内置扩展支持 shared 时必须有 `shared_from`；非内置必须有 catalog 的 url/version。
-- 上游源码需要先改再编（如删除已移除头文件的 include）时，用 `prepare` 写 shell 命令；
-  命令在 phpize 之前于源码目录执行，幂等（重复执行无副作用），会进构建签名。
-  能用 configure 参数解决的事不要写 prepare。
-- 依赖的集成参数写 `dep_configure`，key 是 `needs` 里的依赖名，或某个 feature 的
-  `needs` 里的条件依赖：
-
-  ```python
-  dep_configure = {"libcurl": ["--enable-swoole-curl"]},
-  # gd 的 jpeg 由 feature 条件引入
-  dep_configure = {"jpeg": []},
-  ```
-
-- 扩展自己的开关写 `features`；有条件的能力用 `requires` 声明，不要写成
-  `target(ctx)` 里的 `if`：
-
-  ```python
-  features = {
-      "argon2": feature(
-          configure = ["--with-openssl-argon2"],
-          requires = {
-              "php": ["8.5", "8.6"],
-              "dep": {"openssl": ["3.5", "4.0"]},
-          },
-      ),
-  }
-  ```
-
-  显式选择不满足时报错并说明缺哪条；bundle 默认不满足时提示并丢弃。
-
-- 需要宿主机命令的 feature 用 `requires.commands`，不要塞进 `needs`（`needs` 只认 dep recipe）：
-
-  ```python
-  features = {
-      "simd": feature(
-          configure = ["-DWITH_SIMD=ON", "-DREQUIRE_SIMD=ON"],
-          disable = ["-DWITH_SIMD=OFF"],
-          requires = {"commands": ["nasm"]},
-      ),
-  }
-  ```
-
-- CMake 依赖的 `configure` 第一个元素是程序：
-
-  ```python
-  configure = ["cmake", "-S", "{build}", "-B", "{build}",
-               "-DCMAKE_INSTALL_PREFIX={prefix}", ...]
-  make = ["cmake --build {build} --parallel", "cmake --install {build}"]
-  ```
-
-- builtin 扩展依赖多个不同名字的库时，用 `PHP_DEP_LINES`，不要写 `PHP_LINES`：
-
-  ```python
-  PHP_DEP_LINES = {
-      "8.5": {"libpng": ["1.6"], "jpeg": ["3.1"], "webp": ["1.6"],
-              "avif": ["1.3"], "freetype": ["2.13"]},
-  }
-  ```
-
-  每个 PHP 系列都必须有入口；新增 PHP 系列时漏写会直接加载失败。
-
-### 6.3 默认启用
-
-默认集合写在 `recipes/bundles/php<系列>.toml` 的 `[default_exts]` 表：
+默认集合写在 `recipes/bundles/<产品>/<系列>.toml` 的 `[default_components]` 表：
 
 ```toml
-[ext_presets]
+[component_presets]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
 
-[default_exts]
-openssl = { ref = "ext_presets.openssl" }
-curl = { ref = "ext_presets.curl" }
+[default_components]
+openssl = { ref = "component_presets.openssl" }
+curl = { ref = "component_presets.curl" }
 libxml = {}
 ```
 
 规则：
 
-- `[ext_presets]` 提供“扩展被选中时”的默认配置，不决定是否默认安装。
-- `[default_exts]` 决定默认安装集合，必须放在文件最后。
-- `[default_exts]` 可以用 `ref = "ext_presets.<同名扩展>"` 引用预设：
-
-  ```toml
-  [default_exts]
-  gd = { ref = "ext_presets.gd" }
-  ```
-
-  使用 `ref` 时不能再写本地 `features`/`deps`；`link` 可以本地覆盖。
+- `[component_presets]` 提供“组件被选中时”的默认配置，不决定是否默认安装。
+- `[default_components]` 决定默认安装集合，必须放在文件最后。
+- `[default_components]` 可以用 `ref = "component_presets.<同名组件>"` 引用预设；
+  使用 `ref` 时不能再写本地 `features`/`deps`；`mode` 可以本地覆盖。
 - 不写 `ref` 时只使用本地配置，不会隐式套同名 preset。
-- key 是扩展名；每个扩展可写 `link` / `features` / `deps`，都不允许 `version:`。
-- 只有 `builtin_exts` 里的扩展、并且已有 ext recipe，才能进 `default_exts`。
-- 有依赖的内置扩展必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里，例如：
+- key 是组件名；每个组件可写 `mode` / `features` / `deps`，都不允许 `version:`。
+- 只有产品 `bundled` 列表里的组件、并且已有 component recipe，才能进
+  `default_components`。
+- 有依赖的 bundled 组件必须和依赖一起写，要转给依赖的 feature 显式列在 `deps` 里。
+- 不做依赖展开、不做依赖校验；漏写时产品 configure 会报错。
+- 未适配的产品系列不写 `[default_components]`，等价于空表。
+- 条件 feature 在当前产品 / 依赖线下不可用时提示并丢弃。
 
-  ```toml
-  [ext_presets]
-  curl = { deps = { libcurl = ["ssl"] } }
-
-  [default_exts]
-  curl = { ref = "ext_presets.curl" }
-  libxml = {}
-  ```
-
-- 不做依赖展开、不做依赖校验；漏写时 PHP configure 会报错。
-- 未适配的 PHP 系列不写 `[default_exts]`，等价于空表。
-- 条件 feature 在当前 PHP / 依赖线下不可用时提示并丢弃。
-- 新增 PHP 系列时先写 `builtin_exts` / `builtin_disable`，再写该系列的 `[default_exts]`。
-
-### 6.4 当前默认
-
-8.0 ~ 8.5 写了默认集，内容相同，只有 `php` / `swoole` / `openssl` 线不同，
-下面以 8.5 为例。8.0 ~ 8.3 没有 `openssl` 预设（argon2 / legacy-provider 是 8.4 才有的
-configure 选项），`[default_exts]` 里写 `openssl = {}`；8.0 的 `[deps]` 额外有三处差异：
-`openssl = "1.1.1"`（PHP 8.0 的 openssl 扩展编不过 OpenSSL 3.x）、
-`libcurl = "7.88"`（libcurl 8.23 要求 OpenSSL >= 3.0）和
-`libxml2 = "2.11"`（libxml2 2.12 改了错误回调签名并删掉 `ATTRIBUTE_UNUSED` 宏，
-PHP 8.0 分支没拿到上游修复）。另外 8.0 的 `configure` 末尾带着
-`CFLAGS=-O2 -std=gnu17 -Wno-error=incompatible-pointer-types`：GCC 15 默认 gnu23，
-`()` 旧式声明被当成零参数，8.0 的 scanf.c / pcntl.c 等旧式 C 直接编不过；7.4 同理。
+### 6.5 PHP 8.5 当前默认
 
 ```toml
-php = "8.5"
+product = "php"
 swoole = "6.2"
 xdebug = "3.5"
 redis = "6.3"
@@ -290,7 +245,7 @@ libzip = "1.12"
 libsodium = "1.0"
 oniguruma = "6.9"
 
-[ext_presets]
+[component_presets]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
@@ -298,17 +253,17 @@ zip = { deps = { libzip = ["encryption"] } }
 sqlite3 = { deps = { sqlite = ["column_metadata"] } }
 pdo_sqlite = { deps = { sqlite = ["column_metadata"] } }
 
-[default_exts]
-openssl = { ref = "ext_presets.openssl" }
-curl = { ref = "ext_presets.curl" }
+[default_components]
+openssl = { ref = "component_presets.openssl" }
+curl = { ref = "component_presets.curl" }
 libxml = {}
 zlib = {}
-sqlite3 = { ref = "ext_presets.sqlite3" }
-pdo_sqlite = { ref = "ext_presets.pdo_sqlite" }
+sqlite3 = { ref = "component_presets.sqlite3" }
+pdo_sqlite = { ref = "component_presets.pdo_sqlite" }
 mysqli = {}
 pdo_mysql = {}
 mbstring = {}
-zip = { ref = "ext_presets.zip" }
+zip = { ref = "component_presets.zip" }
 sodium = {}
 gettext = {}
 pcntl = {}
@@ -319,28 +274,27 @@ sysvsem = {}
 sysvshm = {}
 ```
 
-顶层是扩展默认线，`[deps]` 是依赖库默认线；内置扩展没有版本线，不能写顶层。
-`swoole` / `xdebug` / `gd` / 11 个 PECL 扩展不在默认集里，需要 `--ext` 显式选择；
-openssl、curl、gd 选中时自动使用各自的 `[ext_presets]`，不需要再写 `feature:[...]`。
-默认集和 preset 都只在第一次写 state 时落盘；已有项目要开 argon2 就显式传
-`--ext 'openssl=feature:[argon2]'`。
+顶层是组件默认线，`[deps]` 是依赖库默认线；bundled 组件没有版本线，不能写顶层。
+`swoole` / `xdebug` / `gd` / 11 个 PECL 扩展不在默认集里，需要 `add` 或 `--component`
+显式选择；openssl、curl、gd 选中时自动使用各自的 `[component_presets]`。
+默认集和 preset 都只在第一次写 state 时落盘。
 
 ## 7. 验收
 
 ```bash
 cargo fmt --all
 cargo test --workspace
-cargo run -- install 8.5 --downloads
+cargo run -- install php@8.5 --downloads
 ```
 
 `--downloads` 会按 catalog 地址真实联网下载。网络受限时先设代理：
 
 ```bash
-cargo run -- install 8.5 --downloads --proxy http://127.0.0.1:10808
+cargo run -- install php@8.5 --downloads --proxy http://127.0.0.1:10808
 ```
 
 下载完成后再跑完整安装：
 
 ```bash
-cargo run -- install 8.5
+cargo run -- install php@8.5
 ```

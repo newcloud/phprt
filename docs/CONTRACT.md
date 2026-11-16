@@ -1,9 +1,27 @@
 # recipe 契约
 
-recipe 是 `recipes/**.star`，每个文件对应一个目标。`defs.star` 提供 `dep` / `ext` /
-`php` / `feature` / `sub` 构造函数；校验全部在 Rust 侧。
+recipe 是 `recipes/**/*.star`。三层目标：产品（product）、组件（component）、
+依赖库（dep）。`defs.star` 提供 `dep` / `component` / `product` /
+`product_profile` / `mode` / `runtime` / `feature` 构造函数；校验全部在 Rust 侧。
 
-一个 recipe 可以写成两种形式：
+目录固定为：
+
+```text
+recipes/
+├── products/<产品>/<系列>.star
+├── components/<产品>/<名字>.star
+├── dep/<名字>.star
+├── bundles/<产品>/<系列>.toml
+├── catalog.toml
+└── defs.star
+```
+
+- `products/<产品>/<系列>.star` 的 `TARGET` 必须是 `product(...)` dict，不能是函数；
+  补丁、下载地址由 catalog 注入。
+- `components/<产品>/<名字>.star` 的 `TARGET` 可以是 dict 或 `target(ctx)` 函数。
+- 根目录的 `php<系列>.star` 和 `ext/` 目录不再识别，出现时报错并提示新路径。
+
+一个组件 / 依赖 recipe 可以写成两种形式：
 
 ```python
 # 静态 dict
@@ -12,7 +30,7 @@ TARGET = dep(...)
 # 依赖注入：Rust 先解析版本线，再带着 ctx 调用
 def target(ctx):
     ...
-    return ext(...)
+    return component(...)
 
 TARGET = target
 ```
@@ -21,72 +39,84 @@ TARGET = target
 
 ```python
 {
-    "php_series": "8.5",
-    "php_version": "8.5.12",
+    "product": "php",
+    "product_series": "8.5",
+    "product_version": "8.5.12",
     "bindings": {"openssl": "3.5", "swoole": "6.2"},
     "deps": {
         "openssl": {"line": "3.5", "version": "3.5.9", "url": "...", "sha256": "..."},
         "libcurl": {"line": "8.23", "version": "8.23.0", "url": "...", "sha256": "..."},
     },
     "self": {"line": "6.2", "version": "6.2.5", "url": "...", "sha256": "..."},
-    "is_builtin": False,
+    "is_bundled": False,
 }
 ```
 
-- `self` 是当前 recipe 同名组件在 catalog 里的记录；没有同名组件时为 `None`。
-- `is_builtin` 由当前 PHP 系列的 `builtin_exts` 推导；dep/php 恒为 `False`。
+- `self` 是当前 recipe 同名组件在 catalog 里的记录；bundled 组件没有记录，为 `None`。
+- `is_bundled` 由产品 recipe 的 `bundled` 推导；dep / product 恒为 `False`。
 - 版本号、下载地址、sha256 都从 ctx 取，recipe 不写死。
-- 内置扩展用 `ctx["php_version"]` 作为自己的版本，url/sha256 留空；
-  非内置扩展用 `self` 的版本和下载地址。
+- bundled 组件用 `ctx["product_version"]` 作为自己的版本，url/sha256 留空；
+  external 组件用 `self` 的版本和下载地址。
 
 ## 1. 版本关系
 
-PHP 与依赖库版本的对应关系属于**扩展**，不属于 dep。dep 只描述库本身。
+产品与依赖库版本的对应关系属于**产品 recipe 和组件 recipe**，不属于 dep。
 
-### ext 自己的版本线：`LINES`
+### 组件自己的版本线：`LINES`
 
-有独立版本线的扩展（目前是 swoole、xdebug）声明：
+有独立版本线的组件（如 swoole、lua-nginx-module）声明：
 
 ```python
 LINES = {
     "6.2": {
-        "php": ["8.4", "8.5", "8.6"],               # 这条线支持哪些 PHP 系列
+        "product": ["8.4", "8.5", "8.6"],           # 这条线支持哪些产品系列
         "openssl": ["1.1.1", "3.0", "3.5", "4.0"],  # 依赖允许的线（可选）
     },
 }
 ```
 
-- `php` 必填且非空。
-- 除了 `php`，其他 key 都当作依赖约束：依赖名 → 允许的版本线。
-- 如果声明了 `LINES`，线集合必须和 `catalog` 里同名扩展的线完全一致。
+- `product` 必填且非空。
+- 除了 `product`，其他 key 都当作依赖约束：依赖名 → 允许的版本线。
+- 如果声明了 `LINES`，线集合必须和 `catalog` 里同名组件的线完全一致。
 
-### builtin 扩展的依赖线：`PHP_LINES`
+### 产品自己的版本线：`LINES`
 
-`ext:openssl` 没有自己的版本线（版本跟 PHP 走），用 `PHP_LINES` 声明
-“这个 PHP 的 openssl 扩展允许哪些 OpenSSL 库线”：
+产品 recipe 也可以用 `LINES` 约束依赖线，不需要 `product` 键：
 
 ```python
-PHP_LINES = {
-    "7.4": ["1.1.1"],
-    "8.0": ["1.1.1"],
-    "8.2": ["1.1.1", "3.0", "3.5"],
-    "8.5": ["1.1.1", "3.0", "3.5", "4.0"],
-    "8.6": ["1.1.1", "3.0", "3.5", "4.0"],
+# products/nginx/1.29.star
+LINES = {
+    "1.29": {
+        "openssl": ["3.0", "3.5", "4.0"],
+        "pcre2": ["10.49"],
+    },
 }
 ```
 
-- key 必须是 catalog 里的 PHP 系列，且每个系列都要有入口。
-- value 里的线必须存在于 catalog 的同名组件（`ext:openssl` → `openssl`）。
-- 只在选中该扩展时参与约束。
+### bundled 组件的依赖线：`PRODUCT_LINES`
 
-### 没有同名依赖的 builtin 扩展：`PHP_DEP_LINES`
-
-gd 这类内置扩展依赖多个不同名字的库，不能写 `PHP_LINES`。用 `PHP_DEP_LINES`
-按 PHP 系列列出每个依赖允许的线：
+`component:openssl` 没有自己的版本线（版本跟 PHP 走），用 `PRODUCT_LINES` 声明
+“这个 PHP 的 openssl 组件允许哪些 OpenSSL 库线”：
 
 ```python
-# ext/gd.star
-PHP_DEP_LINES = {
+PRODUCT_LINES = {
+    "7.4": ["1.1.1"],
+    "8.5": ["1.1.1", "3.0", "3.5", "4.0"],
+}
+```
+
+- key 必须是该产品的 catalog 系列。
+- value 里的线必须存在于 catalog 的同名组件（`component:openssl` → `openssl`）。
+- 只在选中该组件时参与约束。
+
+### 没有同名依赖的 bundled 组件：`PRODUCT_DEP_LINES`
+
+gd 这类内置组件依赖多个不同名字的库，不能写 `PRODUCT_LINES`。用
+`PRODUCT_DEP_LINES` 按产品系列列出每个依赖允许的线：
+
+```python
+# components/php/gd.star
+PRODUCT_DEP_LINES = {
     "8.5": {
         "zlib": ["1.3"],
         "libpng": ["1.6"],
@@ -99,14 +129,14 @@ PHP_DEP_LINES = {
 }
 ```
 
-- key 是 catalog 里的 PHP 系列；**每个系列都要有入口**，新增 PHP 系列时漏写会加载失败。
 - 内层 key 必须是 `dep/*.star` 里的依赖名；允许的线必须存在于 catalog。
-- 只在选中该扩展时参与约束，和 `PHP_LINES` 一样进入依赖线交集。
+- 只在选中该组件时参与约束，和 `PRODUCT_LINES` 一样进入依赖线交集。
 
-### dep 不写 PHP 关系
+### dep 不写产品关系
 
-`dep` recipe 禁止声明 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`。OpenSSL、libcurl、nghttp2
-与 PHP 没有直接关系；哪个 PHP 能用哪条 OpenSSL 线，由消费它的扩展决定。
+`dep` recipe 禁止声明 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`。OpenSSL、
+libcurl、nghttp2 与 PHP 没有直接关系；哪个 PHP 能用哪条 OpenSSL 线，由消费它的组件
+或产品决定。
 
 `target(ctx)` 只负责构建参数，不判断能不能配。
 
@@ -115,70 +145,76 @@ PHP_DEP_LINES = {
 `recipes/catalog.toml` 只存“组件 + 线 → 当前最新补丁 + 下载地址”：
 
 ```toml
+[php]
+"8.5" = { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz" }
+
+[nginx]
+"1.29" = { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz" }
+
 [swoole]
 "6.2" = { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "..." }
 
-# openssl.org 会 301 到 GitHub Releases，这里写跳转后的最终地址
 [openssl]
 "3.5" = { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "..." }
 ```
 
-- `[php]` 必须有，key 是 PHP 系列（7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6）。
+- 产品名就是 catalog 的组件名；不再强制 `[php]`。
 - 每条线必须有 `version` 和 `url`。
 - `url` 写上游最终地址；跳转链路用注释记录，判定规则见 [ADD-RECIPE.md](ADD-RECIPE.md)。
-- 不写 PHP 兼容性、不写构建参数。
+- 不写产品兼容性、不写构建参数。
 - 补丁更新只改这里。
 
 ## 3. bundle
 
-`recipes/bundles/php<系列>.toml` 写默认线和默认扩展：
+`recipes/bundles/<产品>/<系列>.toml` 写默认线和默认组件：
 
 ```toml
-php = "8.5"
+product = "php"
 swoole = "6.2"
 xdebug = "3.5"
 
 [deps]
 openssl = "3.5"
 
-# 扩展被选中时的默认 feature；不决定是否默认安装
-[ext_presets]
+# 组件被选中时的默认 feature；不决定是否默认安装
+[component_presets]
 openssl = { features = ["argon2"] }
 curl = { deps = { libcurl = ["ssl"] } }
 gd = { features = ["jpeg", "webp", "freetype"] }
 
-# 默认启用的扩展；必须放在文件最后
-[default_exts]
-openssl = { ref = "ext_presets.openssl" }
-curl = { ref = "ext_presets.curl" }
+# 默认启用的组件；必须放在文件最后
+[default_components]
+openssl = { ref = "component_presets.openssl" }
+curl = { ref = "component_presets.curl" }
 libxml = {}
-# gd 默认安装时也只引用预设
-# gd = { ref = "ext_presets.gd" }
 ```
 
-- `php` 必须和文件名一致。
-- 顶层键只写**有独立版本线的扩展**（如 `swoole`、`xdebug`）；值只能是 catalog 里存在的线。
-  内置扩展（如 `openssl`、`curl`、`libxml`）没有自己的版本线，不能写在顶层。
+- `product` 必须和目录名一致；系列由文件名给出。
+- 顶层键只写**有独立版本线的组件**（如 `swoole`、`xdebug`）；值只能是 catalog 里存在的线。
+  bundled 组件（如 `openssl`、`curl`、`libxml`）没有自己的版本线，不能写在顶层。
 - `[deps]` 只写依赖库，key 必须是 `dep/*.star` 里的目标；值是该库在 catalog 里的线。
-  内置扩展的同名库版本写在这里，例如 `openssl = "3.5"` 指 OpenSSL 库，不是 PHP 的 openssl 扩展。
+  bundled 组件的同名库版本写在这里，例如 `openssl = "3.5"` 指 OpenSSL 库，不是 PHP 的
+  openssl 组件。
 - 同一个名字不能同时出现在顶层和 `[deps]`。
-- `[ext_presets]` 和 `[default_exts]` 都是表，key 是扩展名；`[default_exts]` 必须放在文件最后。
-- `[ext_presets]` 只在扩展被 `--ext` / `ext add` 选中时提供默认 `link` / `features` / `deps`，
-  **不会默认安装扩展**。
-- `[default_exts]` 决定默认安装集合。每个扩展支持：
-  - `ref = "ext_presets.<名字>"`：引用预设；后缀必须和扩展名一致。
-  - `link = "static" | "shared"`：不写时按内置/非内置推导；使用 ref 时仍可写 link 覆盖 preset。
-  - `features = ["名字", ...]`：扩展自己的编译开关。
+- `[component_presets]` 和 `[default_components]` 都是表，key 是组件名；
+  `[default_components]` 必须放在文件最后。
+- `[component_presets]` 只在组件被 `--component` / `add` 选中时提供默认
+  `mode` / `features` / `deps`，**不会默认安装组件**。
+- `[default_components]` 决定默认安装集合。每个组件支持：
+  - `ref = "component_presets.<名字>"`：引用预设；后缀必须和组件名一致。
+  - `mode = "static" | "shared" | ...`：不写时按 source 推导；使用 ref 时仍可写 mode 覆盖 preset。
+  - `features = ["名字", ...]`：组件自己的编译开关。
   - `deps = { 依赖名 = ["feature", ...] }`：转给依赖的 feature。
 - 使用 `ref` 时不能再写本地 `features` / `deps`；需要不同配置时另建 preset。
 - 不写 `ref` 时只使用本地配置，不会隐式套同名 preset。
-- 不允许写 `version:`；`[default_exts]` / `[ext_presets]` 里的名字必须是当前 PHP 系列的 ext recipe。
-- 有依赖的内置扩展必须在 preset 或 `default_exts` 里和依赖一起写，要转给依赖的 feature
-  显式列在 `deps` 里（如 `[ext_presets] curl = { deps = { libcurl = ["ssl"] } }`）；
-  不做依赖展开或校验，漏写时 PHP configure 会报错。
-- 默认 feature 在当前 PHP / 依赖线下不可用时，提示并丢弃，不中断命令。
-- 选中扩展时的 feature 优先级：CLI 显式 `feature:[...]`（含 `[]`） > state >
-  `[ext_presets]` > 空。preset 只在扩展还没有 state 时生效，和默认集一样 materialize 一次。
+- 不允许写 `version:`；`[default_components]` / `[component_presets]` 里的名字必须是当前
+  产品系列的 component recipe。
+- 有依赖的 bundled 组件必须在 preset 或 `default_components` 里和依赖一起写，要转给依赖的
+  feature 显式列在 `deps` 里（如 `[component_presets] curl = { deps = { libcurl = ["ssl"] } }`）；
+  不做依赖展开或校验，漏写时产品 configure 会报错。
+- 默认 feature 在当前产品 / 依赖线下不可用时，提示并丢弃，不中断命令。
+- 选中组件时的 feature 优先级：CLI 显式 `feature:[...]`（含 `[]`） > state >
+  `[component_presets]` > 空。preset 只在组件还没有 state 时生效。
 
 ## 4. dep
 
@@ -207,14 +243,14 @@ def target(ctx):
 TARGET = target
 ```
 
-字段与以前一致；新增/变化：
+字段：
 
 - `version` / `url` / `sha256` 由 ctx 注入。
-- 安装前缀仍是 `.phprt/php-<php 版本>/deps/<name>-<version>`。
-- 禁止 `exts` 和 `tools`。
-- `features` 由 ext 的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
+- 安装前缀是 `.phprt/<产品>-<产品版本>/deps/<name>-<version>`。
+- 禁止产品 / 组件字段。
+- `features` 由组件的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
   `disable` 参数（用来关掉上游的自动探测），没有 `disable` 就不传。
-- dep 的 feature 允许写 `requires.commands`（宿主机命令）；不允许 `requires.php` /
+- dep 的 feature 允许写 `requires.commands`（宿主机命令）；不允许 `requires.product` /
   `requires.dep`。例如 libjpeg 的 SIMD：
 
   ```python
@@ -232,25 +268,26 @@ TARGET = target
   `cmake --build {build} --parallel` / `cmake --install {build}`。
 - `ignored` 是「看过但决定不暴露」的上游选项 -> 理由；`phprt audit` 会对照上游清单检查。
 
-## 5. ext
+## 5. component
 
 ```python
 def target(ctx):
     self = ctx["self"]
-    return ext(
+    return component(
         name="swoole",
+        product="php",
+        source="external",          # bundled / external
+        modes=["shared"],           # 契约允许的挂载方式
+        version=self["version"],
+        url=self["url"],
+        sha256=self["sha256"],
         modules=["swoole"],
-        link=["shared"],            # 契约允许的链接方式
-        version=ctx["php_version"] if ctx["is_builtin"] else self["version"],
-        url="" if ctx["is_builtin"] else self["url"],
-        sha256="" if ctx["is_builtin"] else self["sha256"],
-        # needs / configure 按 LINES[line] 推导，和兼容表同源（完整写法见
-        # recipes/ext/swoole.star）
         needs=["libcurl", "openssl"],
         tools=["autoconf"],
         dep_configure={"libcurl": ["--enable-swoole-curl"]},
         configure=["--enable-swoole", "--with-openssl-dir={dep:openssl}"],
         ini="27-swoole.ini",
+        desc="Swoole 扩展，契约只支持动态编译",
     )
 
 TARGET = target
@@ -258,21 +295,25 @@ TARGET = target
 
 规则：
 
-- ext recipe 不写 `origin`。是否内置由 `php<系列>.star` 的 `builtin_exts` 推导；
-  内置 → 默认 `static`，非内置 → 默认 `shared`，默认值必须在 `link` 里。
-- `link` 非空，值只能是 `static` / `shared`。
-- `link` 含 `shared` 时必须有 `ini`；内置还要 `shared_from`，
-  非内置还要 `url` + `version`。
+- `product` 必填；是否 bundled 由产品 recipe 的 `bundled` 推导。
+- `source` 只能是 `bundled` / `external`：
+  - `bundled` 的源码在产品源码树里；`source_path` 覆盖产品 profile 的 `bundled_path`
+    （PHP 默认是 `ext/{name}`）。
+  - `external` 必须有自己的 `url` + `version`。
+- `modes` 非空，值由产品 profile 定义；默认挂载方式由 profile 的 `defaults` 按 source 推导。
+- `modules` 是产品启动后应看到的模块名，由产品 profile 的 `verify_modules` 使用。
+- `ini` / `ini_lines` 是安装后的登记文件，只有 profile 的 `register` 动作为 `php-ini` 时使用。
 - `tools` 是构建期工具依赖：参与构建顺序和 `PATH`，不参与 include/lib；
   每个名字必须是 `dep/*.star` 里的目标。
-- `prepare` 是在 phpize 之前于源码目录执行的 shell 命令列表，用来给上游源码
+- `prepare` 是在 standalone 构建之前于源码目录执行的 shell 命令列表，用来给上游源码
   打兼容补丁（如删除已移除头文件的 include）。命令写进构建签名，变化会触发重编。
-  只有 ext 能用，dep / php 报错。
-- `configure` 是正向参数：编进 PHP 时交给 PHP 的 configure，编成 shared 时
-  交给扩展自己的 configure。
-- 关闭参数不在 ext recipe 里，来自 php recipe 的 `builtin_disable`。
-  同一个内置扩展只会出现 `--with-*` 或 `--without-*` 其中一组。
-- `dep_configure` 是“依赖名 → 选中 `dep:NAME` 时额外加给扩展的 configure 参数”：
+  只有 component 能用，dep / product 报错。
+- `env` 是组件自己的环境变量；fold 时合并进产品节点，standalone 时用于自己的构建节点。
+- `configure` 是正向参数：fold 时交给产品的 configure，standalone 时交给组件自己的
+  （或 profile 步骤里的）configure。
+- 关闭参数不在组件 recipe 里，来自产品 recipe 的 `bundled_disable`。
+  同一个 bundled 组件只会出现 `--with-*` 或 `--without-*` 其中一组。
+- `dep_configure` 是“依赖名 → 选中 `dep:NAME` 时额外加给组件的 configure 参数”：
   - key 必须是 `needs` 里的依赖，或某个 feature 的 `needs` 里的条件依赖；
   - 值为空列表表示“只允许转发 feature，不加参数”。
 
@@ -284,15 +325,14 @@ TARGET = target
   features = {"jpeg": feature(needs=["jpeg"], configure=["--with-jpeg"])}
   ```
 
-  这样 `--ext 'gd=feature:[jpeg],dep:jpeg[simd]'` 才能把 `simd` 转给 libjpeg。
-- `features` 是扩展自己的开关：
+- `features` 是组件自己的开关：
 
   ```python
   features = {
       "argon2": feature(
           configure = ["--with-openssl-argon2"],
           requires = {
-              "php": ["8.5", "8.6"],
+              "product": ["8.4", "8.5", "8.6"],
               "dep": {"openssl": ["3.5", "4.0"]},
           },
       ),
@@ -302,20 +342,21 @@ TARGET = target
   - 允许 `needs` / `configure` / `requires`；`disable` 只用于 dep 的 feature。
   - `needs` 是**选中这个 feature 时**才加入构建顺序和链接闭包的依赖
     （例：swoole 的 `cares` 需要 `c-ares`，不选就不编 c-ares）。
-  - `requires.php` 是允许的 PHP 系列；`requires.dep` 是允许的依赖线，key 必须在 `needs` 里；
-    `requires.commands` 是需要出现在 PATH 里的宿主机命令（如 `nasm`）。
+  - `requires.product` 是允许的产品系列；`requires.dep` 是允许的依赖线，key 必须在
+    `needs` 里；`requires.commands` 是需要出现在 PATH 里的宿主机命令（如 `nasm`）。
   - 显式选择不满足时报错；bundle 默认不满足时提示并丢弃。
 - `ignored` 记录看过但不暴露的上游选项，值为理由（不能为空）；`audit` 会对照上游清单
   检查遗漏和拼写错误。取舍规则见 [FEATURES.md](FEATURES.md)。
-- 版本线通过 `LINES` / `PHP_LINES` / `PHP_DEP_LINES` 声明，不在 recipe 里写死。
+- 版本线通过 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 声明，不在 recipe 里写死。
 
-## 6. php
+## 6. product 和 profile
 
 ```python
-TARGET = php(
+TARGET = product(
+    name="php",
     series="8.5",
-    builtin_exts=["openssl", "curl", "libxml", ...],
-    builtin_disable={
+    bundled=["openssl", "curl", "libxml", ...],
+    bundled_disable={
         "openssl": "--without-openssl",
         "libxml": "--without-libxml",
         "dom": "--disable-dom",
@@ -323,49 +364,115 @@ TARGET = php(
     configure=["--prefix={tree}", "--with-config-file-scan-dir={tree}/etc/conf.d"],
     make=["make", "make install"],
     artifacts=["bin/php"],
+    profile=php_profile,
+    desc="PHP 8.5 本体",
 )
 ```
 
-- `series` 必填，且必须和文件名 `php<系列>.star` 一致。
-- `version` / `url` / `sha256` 从 catalog 的 `[php]` 注入。
-- `builtin_exts`：该 PHP 版本的内置扩展名，和是否有 recipe 无关；非空、无重复。
-- `builtin_disable`：内置扩展名 → 单个关闭参数；key 必须在 `builtin_exts` 里。
-- 每个支持的系列一个 recipe；当前是 7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6。
+- 路径是 `products/<产品>/<系列>.star`；`series` 必须和文件名一致。
+- `version` / `url` / `sha256` 从 catalog 的同名产品注入。
+- `needs` / `deps`：产品链接需要的依赖库，以及要转给它们的 feature。
+- `bundled`：该产品源码包内自带的组件名，和是否有 recipe 无关；不要求非空。
+- `bundled_disable`：bundled 组件名 → 单个关闭参数；key 必须在 `bundled` 里。
+- `profile` 是 `product_profile(...)`：
+
+  ```python
+  profile = product_profile(
+      modes = {
+          "static": mode(strategy="fold"),
+          "shared": mode(
+              strategy="standalone",
+              steps = [
+                  "phpize",
+                  "./configure --with-php-config={tree}/bin/php-config {flags}",
+                  "make",
+                  "make install",
+              ],
+              artifacts = ["lib/php/extensions/*/{name}.so"],
+          ),
+      },
+      defaults = {"bundled": "static", "external": "shared"},
+      bundled_path = "ext/{name}",
+      runtime = runtime(
+          lib_dir = "lib/phprt",
+          rpath = {
+              "bin/*": "$ORIGIN/../lib/phprt",
+              "lib/php/extensions/*/*.so": "$ORIGIN/../../../phprt",
+          },
+      ),
+      register = {"shared": "php-ini"},
+      verify = ["{tree}/bin/php", "-v"],
+      verify_modules = "{tree}/bin/php -m",
+      entry = "myphp-{series}",
+      entry_template = "myphp",
+      env = {
+          "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
+          "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
+      },
+      audit = "php-config-m4",
+      config = "php",
+  )
+  ```
+
+| 字段 | 说明 |
+| --- | --- |
+| `modes` | 挂载方式 → `mode(strategy, steps, artifacts, configure)` |
+| `defaults` | 组件来源（bundled / external）→ 默认挂载方式 |
+| `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |
+| `runtime.lib_dir` | 依赖库统一运行目录，相对安装树；空表示不整理 |
+| `runtime.rpath` | 安装树内相对 glob → rpath |
+| `register` | 挂载方式 → 登记动作；目前只有 `php-ini` |
+| `verify` / `verify_modules` | 产品启动验证；`verify_modules` 用来检查组件模块 |
+| `entry` / `entry_template` | 项目入口文件名模板和内置模板名（`myphp`） |
+| `env` | 产品专用环境变量，支持 `{tree}`、`{tool:<dep>}` |
+| `audit` | 选项来源：`php-config-m4` / `configure-help` / `none` |
+| `config` | 安装后配置动作：`php` 或空 |
+
+`mode(strategy=...)`：
+
+- `fold`：组件只贡献 configure 参数和源码，编进产品本体；`configure` 里的模板追加到
+  产品 configure，支持 `{component_source}` / `{name}`。
+- `standalone`：产品构建完之后，按 `steps` 单独构建；支持 `{name}` / `{product}` /
+  `{flags}` / `{build}` / `{prefix}`；`artifacts` 支持 `{name}`。
 
 ## 7. 占位符
 
 | 占位符 | 展开为 |
 | --- | --- |
-| `{tree}` | `.phprt/php-<php 版本>` |
+| `{tree}` / `{product}` | `.phprt/<产品>-<产品版本>` |
 | `{deps}` | `{tree}/deps` |
 | `{build}` | 当前节点的解包/构建目录 |
 | `{prefix}` | 当前节点的安装前缀 |
 | `{dep:名字}` | `{tree}/deps/<名字>-<版本>` |
+| `{source:名字}` | 对应 dep / component 的解压源码根 |
+| `{component_source}` | 仅 fold 模板：组件源码根 |
 
-未知占位符在渲染阶段报错。
+未知占位符在渲染阶段报错。`{source:名字}` 先找 dep，再找 component；找不到直接报错。
 
 ## 8. 校验清单
 
 加载时检查：
 
-1. `name` 非空；dep 的 version/url；php 的 series/version/url。
-2. dep 不出现 `exts`。
-3. ext 的 `link`、默认值、shared 必需字段；ext 不允许 `builtin_exts` / `builtin_disable`。
+1. `name` 非空；dep 的 version/url；product 的 series/version/url。
+2. dep 不出现产品 / 组件字段。
+3. component 的 `product`、`source`、`modes`、默认 mode；external 必须有 version/url；
+   component 不允许产品字段。
 4. `needs` 指向的 `dep:*` 存在。
 5. `tools` 指向的 `dep:*` 存在。
 6. `features.*.needs` 指向的 `dep:*` 存在。
-7. `dep_configure` 的 key 在 `needs` 或某个 feature 的 `needs` 里；ext 的
-    `features.*.requires.dep` 的 key 也在 `needs` 里。`requires.commands` 每项非空；
-    dep 的 feature 只允许 `commands` 条件。`ignored` 只能出现在 dep / ext 上，
-    key 是 `--...` 选项，理由非空。
-8. php 的 `builtin_exts` 非空、无重复；`builtin_disable` 的 key 是其子集，
-   值是单个 `--without-*` / `--disable-*`。
-9. catalog 的 PHP 系列与 php recipe 集合一致。
-10. catalog 里每个组件都有同名 recipe；扩展声明 `LINES` 时线集合必须一致。
-11. `LINES` 的每条线都有非空 `php` 数组。
-12. dep recipe 不声明 `LINES` / `PHP_LINES` / `PHP_DEP_LINES`。
-13. `PHP_LINES` 覆盖所有 PHP 系列，引用的线都在 catalog 里。
-14. `PHP_DEP_LINES` 只用于 ext，覆盖所有 PHP 系列；内层名字是 dep recipe，引用的线都在 catalog 里。
-15. 既不是当前 PHP 内置扩展、也没有 catalog 记录的 ext recipe 不加载；例如 gd 只在声明了内置事实的 8.0 ~ 8.5 出现。
-16. `[ext_presets]` 自己不能写 `ref`；`[default_exts]` 的 `ref` 必须是
-    `"ext_presets.<同名扩展>"`，指向存在的 preset，且不能和本地 `features`/`deps` 同时写。
+7. `dep_configure` 的 key 在 `needs` 或某个 feature 的 `needs` 里；component 的
+   `features.*.requires.dep` 的 key 也在 `needs` 里。`requires.commands` 每项非空；
+   dep 的 feature 只允许 `commands` 条件。`ignored` 只能出现在 dep / component 上，
+   key 是 `--...` 选项，理由非空。
+8. component 的 `modes` 必须在产品 profile 的 `modes` 里；默认 mode 也必须在 `modes` 里。
+9. product 的 `bundled` 无重复；`bundled_disable` 的 key 是其子集，值是单个
+   `--without-*` / `--disable-*`；profile 的 `modes` 非空、`strategy` 合法。
+10. catalog 的产品系列与 product recipe 集合一致。
+11. catalog 里每个组件都有同名 recipe；组件声明 `LINES` 时线集合必须一致。
+12. `LINES` 的每条线对组件必须有非空 `product` 数组；产品可以省略 `product`。
+13. dep recipe 不声明 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`。
+14. `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 只用于 component，引用的系列和线都在 catalog 里。
+15. 既不是当前产品 bundled、也没有 catalog 记录的 component recipe 不加载。
+16. `[component_presets]` 自己不能写 `ref`；`[default_components]` 的 `ref` 必须是
+    `"component_presets.<同名组件>"`，指向存在的 preset，且不能和本地 `features`/`deps`
+    同时写。

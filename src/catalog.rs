@@ -17,7 +17,8 @@ pub struct Artifact {
 
 /// `recipes/catalog.toml`：组件名 -> 版本线 -> 最新补丁。
 ///
-/// 这里不判断 PHP 兼容性，也不存构建参数。
+/// 这里不判断产品兼容性，也不存构建参数。产品（php / nginx / cpython）、
+/// 组件和依赖库都用同一张表。
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub components: BTreeMap<String, BTreeMap<String, Artifact>>,
@@ -42,37 +43,29 @@ impl Catalog {
         self.lines(name).and_then(|lines| lines.get(line))
     }
 
-    pub fn php_series(&self) -> Vec<String> {
-        self.lines("php")
+    pub fn product_series(&self, product: &str) -> Vec<String> {
+        self.lines(product)
             .map(|lines| lines.keys().cloned().collect())
             .unwrap_or_default()
     }
 
-    pub fn php_version(&self, series: &str) -> Result<&str> {
-        self.get("php", series)
+    pub fn product_version(&self, product: &str, series: &str) -> Result<&str> {
+        self.get(product, series)
             .map(|a| a.version.as_str())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "catalog 里没有 PHP {}（可用：{}）",
-                    series,
-                    self.php_series().join(", ")
+                    "catalog 里没有 {product} {series}（可用：{}）",
+                    self.product_series(product).join(", ")
                 )
             })
     }
 
-    pub fn highest_php_series(&self) -> Result<String> {
-        self.php_series()
-            .into_iter()
-            .next_back()
-            .ok_or_else(|| anyhow::anyhow!("catalog 里没有 php 版本"))
-    }
-
-    /// 接受 `8.5`、`8.5.12`、`php:8.5.12`，返回系列。
-    pub fn find_php_series(&self, spec: &str) -> Result<String> {
-        let spec = spec.strip_prefix("php:").unwrap_or(spec);
+    /// 接受 `8.5`、`8.5.12`、`php@8.5.12`，返回系列。
+    pub fn find_product_series(&self, product: &str, spec: &str) -> Result<String> {
+        let spec = spec.strip_prefix(&format!("{product}@")).unwrap_or(spec);
         let lines = self
-            .lines("php")
-            .ok_or_else(|| anyhow::anyhow!("catalog 里没有 php 组件"))?;
+            .lines(product)
+            .ok_or_else(|| anyhow::anyhow!("catalog 里没有产品 {product}"))?;
 
         if lines.contains_key(spec) {
             return Ok(spec.to_owned());
@@ -84,12 +77,15 @@ impl Catalog {
             .iter()
             .map(|(series, a)| format!("{series}（{}）", a.version))
             .collect();
-        bail!("未知 PHP 版本 {spec}（可用：{}）", available.join(", "))
+        bail!(
+            "未知 {product} 版本 {spec}（可用：{}）",
+            available.join(", ")
+        )
     }
 
     fn validate(&self) -> Result<()> {
-        if !self.components.contains_key("php") {
-            bail!("catalog.toml 缺少 [php]");
+        if self.components.is_empty() {
+            bail!("catalog.toml 里没有任何组件");
         }
         for (name, lines) in &self.components {
             if lines.is_empty() {

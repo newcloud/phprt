@@ -7,8 +7,8 @@ use phprt_source::Source;
 use crate::layout;
 use crate::recipe::Target;
 
-/// 从求解结果生成清单：PHP 本体、依赖库、PECL 扩展。
-/// builtin 扩展的源码在 PHP tarball 里，不单独下载或解压。
+/// 从求解结果生成清单：产品本体、依赖库、外部组件。
+/// bundled 组件的源码在产品 tarball 里，不单独下载或解压。
 pub fn collect(order: &[&Target], root: &Path, cache: &Path) -> Result<Vec<Source>> {
     let mut sources = Vec::new();
     let mut seen: BTreeMap<PathBuf, String> = BTreeMap::new();
@@ -28,7 +28,7 @@ pub fn collect(order: &[&Target], root: &Path, cache: &Path) -> Result<Vec<Sourc
                 target.url
             );
         }
-        let unpack_display = layout::build_dir(&target.name, target.kind, &target.url);
+        let unpack_display = layout::build_dir(&target.name, &target.url);
         sources.push(Source {
             label: layout::label(target.kind).to_owned(),
             name: target.name.clone(),

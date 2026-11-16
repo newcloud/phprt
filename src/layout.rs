@@ -21,29 +21,32 @@ pub fn archive_stem(name: &str) -> String {
     name.to_owned()
 }
 
-/// 解压目录，相对于项目根：build/<组件>/<压缩包 stem>。
-/// 这就是源码根，phpize / configure 都在这个目录里执行。
-pub fn build_dir(name: &str, kind: Kind, url: &str) -> String {
+/// 解压目录，相对于项目根：build/<名字>/<压缩包 stem>。
+/// 产品用产品名（如 build/php/php-8.5.12），组件和依赖库用各自的名字。
+pub fn build_dir(name: &str, url: &str) -> String {
     let archive = archive_name(url).unwrap_or_else(|| "source".to_owned());
     let stem = archive_stem(&archive);
-    let dir_name = if kind == Kind::Php { "php" } else { name };
-    format!("build/{dir_name}/{stem}")
+    format!("build/{name}/{stem}")
+}
+
+pub fn build_dir_of(target: &Target) -> String {
+    build_dir(&target.name, &target.url)
 }
 
 /// 下载清单里各节点的分类名。
 pub fn label(kind: Kind) -> &'static str {
     match kind {
-        Kind::Php => "php",
+        Kind::Product => "product",
         Kind::Dep => "deps",
-        Kind::Ext => "ext",
+        Kind::Component => "component",
     }
 }
 
-/// 下载/解压清单只关心 PHP、依赖库和 PECL 扩展。
+/// 下载/解压清单只关心产品本体、依赖库和外部组件。
 pub fn downloadable(target: &Target) -> bool {
     match target.kind {
-        Kind::Php | Kind::Dep => true,
-        Kind::Ext => target.origin == "pecl",
+        Kind::Product | Kind::Dep => true,
+        Kind::Component => target.source == "external",
     }
 }
 
@@ -76,20 +79,20 @@ mod tests {
     #[test]
     fn build_dir_is_per_component_and_patch() {
         assert_eq!(
-            build_dir("php", Kind::Php, "https://php.net/php-8.5.12.tar.xz"),
+            build_dir("php", "https://php.net/php-8.5.12.tar.xz"),
             "build/php/php-8.5.12"
         );
         assert_eq!(
-            build_dir("libcurl", Kind::Dep, "https://curl.se/curl-8.23.0.tar.xz"),
+            build_dir("libcurl", "https://curl.se/curl-8.23.0.tar.xz"),
             "build/libcurl/curl-8.23.0"
         );
         assert_eq!(
-            build_dir(
-                "swoole",
-                Kind::Ext,
-                "https://pecl.php.net/get/swoole-6.2.5.tgz"
-            ),
+            build_dir("swoole", "https://pecl.php.net/get/swoole-6.2.5.tgz"),
             "build/swoole/swoole-6.2.5"
+        );
+        assert_eq!(
+            build_dir("nginx", "https://nginx.org/download/nginx-1.29.3.tar.gz"),
+            "build/nginx/nginx-1.29.3"
         );
     }
 }

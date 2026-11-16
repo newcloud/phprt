@@ -20,7 +20,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::bundle::Bundle;
 use crate::catalog::Catalog;
-use crate::recipe::{Kind, RawExt, RecipeMeta, Registry, Selection};
+use crate::recipe::{Kind, RawComponent, RecipeMeta, Registry, Selection};
 use crate::state::ProjectState;
 use phprt_ui::Mode;
 
@@ -39,63 +39,96 @@ struct Cli {
     #[arg(long, default_value = ".", global = true)]
     root: PathBuf,
 
-    /// PHP 系列，如 8.5；install 使用位置参数，其他命令用这个
-    #[arg(long = "php", value_name = "SERIES", global = true)]
-    php: Option<String>,
-
-    /// 扩展选择：名字[=link:模式][,dep:依赖[feature,...]][,feature:[名字,...]][,version:线]；可重复
-    #[arg(long = "ext", value_name = "SPEC", global = true)]
-    ext: Vec<String>,
-
-    /// 直接绑定依赖库的版本线：NAME=LINE，可重复
-    #[arg(long = "dep", value_name = "NAME=LINE", global = true)]
-    dep: Vec<String>,
-
-    /// 禁用当前 PHP 系列的默认扩展；可重复
-    #[arg(long = "disable-default-ext", value_name = "NAME", global = true)]
-    disable_default_ext: Vec<String>,
-
     #[command(subcommand)]
     cmd: Cmd,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// 列出当前 PHP 系列下所有 recipe
-    List,
+    /// 列出已安装的产品；带 产品@系列 时列出该产品的组件
+    List {
+        /// 产品@系列，如 php@8.5
+        target: Option<String>,
+        /// 只列已安装
+        #[arg(long, conflicts_with = "pending")]
+        installed: bool,
+        /// 只列已加入方案但未安装
+        #[arg(long)]
+        pending: bool,
+    },
     /// 打印依赖关系
-    Graph,
+    Graph {
+        /// 产品@系列，如 php@8.5
+        target: String,
+    },
     /// 求解并打印构建计划（只读）
     Plan {
-        /// 目标，如 php:8.5.12 / ext:curl / dep:openssl；省略时取 php
-        target: Option<String>,
+        /// 产品@系列，如 php@8.5
+        target: String,
+        /// 目标，如 product:php@8.5.12 / component:curl / dep:openssl
+        goal: Option<String>,
         /// 输出 JSON
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        components: ComponentArgs,
     },
-    /// 下载、解压、编译并安装：必须指定 PHP 版本
+    /// 下载、解压、编译并安装；只接受一个产品
     Install {
-        /// PHP 系列或版本，如 8.5 / 8.5.12 / php:8.5.12
-        php: Option<String>,
+        /// 产品@系列，如 php@8.5
+        target: Vec<String>,
+        #[command(flatten)]
+        components: ComponentArgs,
         #[command(flatten)]
         download: DownloadArgs,
     },
-    /// 更新：重新从 catalog 解析当前线的最新补丁并构建
+    /// 更新：重新从 catalog 解析该产品线的最新补丁并构建
     Update {
+        /// 产品@系列，如 php@8.5
+        target: Vec<String>,
+        #[command(flatten)]
+        components: ComponentArgs,
         #[command(flatten)]
         download: DownloadArgs,
+    },
+    /// 把组件加入构建方案（待安装）
+    Add {
+        /// 产品@系列，如 php@8.5
+        target: String,
+        /// 组件 spec，如 swoole / 'swoole=mode:shared,version:6.2'
+        component: String,
+        /// 直接绑定依赖库的版本线：NAME=LINE，可重复
+        #[arg(long = "dep", value_name = "NAME=LINE")]
+        dep: Vec<String>,
+    },
+    /// 把组件移出构建方案
+    Remove {
+        /// 产品@系列，如 php@8.5
+        target: String,
+        /// 组件名
+        name: String,
     },
     /// 对照上游选项清单，检查 recipe 是否漏掉或静默忽略了开关
     Audit {
+        /// 产品@系列，如 php@8.5
+        target: String,
         /// 输出 JSON
         #[arg(long)]
         json: bool,
     },
-    /// 扩展管理
-    Ext {
-        #[command(subcommand)]
-        what: ExtCmd,
-    },
+}
+
+#[derive(Args, Clone, Default)]
+struct ComponentArgs {
+    /// 组件选择：名字[=mode:方式][,dep:依赖[feature,...]][,feature:[名字,...]][,version:线]；可重复
+    #[arg(long = "component", value_name = "SPEC")]
+    component: Vec<String>,
+    /// 直接绑定依赖库的版本线：NAME=LINE，可重复
+    #[arg(long = "dep", value_name = "NAME=LINE")]
+    dep: Vec<String>,
+    /// 禁用产品的默认组件；可重复
+    #[arg(long = "disable-default-component", value_name = "NAME")]
+    disable_default_component: Vec<String>,
 }
 
 #[derive(Args, Clone)]
@@ -126,23 +159,6 @@ struct DownloadArgs {
     ui: Mode,
 }
 
-#[derive(Subcommand)]
-enum ExtCmd {
-    /// 列出扩展
-    List {
-        /// 只列已安装
-        #[arg(long, conflicts_with = "pending")]
-        installed: bool,
-        /// 只列已加入方案但未安装
-        #[arg(long)]
-        pending: bool,
-    },
-    /// 把扩展加入构建方案（待安装）
-    Add { name: String },
-    /// 从构建方案移除扩展
-    Remove { name: String },
-}
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err:#}");
@@ -152,46 +168,135 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Cmd::List {
+        target: None,
+        installed,
+        pending,
+    } = &cli.cmd
+    {
+        if *installed || *pending {
+            bail!("--installed / --pending 需要指定产品，例如 phprt list php@8.5");
+        }
+        print_states(&cli.root)?;
+        return Ok(());
+    }
+
+    let (target_spec, components, download, goal, json) = match &cli.cmd {
+        Cmd::List { target, .. } => (
+            target.clone().unwrap_or_default(),
+            ComponentArgs::default(),
+            None,
+            None,
+            false,
+        ),
+        Cmd::Graph { target } => (target.clone(), ComponentArgs::default(), None, None, false),
+        Cmd::Plan {
+            target,
+            goal,
+            json,
+            components,
+        } => (
+            target.clone(),
+            components.clone(),
+            None,
+            goal.clone(),
+            *json,
+        ),
+        Cmd::Install {
+            target,
+            components,
+            download,
+        }
+        | Cmd::Update {
+            target,
+            components,
+            download,
+        } => (
+            single_target(target, "install")?,
+            components.clone(),
+            Some(download.clone()),
+            None,
+            false,
+        ),
+        Cmd::Add {
+            target,
+            component,
+            dep,
+        } => (
+            target.clone(),
+            ComponentArgs {
+                component: vec![component.clone()],
+                dep: dep.clone(),
+                ..ComponentArgs::default()
+            },
+            None,
+            None,
+            false,
+        ),
+        Cmd::Remove { target, .. } => (target.clone(), ComponentArgs::default(), None, None, false),
+        Cmd::Audit { target, json } => {
+            (target.clone(), ComponentArgs::default(), None, None, *json)
+        }
+    };
+    let (product_name, series) = split_target(&target_spec)?;
+
     let catalog = Catalog::load(&cli.recipes.join("catalog.toml"))
         .with_context(|| format!("加载 {}", cli.recipes.display()))?;
-    let series = resolve_series(&cli, &catalog)?;
-    let php_version = catalog.php_version(&series)?.to_owned();
-
     let metas = recipe::load_meta(&cli.recipes, &catalog)?;
+    let product_meta = metas
+        .iter()
+        .find(|meta| {
+            meta.kind == Kind::Product
+                && meta.name == product_name
+                && meta.series.as_deref() == Some(series.as_str())
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "没有 {product_name}@{series} 的 recipe（可用：{}）",
+                available_products(&metas, &product_name)
+            )
+        })?;
+    let series = catalog.find_product_series(&product_name, &series)?;
+    let version = catalog.product_version(&product_name, &series)?.to_owned();
+
     let bundle_path = cli
         .recipes
         .join("bundles")
-        .join(format!("php{series}.toml"));
+        .join(&product_name)
+        .join(format!("{series}.toml"));
     let bundle = Bundle::load(&bundle_path)?;
-    bundle.check_series(&series)?;
+    bundle.check_product(&product_name)?;
 
-    let state_file = state::state_path(&cli.root, &series);
+    let state_file = state::state_path(&cli.root, &product_name, &series);
     let mut project = ProjectState::load(&state_file)?;
+    project.check(&product_name, &series)?;
 
-    let php_meta = metas
-        .iter()
-        .find(|meta| meta.kind == Kind::Php && meta.series.as_deref() == Some(series.as_str()))
-        .ok_or_else(|| anyhow!("没有找到 PHP {series} 的 recipe 元数据"))?;
-    let builtin_exts = php_meta.builtin_exts.clone();
+    let bundled = product_meta.bundled.clone();
 
-    let default_names: Vec<String> = bundle.default_exts.keys().cloned().collect();
+    let default_names: Vec<String> = bundle.default_components.keys().cloned().collect();
     for name in &default_names {
-        if !builtin_exts.iter().any(|item| item == name) {
-            bail!("bundle php{series}.toml 的 default_exts 里 {name} 不是该 PHP 版本的内置扩展");
+        if !bundled.iter().any(|item| item == name) {
+            bail!(
+                "bundle {product_name}/{series}.toml 的 default_components 里 {name} \
+                 不是该产品的 bundled 组件"
+            );
         }
         if !metas
             .iter()
-            .any(|meta| meta.kind == Kind::Ext && &meta.name == name)
+            .any(|meta| meta.kind == Kind::Component && &meta.name == name)
         {
-            bail!("bundle php{series}.toml 的 default_exts 里 {name} 没有 ext recipe");
+            bail!(
+                "bundle {product_name}/{series}.toml 的 default_components 里 {name} 没有 component recipe"
+            );
         }
     }
 
-    let raw_exts = recipe::preparse(&cli.ext)?;
+    let raw = recipe::preparse(&components.component)?;
     let mut disabled_defaults = BTreeSet::new();
-    for name in &cli.disable_default_ext {
+    for name in &components.disable_default_component {
         if !disabled_defaults.insert(name.clone()) {
-            bail!("--disable-default-ext 重复指定了 {name}");
+            bail!("--disable-default-component 重复指定了 {name}");
         }
         if !default_names.iter().any(|item| item == name) {
             let available = if default_names.is_empty() {
@@ -199,73 +304,70 @@ fn run() -> Result<()> {
             } else {
                 default_names.join(", ")
             };
-            bail!("--disable-default-ext {name} 不是 PHP {series} 的默认扩展（默认：{available}）");
+            bail!(
+                "--disable-default-component {name} 不是 {product_name}@{series} 的默认组件（默认：{available}）"
+            );
         }
-        if raw_exts.iter().any(|raw| &raw.name == name) {
-            bail!("--ext 和 --disable-default-ext 同时指定了 {name}");
+        if raw.iter().any(|item| &item.name == name) {
+            bail!("--component 和 --disable-default-component 同时指定了 {name}");
         }
     }
-    if !disabled_defaults.is_empty()
-        && !matches!(
-            &cli.cmd,
-            Cmd::Install { .. } | Cmd::Update { .. } | Cmd::Plan { .. }
-        )
-    {
-        bail!("--disable-default-ext 只支持 install / update / plan");
-    }
 
-    let mut cli_pins = pins_from_cli(&raw_exts, &cli.dep, &metas)?;
+    let mut cli_pins = pins_from_cli(&raw, &components.dep, &metas)?;
 
-    // 首次方案从 bundle 的默认扩展开始；已有 state 时以 state 为准。
+    // 首次方案从 bundle 的默认组件开始；已有 state 时以 state 为准。
     let seeded_defaults = !project.active;
     if seeded_defaults {
         for name in &default_names {
             if disabled_defaults.contains(name) {
                 continue;
             }
-            project.ext.insert(
+            project.components.insert(
                 name.clone(),
-                state::ExtState {
-                    link: String::new(),
+                state::ComponentState {
+                    mode: String::new(),
                     installed: false,
-                    ..state::ExtState::default()
+                    ..state::ComponentState::default()
                 },
             );
         }
         project.active = true;
     } else {
         for name in &disabled_defaults {
-            project.remove_ext(name);
+            project.remove_component(name);
         }
     }
 
-    let mut selected: Vec<String> = project.ext.keys().cloned().collect();
-    for raw in &raw_exts {
-        if !selected.contains(&raw.name) {
-            selected.push(raw.name.clone());
+    let mut selected: Vec<String> = project.components.keys().cloned().collect();
+    for item in &raw {
+        if !selected.contains(&item.name) {
+            selected.push(item.name.clone());
         }
     }
 
-    // add / remove 在解析绑定之前调整方案，避免给已移除的扩展做校验。
+    // add / remove 在解析绑定之前调整方案，避免给已移除的组件做校验。
+    let mut removed_mode = None;
     match &cli.cmd {
-        Cmd::Ext {
-            what: ExtCmd::Add { name },
-        } => {
+        Cmd::Add { component, .. } => {
+            let name = raw
+                .first()
+                .map(|item| item.name.clone())
+                .ok_or_else(|| anyhow!("缺少组件名"))?;
             if !metas
                 .iter()
-                .any(|meta| meta.kind == Kind::Ext && &meta.name == name)
+                .any(|meta| meta.kind == Kind::Component && meta.name == name)
             {
-                bail!("未知扩展 ext:{name}");
+                bail!("未知组件 component:{name}");
             }
-            if !selected.contains(name) {
+            if !selected.contains(&name) {
                 selected.push(name.clone());
             }
+            let _ = component;
         }
-        Cmd::Ext {
-            what: ExtCmd::Remove { name },
-        } => {
-            if !project.remove_ext(name) {
-                bail!("ext:{name} 不在构建方案里");
+        Cmd::Remove { name, .. } => {
+            removed_mode = project.components.get(name).map(|c| c.mode.clone());
+            if !project.remove_component(name) {
+                bail!("component:{name} 不在构建方案里");
             }
             selected.retain(|item| item != name);
             cli_pins.remove(name);
@@ -275,33 +377,41 @@ fn run() -> Result<()> {
 
     let mut pins = project.bindings.clone();
     pins.extend(cli_pins.clone());
-    let bindings = bind::resolve(&catalog, &bundle, &metas, &series, &selected, &pins)?;
+    let bindings = bind::resolve(
+        &catalog,
+        &bundle,
+        &metas,
+        &product_name,
+        &series,
+        &selected,
+        &pins,
+    )?;
     for note in &bindings.notes {
         eprintln!("注意: {note}");
     }
 
-    let ctx = bind::context(&series, &php_version, &bindings);
+    let ctx = bind::context(&product_name, &series, &version, &bindings);
     let mut reg = recipe::load_targets(
         &cli.recipes,
         &catalog,
+        &product_name,
         &series,
         &metas,
         &bindings.lines,
         &ctx,
-        &builtin_exts,
     )?;
 
     let default_sel = bundle::selection(&reg, &bundle, &series)?;
     let preset_sel = bundle::presets(&reg, &bundle, &series)?;
     if seeded_defaults {
-        for (name, spec) in &default_sel.per_ext {
-            let Some(entry) = project.ext.get_mut(name) else {
+        for (name, spec) in &default_sel.per_component {
+            let Some(entry) = project.components.get_mut(name) else {
                 continue;
             };
-            if entry.link.is_empty()
-                && let Some(mode) = spec.link
+            if entry.mode.is_empty()
+                && let Some(mode) = &spec.mode
             {
-                entry.link = mode.as_str().to_owned();
+                entry.mode = mode.clone();
             }
             entry.deps = spec.deps.clone();
             entry.features = spec
@@ -315,27 +425,39 @@ fn run() -> Result<()> {
 
     project.validate(&reg)?;
 
-    let cli_sel = Selection::parse(&reg, &cli.ext)?;
-    let php_id = format!("php:{php_version}");
+    let cli_sel = Selection::parse(&reg, &components.component)?;
+    let product_id = reg.product_any()?.id();
 
     match cli.cmd {
-        Cmd::List => {
-            println!("series {series}（PHP {php_version}）");
-            print!("{}", render::list_text(&reg));
+        Cmd::List {
+            installed, pending, ..
+        } => {
+            println!("series {series}（{product_name} {version}）");
+            print!(
+                "{}",
+                render::component_list_text(&reg, &project, installed, pending)
+            );
         }
-        Cmd::Graph => {
-            let names = scheme_names(&project, &raw_exts, None);
+        Cmd::Graph { .. } => {
+            let names = scheme_names(&project, &raw, None);
             project.apply_scheme(&mut reg, &names)?;
             let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
-            let features = project.merged_features(sel.features(&reg));
+            let features = reg_features(&reg, &sel, &project);
             print!("{}", render::graph_text(&reg, &sel, &features)?);
         }
-        Cmd::Plan { target, json } => {
-            let names = scheme_names(&project, &raw_exts, None);
+        Cmd::Plan { .. } => {
+            let names = scheme_names(&project, &raw, None);
             project.apply_scheme(&mut reg, &names)?;
             let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
-            let features = project.merged_features(sel.features(&reg));
-            let root = plan_root(&reg, &series, &php_version, target.as_deref())?;
+            let features = reg_features(&reg, &sel, &project);
+            let root = plan_root(
+                &reg,
+                &product_id,
+                &product_name,
+                &series,
+                &version,
+                goal.as_deref(),
+            )?;
             let order = plan::resolve(&reg, &root, &sel, &features)?;
             let sim = render::build(
                 &reg,
@@ -350,12 +472,12 @@ fn run() -> Result<()> {
                 print!("{}", render::to_text(&sim));
             }
         }
-        Cmd::Install { download, .. } | Cmd::Update { download } => {
-            let names = scheme_names(&project, &raw_exts, None);
+        Cmd::Install { .. } | Cmd::Update { .. } => {
+            let names = scheme_names(&project, &raw, None);
             project.apply_scheme(&mut reg, &names)?;
             let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
-            let features = project.merged_features(sel.features(&reg));
-            let order = plan::resolve(&reg, &php_id, &sel, &features)?;
+            let features = reg_features(&reg, &sel, &project);
+            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
             let sim = render::build(
                 &reg,
                 &order,
@@ -365,6 +487,7 @@ fn run() -> Result<()> {
             )?;
             print!("{}", render::to_text(&sim));
 
+            let download = download.expect("install/update 一定有下载参数");
             let cache = cli.root.join(".phprt").join("downloads");
             let sources = sources::collect(&order, &cli.root, &cache)?;
             let config = config::Config::load(&cli.recipes.join(config::FILE_NAME))?;
@@ -401,21 +524,26 @@ fn run() -> Result<()> {
             )?;
 
             project.bindings.extend(cli_pins.clone());
-            project.php = php_version.clone();
-            project.sync_selection(&reg, &sel, &names)?;
+            project.installed_version = version.clone();
+            // install --component 只影响这次构建，不写进 state；
+            // 持久化组件方案用 add / remove。
+            let persist: Vec<String> = project.components.keys().cloned().collect();
+            project.sync_selection(&reg, &sel, &persist)?;
             project.set_deps(&order, &features);
             project.set_installed_all();
             project.save(&state_file)?;
             println!();
             println!("已写入 {}", state_file.display());
         }
-        Cmd::Audit { json } => {
-            let names = scheme_names(&project, &raw_exts, None);
+        Cmd::Audit { .. } => {
+            let names = scheme_names(&project, &raw, None);
             project.apply_scheme(&mut reg, &names)?;
+            let product = reg.product_any()?.clone();
             let report = audit::run(
                 &reg,
                 &audit::Options {
                     root: &cli.root,
+                    product: &product,
                     series: &series,
                     bundle: &bundle,
                 },
@@ -429,13 +557,13 @@ fn run() -> Result<()> {
             let unaudited: Vec<String> = report
                 .components
                 .iter()
-                .filter(|component| component.is_ext && component.options.is_empty())
+                .filter(|component| component.audited && component.options.is_empty())
                 .map(|component| format!("{}（{}）", component.id, component.note))
                 .collect();
             let stale: Vec<_> = report
                 .components
                 .iter()
-                .filter(|component| component.is_ext)
+                .filter(|component| component.audited)
                 .flat_map(|component| {
                     component
                         .stale
@@ -461,150 +589,161 @@ fn run() -> Result<()> {
                 );
             }
         }
-        Cmd::Ext { what } => match what {
-            ExtCmd::List { installed, pending } => {
-                print!(
-                    "{}",
-                    render::ext_list_text(&reg, &project, installed, pending)
-                );
-            }
-            ExtCmd::Add { name } => {
-                let added =
-                    project.add_ext_with_preset(&reg, &name, preset_sel.per_ext.get(&name))?;
-                let names = scheme_names(&project, &raw_exts, None);
-                project.apply_scheme(&mut reg, &names)?;
-                let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
-                let features = project.merged_features(sel.features(&reg));
-                let order = plan::resolve(&reg, &php_id, &sel, &features)?;
+        Cmd::Add { .. } => {
+            let name = raw
+                .first()
+                .map(|item| item.name.clone())
+                .ok_or_else(|| anyhow!("缺少组件名"))?;
+            let added = project.add_component_with_preset(
+                &reg,
+                &name,
+                preset_sel.per_component.get(&name),
+            )?;
+            let names = scheme_names(&project, &raw, None);
+            project.apply_scheme(&mut reg, &names)?;
+            let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
+            let features = reg_features(&reg, &sel, &project);
+            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
 
-                project.bindings.extend(cli_pins.clone());
-                project.php = php_version.clone();
-                project.sync_selection(&reg, &sel, &names)?;
-                project.set_deps(&order, &features);
-                project.save(&state_file)?;
-                if added {
-                    println!("已加入扩展 {name}（待安装）");
-                } else {
-                    println!("扩展 {name} 已在方案里");
-                }
-                println!("已写入 {}", state_file.display());
+            project.bindings.extend(cli_pins.clone());
+            project.installed_version = version.clone();
+            project.sync_selection(&reg, &sel, &names)?;
+            project.set_deps(&order, &features);
+            project.save(&state_file)?;
+            if added {
+                println!("已加入组件 {name}（待安装）");
+            } else {
+                println!("组件 {name} 已在方案里");
             }
-            ExtCmd::Remove { name } => {
-                // 已经在解析绑定前从 project.ext / selected 里移除。
-                let names = scheme_names(&project, &raw_exts, Some(&name));
-                project.apply_scheme(&mut reg, &names)?;
-                let mut sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
-                sel.per_ext.remove(&name);
-                let features = sel.features(&reg);
-                let order = plan::resolve(&reg, &php_id, &sel, &features)?;
+            println!("已写入 {}", state_file.display());
+        }
+        Cmd::Remove { name, .. } => {
+            // 已经在解析绑定前从 project.components / selected 里移除。
+            let names = scheme_names(&project, &raw, Some(&name));
+            project.apply_scheme(&mut reg, &names)?;
+            let mut sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
+            sel.per_component.remove(&name);
+            let features = reg_features(&reg, &sel, &project);
+            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
 
-                project.bindings.extend(cli_pins.clone());
-                project.php = php_version.clone();
-                project.sync_selection(&reg, &sel, &names)?;
-                project.set_deps(&order, &features);
-                build::disable_ext(&cli.root, &php_version, reg.ext(&name)?)?;
-                project.save(&state_file)?;
-                println!("已移除扩展 {name}");
-                println!("已写入 {}", state_file.display());
-            }
-        },
+            project.bindings.extend(cli_pins.clone());
+            project.installed_version = version.clone();
+            project.sync_selection(&reg, &sel, &names)?;
+            project.set_deps(&order, &features);
+            let product = reg.product_any()?.clone();
+            let component = reg.component(&name)?.clone();
+            build::disable_component(
+                &cli.root,
+                &product,
+                &component,
+                removed_mode.as_deref().unwrap_or(&component.default_mode),
+            )?;
+            project.save(&state_file)?;
+            println!("已移除组件 {name}");
+            println!("已写入 {}", state_file.display());
+        }
     }
     Ok(())
 }
 
-fn resolve_series(cli: &Cli, catalog: &Catalog) -> Result<String> {
-    if let Cmd::Install { php, .. } = &cli.cmd {
-        let spec = php.as_deref().ok_or_else(|| {
-            anyhow!(
-                "请指定 PHP 版本，例如：phprt install 8.5（可用：{}）",
-                catalog.php_series().join(", ")
-            )
-        })?;
-        let series = catalog.find_php_series(spec)?;
-        if let Some(flag) = &cli.php {
-            let other = catalog.find_php_series(flag)?;
-            if other != series {
-                bail!("install 的 PHP 版本与 --php 不一致");
-            }
-        }
-        return Ok(series);
+fn single_target(target: &[String], command: &str) -> Result<String> {
+    match target {
+        [one] => Ok(one.clone()),
+        [] => bail!("{command} 需要指定一个产品，例如 phprt {command} php@8.5"),
+        _ => bail!(
+            "{command} 只接受一个产品，例如 phprt {command} php@8.5；\
+             多个产品请分多条命令"
+        ),
     }
-    if let Some(flag) = &cli.php {
-        return catalog.find_php_series(flag);
-    }
-    if matches!(cli.cmd, Cmd::List) {
-        let found = scan_state_series(&cli.root)?;
-        return match found.len() {
-            1 => Ok(found[0].clone()),
-            _ => catalog.highest_php_series(),
-        };
-    }
-    if let Some(series) = infer_state_series(&cli.root)? {
-        return Ok(series);
-    }
-    bail!("请用 --php 指定 PHP 系列，例如：phprt --php 8.5 plan")
 }
 
-fn scan_state_series(root: &Path) -> Result<Vec<String>> {
+fn split_target(spec: &str) -> Result<(String, String)> {
+    let (product, series) = spec
+        .split_once('@')
+        .ok_or_else(|| anyhow!("目标要写成 产品@系列，例如 php@8.5；实际是 {spec}"))?;
+    if product.is_empty() || series.is_empty() {
+        bail!("目标要写成 产品@系列，例如 php@8.5；实际是 {spec}");
+    }
+    Ok((product.to_owned(), series.to_owned()))
+}
+
+fn available_products(metas: &[RecipeMeta], product: &str) -> String {
+    let mut out: Vec<String> = metas
+        .iter()
+        .filter(|meta| meta.kind == Kind::Product && meta.name == product)
+        .filter_map(|meta| meta.series.clone())
+        .collect();
+    out.sort();
+    if out.is_empty() {
+        "无".to_owned()
+    } else {
+        out.join(", ")
+    }
+}
+
+fn print_states(root: &Path) -> Result<()> {
     let dir = root.join(".phprt");
     if !dir.is_dir() {
-        return Ok(Vec::new());
+        println!("没有已安装的产品（{} 不存在）", dir.display());
+        return Ok(());
     }
-    let mut found = Vec::new();
+    let mut rows = Vec::new();
     for entry in fs::read_dir(&dir).with_context(|| format!("读不到 {}", dir.display()))? {
         let path = entry?.path();
         if !path.is_dir() || !path.join("state.json").is_file() {
             continue;
         }
-        if let Some(name) = path.file_name().and_then(|s| s.to_str())
-            && let Some(series) = name.strip_prefix("php-")
-        {
-            found.push(series.to_owned());
-        }
+        let state = ProjectState::load(&path.join("state.json"))?;
+        rows.push((state.product, state.series, state.installed_version, path));
     }
-    found.sort();
-    Ok(found)
-}
-
-fn infer_state_series(root: &Path) -> Result<Option<String>> {
-    let found = scan_state_series(root)?;
-    match found.len() {
-        0 => Ok(None),
-        1 => Ok(found.into_iter().next()),
-        _ => bail!("存在多个 PHP 系列（{}），请用 --php 指定", found.join(", ")),
+    rows.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    println!("{:<14} {:<12} tree", "product", "version");
+    for (product, series, version, path) in rows {
+        let root_dir = path.parent().unwrap_or(&path);
+        let tree = root_dir
+            .join(format!("{product}-{version}"))
+            .display()
+            .to_string();
+        println!(
+            "{:<14} {:<12} {}",
+            format!("{product}@{series}"),
+            version,
+            tree
+        );
     }
+    Ok(())
 }
 
 fn pins_from_cli(
-    raw: &[RawExt],
+    raw: &[RawComponent],
     deps: &[String],
     metas: &[RecipeMeta],
 ) -> Result<BTreeMap<String, String>> {
     let mut pins = BTreeMap::new();
-    for ext in raw {
-        if let Some(version) = &ext.version {
+    for component in raw {
+        if let Some(version) = &component.version {
             let Some(meta) = metas
                 .iter()
-                .find(|meta| meta.kind == Kind::Ext && meta.name == ext.name)
+                .find(|meta| meta.kind == Kind::Component && meta.name == component.name)
             else {
-                bail!("--ext 里指定了未知扩展 {} 的版本线", ext.name);
+                bail!("--component 里指定了未知组件 {} 的版本线", component.name);
             };
             if meta.lines.is_empty() {
                 if metas
                     .iter()
-                    .any(|meta| meta.kind == Kind::Dep && meta.name == ext.name)
+                    .any(|meta| meta.kind == Kind::Dep && meta.name == component.name)
                 {
                     bail!(
-                        "ext:{} 是内置扩展，没有自己的版本线；\
+                        "component:{} 是内置组件，没有自己的版本线；\
                          依赖库 {} 的版本请用 --dep {}=<线>",
-                        ext.name,
-                        ext.name,
-                        ext.name
+                        component.name,
+                        component.name,
+                        component.name
                     );
                 }
-                bail!("ext:{} 是内置扩展，没有自己的版本线", ext.name);
+                bail!("component:{} 是内置组件，没有自己的版本线", component.name);
             }
-            pins.insert(ext.name.clone(), version.clone());
+            pins.insert(component.name.clone(), version.clone());
         }
     }
     for spec in deps {
@@ -629,8 +768,12 @@ fn pins_from_cli(
     Ok(pins)
 }
 
-fn scheme_names(project: &ProjectState, raw: &[RawExt], removed: Option<&str>) -> Vec<String> {
-    let cli_names: Vec<String> = raw.iter().map(|ext| ext.name.clone()).collect();
+fn scheme_names(
+    project: &ProjectState,
+    raw: &[RawComponent],
+    removed: Option<&str>,
+) -> Vec<String> {
+    let cli_names: Vec<String> = raw.iter().map(|item| item.name.clone()).collect();
     let mut names = project.scheme_with(&cli_names);
     if let Some(removed) = removed {
         names.retain(|name| name != removed);
@@ -638,26 +781,54 @@ fn scheme_names(project: &ProjectState, raw: &[RawExt], removed: Option<&str>) -
     names
 }
 
+fn reg_features(
+    reg: &Registry,
+    sel: &Selection,
+    project: &ProjectState,
+) -> BTreeMap<String, Vec<String>> {
+    let mut features = sel.features(reg);
+    if let Ok(product) = reg.product_any() {
+        for (dep, deps) in &product.deps {
+            let entry = features.entry(dep.clone()).or_default();
+            for f in deps {
+                if !entry.contains(f) {
+                    entry.push(f.clone());
+                }
+            }
+        }
+    }
+    project.merged_features(features)
+}
+
 fn plan_root(
     reg: &Registry,
+    product_id: &str,
+    product: &str,
     series: &str,
-    php_version: &str,
-    target: Option<&str>,
+    version: &str,
+    goal: Option<&str>,
 ) -> Result<String> {
-    let php_id = format!("php:{php_version}");
-    let Some(target) = target else {
-        return Ok(php_id);
+    let Some(goal) = goal else {
+        return Ok(product_id.to_owned());
     };
-    if target == series || target == php_version || target == php_id {
-        return Ok(php_id);
+    if goal == series
+        || goal == version
+        || goal == product_id
+        || goal == format!("{product}@{version}")
+    {
+        return Ok(product_id.to_owned());
     }
-    if let Some(rest) = target.strip_prefix("php:") {
-        if rest == php_version || rest == series {
-            return Ok(php_id);
+    if let Some(rest) = goal.strip_prefix("product:") {
+        if rest == product_id.trim_start_matches("product:")
+            || rest == version
+            || rest == format!("{product}@{version}")
+            || rest == series
+        {
+            return Ok(product_id.to_owned());
         }
-        bail!("当前加载的是 PHP {series}（{php_version}），不能 plan php:{rest}");
+        bail!("当前加载的是 {product}@{series}（{version}），不能 plan product:{rest}");
     }
-    reg.resolve_name(target)
+    reg.resolve_name(goal)
 }
 
 #[cfg(test)]
@@ -671,28 +842,51 @@ mod tests {
         recipe::load_meta(&dir, &catalog).unwrap()
     }
 
-    fn raw(name: &str, version: &str) -> RawExt {
-        RawExt {
+    fn raw(name: &str, version: &str) -> RawComponent {
+        RawComponent {
             name: name.to_owned(),
             version: Some(version.to_owned()),
         }
     }
 
     #[test]
-    fn ext_version_only_applies_to_versioned_extensions() {
+    fn target_requires_product_and_series() {
+        assert_eq!(
+            split_target("php@8.5").unwrap(),
+            ("php".to_owned(), "8.5".to_owned())
+        );
+        assert!(split_target("php").is_err());
+        assert!(split_target("@8.5").is_err());
+        assert!(split_target("php@").is_err());
+    }
+
+    #[test]
+    fn install_accepts_only_one_target() {
+        assert_eq!(
+            single_target(&["php@8.5".to_owned()], "install").unwrap(),
+            "php@8.5"
+        );
+        let err = single_target(&["php@8.5".to_owned(), "nginx@1.29".to_owned()], "install")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("只接受一个产品"), "{err}");
+    }
+
+    #[test]
+    fn component_version_only_applies_to_versioned_components() {
         let pins = pins_from_cli(&[raw("swoole", "6.0")], &[], &metas()).unwrap();
         assert_eq!(pins["swoole"], "6.0");
 
         let err = pins_from_cli(&[raw("openssl", "4.0")], &[], &metas())
             .unwrap_err()
             .to_string();
-        assert!(err.contains("内置扩展"), "{err}");
+        assert!(err.contains("内置组件"), "{err}");
         assert!(err.contains("--dep openssl"), "{err}");
 
         let err = pins_from_cli(&[raw("curl", "8.0")], &[], &metas())
             .unwrap_err()
             .to_string();
-        assert!(err.contains("内置扩展"), "{err}");
+        assert!(err.contains("内置组件"), "{err}");
     }
 
     #[test]

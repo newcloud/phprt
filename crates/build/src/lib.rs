@@ -232,6 +232,13 @@ fn clear_make(env: &BTreeMap<String, String>, cwd: &Path, log: &mut BufWriter<Fi
         let _ = log.write_all(&out.stdout);
         let _ = log.write_all(&out.stderr);
     }
+    // CMake 没有 distclean；源码内构建的缓存会记住旧路径，换目录后必须清掉。
+    let cache = cwd.join("CMakeCache.txt");
+    if cache.is_file() {
+        writeln!(log, "$ rm -rf CMakeCache.txt CMakeFiles")?;
+        let _ = fs::remove_file(&cache);
+        let _ = fs::remove_dir_all(cwd.join("CMakeFiles"));
+    }
     Ok(())
 }
 

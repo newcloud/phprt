@@ -15,7 +15,7 @@ use crate::recipe::{Kind, Registry, Target, feature_available};
 pub enum Disposal {
     /// 写在 `configure` 或 `dep_configure` 里。
     Configure,
-    /// 做成扩展自己的 feature。
+    /// 做成组件自己的 feature。
     Feature(String),
     /// 明确不暴露，并给出理由。
     Ignored(String),
@@ -54,13 +54,13 @@ impl Serialize for OptionRow {
 pub struct FeatureRow {
     pub name: String,
     pub flags: Vec<String>,
-    /// 形如 `php 8.5/8.6，dep:openssl 3.5/4.0`；无条件下为空。
+    /// 形如 `product 8.5/8.6，dep:openssl 3.5/4.0`；无条件下为空。
     pub requires: String,
     /// 当前系列 bundle 里是否默认安装时开启。
     pub default_on: bool,
-    /// 当前系列 bundle 里是否作为“选中扩展时”的预设开启。
+    /// 当前系列 bundle 里是否作为“选中组件时”的预设开启。
     pub preset_on: bool,
-    /// 当前 PHP / 依赖线是否满足 requires。
+    /// 当前产品系列 / 依赖线是否满足 requires。
     pub available: bool,
 }
 
@@ -75,27 +75,30 @@ pub struct Component {
     pub stale: Vec<(String, String)>,
     pub features: Vec<FeatureRow>,
     pub note: String,
-    pub is_ext: bool,
+    /// 当前产品 profile 是否要求盘点这个组件的上游选项。
+    pub audited: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
+    pub product: String,
     pub series: String,
     pub components: Vec<Component>,
 }
 
 pub struct Options<'a> {
     pub root: &'a Path,
+    pub product: &'a Target,
     pub series: &'a str,
     pub bundle: &'a Bundle,
 }
 
 impl Report {
-    /// 扩展 recipe 里没有处置的上游选项；依赖库只提示，不算失败。
+    /// 需要处置但没有处置的上游选项；依赖库只提示，不算失败。
     pub fn missing(&self) -> Vec<(&Component, &OptionRow)> {
         self.components
             .iter()
-            .filter(|component| component.is_ext)
+            .filter(|component| component.audited)
             .flat_map(|component| {
                 component
                     .options
@@ -108,12 +111,23 @@ impl Report {
 }
 
 pub fn run(reg: &Registry, opts: &Options<'_>) -> Result<Report> {
+    let audit = opts.product.profile.audit.as_str();
     let mut components = Vec::new();
     for target in reg.targets.values() {
-        if target.kind == Kind::Php {
+        if target.kind == Kind::Product {
             continue;
         }
-        let (source, note, upstream) = upstream_options(reg, target, opts.root);
+        let audited = target.kind == Kind::Component && audit != "none" && !audit.is_empty();
+        let (source, note, upstream) = if audited {
+            upstream_options(reg, target, opts.root, audit)
+        } else {
+            let source = if target.kind == Kind::Dep {
+                layout::build_dir_of(target)
+            } else {
+                String::new()
+            };
+            (source, String::new(), Vec::new())
+        };
         let upstream_names: BTreeSet<String> = upstream
             .iter()
             .filter_map(|option| option_name(option))
@@ -172,12 +186,13 @@ pub fn run(reg: &Registry, opts: &Options<'_>) -> Result<Report> {
             stale,
             features,
             note,
-            is_ext: target.kind == Kind::Ext,
+            audited,
         });
     }
     components.sort_by(|a, b| a.id.cmp(&b.id));
 
     Ok(Report {
+        product: opts.product.name.clone(),
         series: opts.series.to_owned(),
         components,
     })
@@ -185,82 +200,64 @@ pub fn run(reg: &Registry, opts: &Options<'_>) -> Result<Report> {
 
 /// 找上游源码里的 configure 选项。
 ///
-/// PHP 扩展（内置 / PECL）读 `config.m4` 或 `config0.m4`；
-/// 依赖库能跑 `./configure --help` 就用它，否则退回解析 `configure.ac`。
-fn upstream_options(reg: &Registry, target: &Target, root: &Path) -> (String, String, Vec<String>) {
-    match target.kind {
-        Kind::Ext => {
-            let dir = if target.origin == "builtin" {
-                let php = reg.php().expect("registry 一定有 php");
-                let relative = layout::build_dir(&php.name, Kind::Php, &php.url);
-                PathBuf::from(root)
-                    .join(relative)
-                    .join("ext")
-                    .join(&target.name)
-            } else {
-                PathBuf::from(root).join(layout::build_dir(&target.name, Kind::Ext, &target.url))
-            };
-            let relative = relative_path(root, &dir);
-            if !dir.exists() {
-                return (
-                    relative,
-                    "源码还没解压，先安装一次再跑 audit".to_owned(),
-                    Vec::new(),
-                );
-            }
-            for name in ["config.m4", "config0.m4"] {
-                if let Ok(text) = fs::read_to_string(dir.join(name)) {
-                    return (relative, String::new(), m4_options(&text));
-                }
-            }
-            (
-                relative,
-                "源码里没有 config.m4 / config0.m4，先安装一次再跑 audit".to_owned(),
-                Vec::new(),
-            )
-        }
-        Kind::Dep => {
-            let relative = layout::build_dir(&target.name, Kind::Dep, &target.url);
-            let dir = PathBuf::from(root).join(&relative);
-            if !dir.exists() {
-                return (
-                    relative,
-                    "源码还没解压，先安装一次再跑 audit".to_owned(),
-                    Vec::new(),
-                );
-            }
-            if dir.join("configure").is_file()
-                && let Some(options) = help_options(&dir)
-            {
-                return (relative, String::new(), options);
-            }
-            if let Ok(text) = fs::read_to_string(dir.join("configure.ac"))
-                && !text.is_empty()
-            {
+/// `php-config-m4` 读组件的 `config.m4` / `config0.m4`；
+/// `configure-help` 能跑 `./configure --help` 就用它，否则退回解析 `configure.ac`。
+fn upstream_options(
+    reg: &Registry,
+    target: &Target,
+    root: &Path,
+    audit: &str,
+) -> (String, String, Vec<String>) {
+    let (dir, relative) = if target.kind == Kind::Component && target.source == "bundled" {
+        let product = reg.product_any().expect("registry 一定有产品");
+        let source_path = if target.source_path.is_empty() {
+            product.profile.bundled_path.replace("{name}", &target.name)
+        } else {
+            target.source_path.clone()
+        };
+        let relative = PathBuf::from(layout::build_dir_of(product)).join(source_path);
+        (
+            PathBuf::from(root).join(&relative),
+            relative.display().to_string(),
+        )
+    } else {
+        let relative = layout::build_dir_of(target);
+        (PathBuf::from(root).join(&relative), relative)
+    };
+    if !dir.exists() {
+        return (
+            relative,
+            "源码还没解压，先安装一次再跑 audit".to_owned(),
+            Vec::new(),
+        );
+    }
+    if audit == "php-config-m4" {
+        for name in ["config.m4", "config0.m4"] {
+            if let Ok(text) = fs::read_to_string(dir.join(name)) {
                 return (relative, String::new(), m4_options(&text));
             }
-            if dir.join("Configure").is_file() {
-                return (
-                    relative,
-                    "上游用 ./Configure，没有可解析的 --help 清单；ssl 等选项由 recipe 固定"
-                        .to_owned(),
-                    Vec::new(),
-                );
-            }
-            (
-                relative,
-                "拿不到上游选项清单（没有 ./configure --help，也没有 configure.ac）".to_owned(),
-                Vec::new(),
-            )
         }
-        Kind::Php => unreachable!(),
+        return (
+            relative,
+            "源码里没有 config.m4 / config0.m4，先安装一次再跑 audit".to_owned(),
+            Vec::new(),
+        );
     }
-}
-
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| path.display().to_string())
+    if dir.join("configure").is_file()
+        && let Some(options) = help_options(&dir)
+    {
+        return (relative, String::new(), options);
+    }
+    if let Ok(text) = fs::read_to_string(dir.join("configure.ac"))
+        && !text.is_empty()
+    {
+        return (relative, String::new(), m4_options(&text));
+    }
+    (
+        relative,
+        "拿不到上游选项清单（没有 ./configure --help，也没有 configure.ac）".to_owned(),
+        Vec::new(),
+    )
 }
 
 fn help_options(dir: &Path) -> Option<Vec<String>> {
@@ -388,8 +385,8 @@ fn ignored_reason(target: &Target, name: &str) -> Option<String> {
 
 fn describe_requires(def: &crate::recipe::Feature) -> String {
     let mut parts = Vec::new();
-    if !def.requires.php.is_empty() {
-        parts.push(format!("php {}", def.requires.php.join("/")));
+    if !def.requires.product.is_empty() {
+        parts.push(format!("product {}", def.requires.product.join("/")));
     }
     for (dep, lines) in &def.requires.dep {
         parts.push(format!("dep:{dep} {}", lines.join("/")));
@@ -401,7 +398,7 @@ fn describe_requires(def: &crate::recipe::Feature) -> String {
 }
 
 pub fn text(report: &Report) -> String {
-    let mut out = format!("audit PHP {}\n", report.series);
+    let mut out = format!("audit {}@{}\n", report.product, report.series);
     for component in &report.components {
         out.push_str(&format!("\n{}\n", component.id));
         if !component.source.is_empty() {
@@ -411,7 +408,7 @@ pub fn text(report: &Report) -> String {
             out.push_str(&format!("  note    {}\n", component.note));
         }
 
-        if component.is_ext {
+        if component.audited {
             for row in &component.options {
                 let text = match &row.disposal {
                     Disposal::Configure => "configure".to_owned(),
@@ -507,7 +504,7 @@ mod tests {
 
     fn target() -> Target {
         let mut target = Target {
-            kind: Kind::Ext,
+            kind: Kind::Component,
             name: "openssl".into(),
             ..blank()
         };
@@ -535,17 +532,22 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            builtin_exts: vec![],
-            builtin_disable: Default::default(),
-            exts: vec![],
+            bundled: vec![],
+            bundled_disable: Default::default(),
+            components: vec![],
+            deps: Default::default(),
+            profile: Default::default(),
+            product: String::new(),
+            source: String::new(),
+            modes: vec![],
+            default_mode: String::new(),
+            source_path: String::new(),
             modules: vec![],
-            origin: "builtin".into(),
-            link: vec![],
-            dep_configure: Default::default(),
-            prepare: vec![],
-            shared_from: String::new(),
             ini: String::new(),
             ini_lines: vec![],
+            env: Default::default(),
+            dep_configure: Default::default(),
+            prepare: vec![],
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],

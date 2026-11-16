@@ -1,0 +1,8 @@
+# 只写默认版本线，不写补丁号；顶层是扩展，[deps] 是依赖库。
+product = "php"
+swoole = "4.8"
+xdebug = "3.1"
+
+[deps]
+openssl = "1.1.1"
+libxml2 = "2.11"

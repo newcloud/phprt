@@ -5,34 +5,35 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::recipe::{ExtSpec, Kind, Mode, Registry, Selection, Target};
+use crate::recipe::{ComponentSpec, Kind, Registry, Selection, Target};
 
-pub fn state_path(root: &Path, series: &str) -> PathBuf {
+pub fn state_path(root: &Path, product: &str, series: &str) -> PathBuf {
     root.join(".phprt")
-        .join(format!("php-{series}"))
+        .join(format!("{product}-{series}"))
         .join("state.json")
 }
 
 fn state_version() -> u32 {
-    2
+    3
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ExtState {
-    /// 选中的版本线，如 6.2；builtin 扩展为空。
+pub struct ComponentState {
+    /// 选中的版本线，如 6.2；bundled 组件为空。
     #[serde(default)]
     pub line: String,
     /// 实际解析到的补丁，如 6.2.5；只记录，不锁定。
     #[serde(default)]
     pub version: String,
+    /// 挂载方式，如 static / shared / dynamic。
     #[serde(default)]
-    pub link: String,
+    pub mode: String,
     #[serde(default)]
     pub installed: bool,
     /// 依赖名 -> 转给该依赖的 feature。
-    #[serde(default, alias = "sub")]
+    #[serde(default)]
     pub deps: BTreeMap<String, Vec<String>>,
-    /// 扩展自己的 feature。
+    /// 组件自己的 feature。
     #[serde(default)]
     pub features: Vec<String>,
 }
@@ -47,23 +48,27 @@ pub struct DepState {
     pub features: Vec<String>,
 }
 
-/// `.phprt/php-<系列>/state.json`：当前构建方案和已编译产物的状态。
+/// `.phprt/<产品>-<系列>/state.json`：当前构建方案和已编译产物的状态。
 ///
 /// 这里只记录状态，不锁定版本；dep 的版本仍然按系列取最新。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectState {
     #[serde(default = "state_version")]
     pub version: u32,
-    /// 是否已经写过状态。写过之后 ext 列表就是权威方案，即使为空。
+    /// 是否已经写过状态。写过之后组件列表就是权威方案，即使为空。
     #[serde(default)]
     pub active: bool,
     #[serde(default)]
-    pub php: String,
+    pub product: String,
+    #[serde(default)]
+    pub series: String,
+    #[serde(default)]
+    pub installed_version: String,
     /// 用户显式指定的版本线；bundle 解析出来的默认线不写在这里。
     #[serde(default)]
     pub bindings: BTreeMap<String, String>,
     #[serde(default)]
-    pub ext: BTreeMap<String, ExtState>,
+    pub components: BTreeMap<String, ComponentState>,
     #[serde(default)]
     pub deps: BTreeMap<String, DepState>,
 }
@@ -73,9 +78,11 @@ impl Default for ProjectState {
         Self {
             version: state_version(),
             active: false,
-            php: String::new(),
+            product: String::new(),
+            series: String::new(),
+            installed_version: String::new(),
             bindings: BTreeMap::new(),
-            ext: BTreeMap::new(),
+            components: BTreeMap::new(),
             deps: BTreeMap::new(),
         }
     }
@@ -90,8 +97,34 @@ impl ProjectState {
             fs::read_to_string(path).with_context(|| format!("读不到 {}", path.display()))?;
         let mut state: Self = serde_json::from_str(&text)
             .with_context(|| format!("{} 不是合法的 state.json", path.display()))?;
+        if state.version != state_version() {
+            bail!(
+                "{} 是旧格式（version={}），当前只支持 version={}；\
+                 删掉旧的 .phprt/*/state.json 并按新方案重新安装",
+                path.display(),
+                state.version,
+                state_version()
+            );
+        }
         state.active = true;
         Ok(state)
+    }
+
+    /// 首次使用时写入产品/系列；已有状态必须一致。
+    pub fn check(&mut self, product: &str, series: &str) -> Result<()> {
+        if !self.active {
+            self.product = product.to_owned();
+            self.series = series.to_owned();
+            return Ok(());
+        }
+        if self.product != product || self.series != series {
+            bail!(
+                "状态文件属于 {}@{}，不是 {product}@{series}",
+                self.product,
+                self.series
+            );
+        }
+        Ok(())
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -100,39 +133,40 @@ impl ProjectState {
     }
 
     pub fn validate(&self, reg: &Registry) -> Result<()> {
-        for (name, state) in &self.ext {
-            let ext = reg
-                .ext(name)
-                .with_context(|| format!("state.json 里的 ext:{name} 不存在"))?;
-            if !state.link.is_empty() {
-                let mode = Mode::parse(&state.link)?;
-                if !ext.link.iter().any(|m| m == mode.as_str()) {
+        for (name, state) in &self.components {
+            let component = reg
+                .component(name)
+                .with_context(|| format!("state.json 里的 component:{name} 不存在"))?;
+            if !state.mode.is_empty() {
+                if !component.modes.iter().any(|m| m == &state.mode) {
                     bail!(
-                        "state.json 里 ext:{name} 的 link={} 不受契约支持",
-                        state.link
+                        "state.json 里 component:{name} 的 mode={} 不受契约支持",
+                        state.mode
                     );
                 }
+                reg.product_mode(component, &state.mode)?;
             }
             for (dep_name, feats) in &state.deps {
-                if !ext.dep_configure.contains_key(dep_name) {
+                if !component.dep_configure.contains_key(dep_name) {
                     let available: Vec<&str> =
-                        ext.dep_configure.keys().map(String::as_str).collect();
+                        component.dep_configure.keys().map(String::as_str).collect();
                     let hint = if available.is_empty() {
                         "无".to_owned()
                     } else {
                         available.join(", ")
                     };
                     bail!(
-                        "state.json 里 ext:{name} 的 dep={dep_name} 不存在（可写：{hint}）；\
-                         sub 已改名为 dep，旧状态需要手工迁移或删除 \
-                         .phprt/php-<系列>/state.json"
+                        "state.json 里 component:{name} 的 dep={dep_name} 不存在（可写：{hint}）；\
+                         旧状态需要手工迁移或删除 .phprt/{}-{}/state.json",
+                        self.product,
+                        self.series
                     );
                 }
                 if feats.is_empty() {
                     continue;
                 }
                 let dep = reg.get(&format!("dep:{dep_name}")).ok_or_else(|| {
-                    anyhow::anyhow!("state.json 里 ext:{name} 的 dep:{dep_name} 不存在")
+                    anyhow::anyhow!("state.json 里 component:{name} 的 dep:{dep_name} 不存在")
                 })?;
                 for f in feats {
                     if !dep.features.contains_key(f) {
@@ -141,16 +175,17 @@ impl ProjectState {
                 }
             }
             for feature in &state.features {
-                if !ext.features.contains_key(feature) {
-                    let available: Vec<&str> = ext.features.keys().map(String::as_str).collect();
+                if !component.features.contains_key(feature) {
+                    let available: Vec<&str> =
+                        component.features.keys().map(String::as_str).collect();
                     let hint = if available.is_empty() {
                         "无".to_owned()
                     } else {
                         available.join(", ")
                     };
-                    bail!("state.json 里 ext:{name} 没有 feature {feature}（可用：{hint}）");
+                    bail!("state.json 里 component:{name} 没有 feature {feature}（可用：{hint}）");
                 }
-                if let Err(err) = crate::recipe::feature_available(reg, ext, feature) {
+                if let Err(err) = crate::recipe::feature_available(reg, component, feature) {
                     bail!("state.json 里 {err}；改 state 或换依赖线后重试");
                 }
             }
@@ -171,13 +206,10 @@ impl ProjectState {
         Ok(())
     }
 
-    /// 当前构建方案 = 状态里的扩展 ∪ `--ext` 点名的扩展。
-    /// 两者都没有时为空，也就是只装 PHP。
-    /// 当前构建方案 = 状态里的扩展 ∪ 本次命令行点名的扩展。
-    /// 两者都没有时为空，也就是只装 PHP。
+    /// 当前构建方案 = 状态里的组件 ∪ 本次命令行点名的组件。
     pub fn scheme_with(&self, cli_names: &[String]) -> Vec<String> {
         let mut names: Vec<String> = if self.active {
-            self.ext.keys().cloned().collect()
+            self.components.keys().cloned().collect()
         } else {
             Vec::new()
         };
@@ -190,20 +222,20 @@ impl ProjectState {
         names
     }
 
-    /// 把方案写进 php.exts；求解器只认这一份，不从 recipe 取默认扩展。
+    /// 把方案写进 product.components；求解器只认这一份，不从 recipe 取默认组件。
     pub fn apply_scheme(&self, reg: &mut Registry, names: &[String]) -> Result<()> {
         for name in names {
-            reg.ext(name)?;
+            reg.component(name)?;
         }
-        let php_id = reg.php()?.id();
+        let product_id = reg.product_any()?.id();
         reg.targets
-            .get_mut(&php_id)
-            .expect("php 目标刚刚检查过")
-            .exts = names.to_vec();
+            .get_mut(&product_id)
+            .expect("product 目标刚刚检查过")
+            .components = names.to_vec();
         Ok(())
     }
 
-    /// 把状态里的 link/sub 和命令行选择合并成一次求解用的选择。
+    /// 把状态里的 mode/deps 和命令行选择合并成一次求解用的选择。
     pub fn effective_selection(
         &self,
         reg: &Registry,
@@ -213,11 +245,11 @@ impl ProjectState {
     ) -> Result<Selection> {
         let mut out = Selection::default();
         for name in names {
-            reg.ext(name)?;
-            let mut spec = cli.per_ext.get(name).cloned().unwrap_or_default();
-            if let Some(state) = self.ext.get(name) {
-                if spec.link.is_none() && !state.link.is_empty() {
-                    spec.link = Some(Mode::parse(&state.link)?);
+            reg.component(name)?;
+            let mut spec = cli.per_component.get(name).cloned().unwrap_or_default();
+            if let Some(state) = self.components.get(name) {
+                if spec.mode.is_none() && !state.mode.is_empty() {
+                    spec.mode = Some(state.mode.clone());
                 }
                 for (dep, feats) in &state.deps {
                     let entry = spec.deps.entry(dep.clone()).or_default();
@@ -231,11 +263,11 @@ impl ProjectState {
                 if spec.features.is_none() {
                     spec.features = Some(state.features.iter().cloned().collect());
                 }
-            } else if let Some(preset) = presets.per_ext.get(name) {
-                // 首次选择这个扩展：CLI 没写的 feature/link 用 preset 补齐。
+            } else if let Some(preset) = presets.per_component.get(name) {
+                // 首次选择这个组件：CLI 没写的 feature/mode 用 preset 补齐。
                 let explicit_deps: BTreeSet<String> = spec.deps.keys().cloned().collect();
-                if spec.link.is_none() {
-                    spec.link = preset.link;
+                if spec.mode.is_none() {
+                    spec.mode = preset.mode.clone();
                 }
                 if spec.features.is_none() {
                     spec.features = preset.features.clone();
@@ -252,36 +284,36 @@ impl ProjectState {
                     }
                 }
             }
-            out.per_ext.insert(name.clone(), spec);
+            out.per_component.insert(name.clone(), spec);
         }
         Ok(out)
     }
 
-    pub fn add_ext_with_preset(
+    pub fn add_component_with_preset(
         &mut self,
         reg: &Registry,
         name: &str,
-        preset: Option<&ExtSpec>,
+        preset: Option<&ComponentSpec>,
     ) -> Result<bool> {
-        if self.ext.contains_key(name) {
+        if self.components.contains_key(name) {
             return Ok(false);
         }
-        let ext = reg.ext(name)?;
-        let link = match preset.and_then(|spec| spec.link) {
-            Some(mode) => mode.as_str().to_owned(),
-            None => ext.default_mode()?.as_str().to_owned(),
+        let component = reg.component(name)?;
+        let mode = match preset.and_then(|spec| spec.mode.clone()) {
+            Some(mode) => mode,
+            None => reg.default_mode(component)?,
         };
         let deps = preset.map(|spec| spec.deps.clone()).unwrap_or_default();
         let features = preset
             .and_then(|spec| spec.features.clone())
             .map(|features| features.into_iter().collect())
             .unwrap_or_default();
-        self.ext.insert(
+        self.components.insert(
             name.to_owned(),
-            ExtState {
+            ComponentState {
                 line: String::new(),
                 version: String::new(),
-                link,
+                mode,
                 installed: false,
                 deps,
                 features,
@@ -291,24 +323,24 @@ impl ProjectState {
         Ok(true)
     }
 
-    pub fn remove_ext(&mut self, name: &str) -> bool {
-        let Some(ext) = self.ext.remove(name) else {
+    pub fn remove_component(&mut self, name: &str) -> bool {
+        let Some(component) = self.components.remove(name) else {
             return false;
         };
-        // builtin 扩展（openssl/curl）没有自己的线，同名 binding 属于依赖库。
-        if !ext.line.is_empty() {
+        // bundled 组件（openssl/curl）没有自己的线，同名 binding 属于依赖库。
+        if !component.line.is_empty() {
             self.bindings.remove(name);
         }
         true
     }
 
     pub fn set_installed_all(&mut self) {
-        for ext in self.ext.values_mut() {
-            ext.installed = true;
+        for component in self.components.values_mut() {
+            component.installed = true;
         }
     }
 
-    /// 把本次求解使用的 link/sub 写回状态，保留 installed。
+    /// 把本次求解使用的 mode/deps 写回状态，保留 installed。
     pub fn sync_selection(
         &mut self,
         reg: &Registry,
@@ -316,20 +348,20 @@ impl ProjectState {
         names: &[String],
     ) -> Result<()> {
         for name in names {
-            let ext = reg.ext(name)?;
-            let spec = sel.per_ext.get(name).cloned().unwrap_or_default();
-            let entry = self.ext.entry(name.clone()).or_default();
-            entry.link = sel.mode_of(ext)?.as_str().to_owned();
-            entry.line = ext.line.clone();
-            entry.version = ext.version.clone();
+            let component = reg.component(name)?;
+            let spec = sel.per_component.get(name).cloned().unwrap_or_default();
+            let entry = self.components.entry(name.clone()).or_default();
+            entry.mode = sel.mode_of(component);
+            entry.line = component.line.clone();
+            entry.version = component.version.clone();
             entry.deps = spec.deps;
             entry.features = spec
                 .features
                 .map(|set| set.into_iter().collect())
                 .unwrap_or_default();
         }
-        // 方案之外的扩展不留在状态里。
-        self.ext.retain(|name, _| names.contains(name));
+        // 方案之外的组件不留在状态里。
+        self.components.retain(|name, _| names.contains(name));
         self.active = true;
         Ok(())
     }
@@ -377,9 +409,9 @@ impl ProjectState {
             .collect();
     }
 
-    pub fn ext_status(&self, name: &str) -> &'static str {
-        match self.ext.get(name) {
-            Some(e) if e.installed => "installed",
+    pub fn component_status(&self, name: &str) -> &'static str {
+        match self.components.get(name) {
+            Some(c) if c.installed => "installed",
             Some(_) => "pending",
             None => "available",
         }
@@ -424,14 +456,15 @@ mod tests {
         t
     }
 
-    fn ext(name: &str) -> Target {
+    fn component(name: &str) -> Target {
         let mut t = Target {
-            kind: Kind::Ext,
+            kind: Kind::Component,
             name: name.into(),
+            product: "php".into(),
+            source: "bundled".into(),
+            modes: vec!["static".into(), "shared".into()],
+            default_mode: "static".into(),
             modules: vec![name.into()],
-            origin: "builtin".into(),
-            link: vec!["static".into(), "shared".into()],
-            shared_from: format!("ext/{name}"),
             ini: format!("20-{name}.ini"),
             ..blank()
         };
@@ -448,17 +481,22 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            builtin_exts: vec![],
-            builtin_disable: Default::default(),
-            exts: vec![],
+            bundled: vec![],
+            bundled_disable: Default::default(),
+            components: vec![],
+            deps: Default::default(),
+            profile: Default::default(),
+            product: String::new(),
+            source: String::new(),
+            modes: vec![],
+            default_mode: String::new(),
+            source_path: String::new(),
             modules: vec![],
-            origin: "builtin".into(),
-            link: vec![],
-            dep_configure: Default::default(),
-            prepare: vec![],
-            shared_from: String::new(),
             ini: String::new(),
             ini_lines: vec![],
+            env: Default::default(),
+            dep_configure: Default::default(),
+            prepare: vec![],
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
@@ -471,21 +509,47 @@ mod tests {
     }
 
     fn registry() -> Registry {
-        let mut curl = ext("curl");
+        let mut curl = component("curl");
         curl.needs = vec!["libcurl".into()];
-        let mut swoole = ext("swoole");
+        let mut swoole = component("swoole");
         swoole.needs = vec!["libcurl".into()];
-        swoole.origin = "pecl".into();
-        swoole.link = vec!["shared".into()];
-        let php = Target {
-            kind: Kind::Php,
-            name: "8.5.12".into(),
+        swoole.source = "external".into();
+        swoole.modes = vec!["shared".into()];
+        swoole.default_mode = "shared".into();
+        let mut profile = crate::recipe::Profile::default();
+        profile.modes.insert(
+            "static".into(),
+            crate::recipe::ProfileMode {
+                strategy: "fold".into(),
+                ..Default::default()
+            },
+        );
+        profile.modes.insert(
+            "shared".into(),
+            crate::recipe::ProfileMode {
+                strategy: "standalone".into(),
+                ..Default::default()
+            },
+        );
+        profile.defaults.insert("bundled".into(), "static".into());
+        profile.defaults.insert("external".into(), "shared".into());
+        let product = Target {
+            kind: Kind::Product,
+            name: "php".into(),
             version: "8.5.12".into(),
             url: "https://example.com/php.tar.gz".into(),
+            series: "8.5".into(),
+            bundled: vec!["curl".into()],
+            profile,
             ..blank()
         };
-        Registry::from_targets(vec![dep("libcurl", &["ssl", "nghttp2"]), curl, swoole, php])
-            .unwrap()
+        Registry::from_targets(vec![
+            dep("libcurl", &["ssl", "nghttp2"]),
+            curl,
+            swoole,
+            product,
+        ])
+        .unwrap()
     }
 
     #[test]
@@ -495,11 +559,11 @@ mod tests {
 
         let mut reg = registry();
         state.apply_scheme(&mut reg, &[]).unwrap();
-        assert!(reg.php().unwrap().exts.is_empty());
+        assert!(reg.product_any().unwrap().components.is_empty());
     }
 
     #[test]
-    fn scheme_takes_cli_exts() {
+    fn scheme_takes_cli_components() {
         let state = ProjectState::default();
         assert_eq!(state.scheme_with(&["swoole".to_owned()]), vec!["swoole"]);
     }
@@ -526,10 +590,12 @@ mod tests {
     fn effective_selection_carries_state_deps() {
         let reg = registry();
         let mut state = ProjectState::default();
-        state.add_ext_with_preset(&reg, "curl", None).unwrap();
-        state.add_ext_with_preset(&reg, "swoole", None).unwrap();
+        state.add_component_with_preset(&reg, "curl", None).unwrap();
         state
-            .ext
+            .add_component_with_preset(&reg, "swoole", None)
+            .unwrap();
+        state
+            .components
             .get_mut("curl")
             .unwrap()
             .deps
@@ -541,20 +607,17 @@ mod tests {
             .unwrap();
         assert_eq!(names, vec!["curl", "swoole"]);
         assert_eq!(sel.features(&reg)["libcurl"], vec!["nghttp2"]);
-        assert_eq!(
-            sel.mode_of(reg.ext("swoole").unwrap()).unwrap(),
-            Mode::Shared
-        );
+        assert_eq!(sel.mode_of(reg.component("swoole").unwrap()), "shared");
     }
 
     #[test]
     fn preset_applies_only_without_existing_state() {
         let reg = registry();
         let mut presets = Selection::default();
-        presets.per_ext.insert(
+        presets.per_component.insert(
             "curl".into(),
-            ExtSpec {
-                link: Some(Mode::Shared),
+            ComponentSpec {
+                mode: Some("shared".into()),
                 features: Some(BTreeSet::from(["ssl".into()])),
                 deps: BTreeMap::from([("libcurl".into(), vec!["ssl".into()])]),
                 ..Default::default()
@@ -567,26 +630,26 @@ mod tests {
             .effective_selection(&reg, &Selection::default(), &presets, &names)
             .unwrap();
         assert_eq!(
-            sel.features_of(reg.ext("curl").unwrap()),
+            sel.features_of(reg.component("curl").unwrap()),
             Some(&BTreeSet::from(["ssl".to_owned()]))
         );
-        assert_eq!(sel.deps_of(reg.ext("curl").unwrap()).count(), 1);
-        assert_eq!(sel.mode_of(reg.ext("curl").unwrap()).unwrap(), Mode::Shared);
+        assert_eq!(sel.deps_of(reg.component("curl").unwrap()).count(), 1);
+        assert_eq!(sel.mode_of(reg.component("curl").unwrap()), "shared");
 
         let mut state = ProjectState::default();
         state
-            .add_ext_with_preset(&reg, "curl", presets.per_ext.get("curl"))
+            .add_component_with_preset(&reg, "curl", presets.per_component.get("curl"))
             .unwrap();
-        assert_eq!(state.ext["curl"].features, vec!["ssl"]);
-        assert_eq!(state.ext["curl"].deps["libcurl"], vec!["ssl"]);
+        assert_eq!(state.components["curl"].features, vec!["ssl"]);
+        assert_eq!(state.components["curl"].deps["libcurl"], vec!["ssl"]);
 
         // 已有 state（即使 feature 为空）优先，不再套 preset。
-        state.ext.get_mut("curl").unwrap().features.clear();
+        state.components.get_mut("curl").unwrap().features.clear();
         let sel = state
             .effective_selection(&reg, &Selection::default(), &presets, &names)
             .unwrap();
         assert_eq!(
-            sel.features_of(reg.ext("curl").unwrap()),
+            sel.features_of(reg.component("curl").unwrap()),
             Some(&BTreeSet::new())
         );
     }
@@ -595,12 +658,21 @@ mod tests {
     fn status_reflects_installed_flag() {
         let reg = registry();
         let mut state = ProjectState::default();
-        assert_eq!(state.ext_status("curl"), "available");
-        state.add_ext_with_preset(&reg, "curl", None).unwrap();
-        assert_eq!(state.ext_status("curl"), "pending");
+        assert_eq!(state.component_status("curl"), "available");
+        state.add_component_with_preset(&reg, "curl", None).unwrap();
+        assert_eq!(state.component_status("curl"), "pending");
         state.set_installed_all();
-        assert_eq!(state.ext_status("curl"), "installed");
-        state.remove_ext("curl");
-        assert_eq!(state.ext_status("curl"), "available");
+        assert_eq!(state.component_status("curl"), "installed");
+        state.remove_component("curl");
+        assert_eq!(state.component_status("curl"), "available");
+    }
+
+    #[test]
+    fn old_state_version_is_rejected() {
+        let path = std::env::temp_dir().join(format!("phprt-state-v2-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"version":2,"php":"8.5.12","ext":{}}"#).unwrap();
+        let err = ProjectState::load(&path).unwrap_err().to_string();
+        assert!(err.contains("旧格式"), "{err}");
+        let _ = std::fs::remove_file(&path);
     }
 }

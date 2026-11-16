@@ -20,7 +20,7 @@
 | recipe 字段、ctx、LINES、catalog/bundle | `docs/CONTRACT.md` |
 | 新增/更新版本线、补丁号、catalog 下载地址、扩展默认规则 | `docs/ADD-RECIPE.md` |
 | 上游开关盘点、feature 取舍、默认值判据 | `docs/FEATURES.md` |
-| 子命令、`--php`、`--ext`、`--dep`、错误 | `docs/CLI.md` |
+| 子命令、`产品@系列`、`--component`、`--dep`、错误 | `docs/CLI.md` |
 | 选线、依赖线交集、依赖边、子功能传播 | `docs/SOLVER.md` |
 | 文本/JSON 输出、路径、字段 | `docs/OUTPUT.md` |
 | state.json、bindings、line/version | `docs/STATE.md` |
@@ -36,7 +36,7 @@
 
 ## 3. 不要确认显而易见的事
 
-- 扩展对必需依赖是事实，不是可选项：curl 一定依赖 libcurl，openssl 扩展一定依赖
+- 组件对必需依赖是事实，不是可选项：curl 一定依赖 libcurl，openssl 组件一定依赖
   dep openssl。直接按契约写进 recipe，不要拿这类问题让用户确认。
 - 同一能力有多种等价写法时，直接选一种定下来、写进契约和文档，不要把选项抛回给用户。
 - 只对真正有歧义、会影响外部行为的决策提问；能从领域常识或现有契约直接推出的，
@@ -45,34 +45,36 @@
 ## 4. 版本数据规则
 
 - 补丁号只写在 `recipes/catalog.toml`；recipe、bundle、state 都不锁补丁。
-- bundle 顶层只写有独立版本线的扩展；依赖库默认线写 `[deps]`。内置扩展没有版本线，不能写顶层。
+- bundle 顶层只写有独立版本线的组件；依赖库默认线写 `[deps]`。bundled 组件没有版本线，不能写顶层。
 - catalog 上的注释不删除。改地址、改版本时同步更新注释内容，保留原意。
 - 填 catalog 前先按 `docs/ADD-RECIPE.md` 判断下载地址是否跳转：跨站点跳转写跳转后的
   最终地址并注释说明；同一发布方的临时签名跳转写稳定发布地址。
-- dep recipe 不写 PHP 关系；PHP 与库版本的对应写在消费扩展里。
-- 有自己版本线的扩展用 `LINES`；builtin 扩展用 `PHP_LINES` 约束同名依赖库，
-  用 `PHP_DEP_LINES` 约束不同名依赖（如 gd 的 libpng/jpeg）。
+- dep recipe 不写产品关系；产品与库版本的对应写在消费组件或产品里。
+- 有自己版本线的组件用 `LINES`；bundled 组件用 `PRODUCT_LINES` 约束同名依赖库，
+  用 `PRODUCT_DEP_LINES` 约束不同名依赖（如 gd 的 libpng/jpeg）。
 - `target(ctx)` 只写构建参数，不判断兼容性。
-- 是否内置、内置扩展的关闭参数写在 `php<系列>.star` 的 `builtin_exts` / `builtin_disable`；
-  ext recipe 不写 `origin`、`static_enable`、`static_disable`，用 `ctx["is_builtin"]`。
-- 上游源码要先改再编时（如删除已移除头文件的 include），ext recipe 用
-  `prepare = [...]` 写 shell 命令：phpize 之前执行、必须幂等、会进构建签名；
+- 是否 bundled、bundled 组件的关闭参数写在 `products/php/<系列>.star` 的
+  `bundled` / `bundled_disable`；component recipe 不写 `origin`、`static_enable`、
+  `static_disable`，用 `ctx["is_bundled"]`。
+- 上游源码要先改再编时（如删除已移除头文件的 include），component recipe 用
+  `prepare = [...]` 写 shell 命令：standalone 构建之前执行、必须幂等、会进构建签名；
   能用 configure 参数解决的事不要写 prepare。
-- 默认启用集合写在 bundle 的 `[default_exts]` 表：`link` / `features` / `deps`，
-  不允许 `version:`；有依赖的内置扩展必须一起写，不做依赖展开。
-- 扩展被选中时的默认 feature 写在 `[ext_presets]`；`[default_exts]` 用
-  `ref = "ext_presets.<同名扩展>"` 引用，写 ref 时不再重复 features/deps。
-- 新增或修改 ext / dep recipe 时，必须按 `docs/FEATURES.md` 盘点上游选项：
+- 默认启用集合写在 bundle 的 `[default_components]` 表：`mode` / `features` / `deps`，
+  不允许 `version:`；有依赖的 bundled 组件必须一起写，不做依赖展开。
+- 组件被选中时的默认 feature 写在 `[component_presets]`；`[default_components]` 用
+  `ref = "component_presets.<同名组件>"` 引用，写 ref 时不再重复 features/deps。
+- 新增或修改 component / dep recipe 时，必须按 `docs/FEATURES.md` 盘点上游选项：
   跑 `phprt audit`，把每个选项处置成 `configure` / `features` / `ignored`（含理由），
   默认值按该文档的四条判据写进 bundle；`audit` 不通过不算做完。
 - 常用 / 有需求的开关要开发，不能一律记成 `ignored`：需要新库就加 dep recipe，
   用 feature 的 `needs` 让它只在选中时引入。`ignored` 只留给少用、调试和缺依赖未排期的项。
-- 扩展自己的条件能力用 `requires` 声明，不写成 `target(ctx)` 里的 if：
-  `feature(configure=[...], requires={"php": ["8.5","8.6"], "dep": {"openssl": ["3.5","4.0"]}})`。
+- 组件自己的条件能力用 `requires` 声明，不写成 `target(ctx)` 里的 if：
+  `feature(configure=[...], requires={"product": ["8.5","8.6"], "dep": {"openssl": ["3.5","4.0"]}})`。
   显式选择不满足时报错并说明是哪一条不满足；bundle 默认不满足时提示并丢弃。
-- 新增/删除版本线时同步改 catalog、扩展 recipe 的 `LINES`/`PHP_LINES`/`PHP_DEP_LINES`，
-  必要时改 bundle。
-- 每个 PHP 系列必须有对应的 `bundles/php<系列>.toml` 和 `php<系列>.star`。
+- 新增/删除版本线时同步改 catalog、组件 recipe 的
+  `LINES`/`PRODUCT_LINES`/`PRODUCT_DEP_LINES`，必要时改 bundle。
+- 每个产品系列必须有对应的 `bundles/<产品>/<系列>.toml` 和
+  `products/<产品>/<系列>.star`。
 
 ## 5. 验收
 
@@ -81,32 +83,43 @@ cargo fmt --all
 cargo test --workspace
 cargo clippy --workspace --all-targets
 
-cargo run -- --php 8.5 audit                      # 上游开关必须全部处置
-cargo run -- install 8.5                          # 默认 openssl + curl(ssl) + libxml + PHP
-cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
-cargo run -- install 8.5 --ext swoole --ext xdebug
-cargo run -- install 8.5 --ext swoole             # bundle: swoole 6.2
-cargo run -- install 8.5 --ext gd                 # 使用 [ext_presets].gd
-cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'
-cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'
-cargo run -- install 8.6 --ext gd                  # 必须失败：gd 只在 8.0 ~ 8.5 加载（7.4 / 8.6 未适配）
-cargo run -- install 7.4 --ext swoole             # swoole 4.8 + openssl 1.1.1
-cargo run -- install 8.2 --ext swoole=version:6.0
-cargo run -- install 8.5 --ext swoole --dep openssl=4.0
-cargo run -- install 8.5 --ext swoole=version:4.8 # 必须失败
-cargo run -- install                               # 必须提示指定 PHP
-cargo run -- --php 8.5 ext list --installed
-cargo run -- --php 8.5 ext add xdebug
-cargo run -- --php 8.5 ext remove xdebug
-cargo run -- --php 8.5 update
+cargo run -- audit php@8.5                        # 上游开关必须全部处置
+cargo run -- install php@8.5                      # 默认组件 + PHP
+cargo run -- install php@8.5 --disable-default-component openssl --disable-default-component curl --disable-default-component libxml  # 只装 PHP
+cargo run -- add php@8.5 swoole
+cargo run -- add php@8.5 xdebug
+cargo run -- install php@8.5
+cargo run -- remove php@8.5 xdebug
+cargo run -- install php@8.5 --component 'curl=mode:shared,dep:libcurl[ssl,nghttp2]'
+cargo run -- install php@8.5 --component gd
+cargo run -- install php@8.5 --component 'gd=dep:jpeg[simd]'
+cargo run -- install php@8.5 --component 'gd=feature:[jpeg,webp,freetype,avif]'
+cargo run -- install php@8.6 --component gd     # 必须失败：gd 只在 8.0 ~ 8.5 加载
+cargo run -- install php@7.4 --component swoole # swoole 4.8 + openssl 1.1.1
+cargo run -- install php@8.2 --component swoole=version:6.0
+cargo run -- install php@8.5 --component swoole --dep openssl=4.0
+cargo run -- install php@8.5 --component swoole=version:4.8 # 必须失败
+cargo run -- install                            # 必须提示指定产品
+cargo run -- install php@8.5 nginx@1.29         # 必须失败：一次只能一个产品
+cargo run -- list
+cargo run -- list php@8.5 --installed
+cargo run -- list php@8.5 --pending
+cargo run -- plan php@8.5 --json
+cargo run -- update php@8.5
 
-cargo run -- install 8.5 --downloads                          # 只下载，不写 state
-cargo run -- install 8.5 --ext swoole --downloads
-cargo run -- install 8.5 --downloads --offline                # 缓存空时必须失败
-cargo run -- install 8.5 --ext swoole --offline               # 下载+解压+编译+写 state
+cargo run -- install php@8.5 --downloads                       # 只下载，不写 state
+cargo run -- install php@8.5 --component swoole --downloads
+cargo run -- install php@8.5 --downloads --offline             # 缓存空时必须失败
+cargo run -- install php@8.5 --component swoole --offline      # 下载+解压+编译+写 state
 
-./myphp -v
-./myphp -m | grep -E 'openssl|curl|swoole|xdebug'
+cargo run -- install nginx@1.29
+./.phprt/nginx-1.29.8/sbin/nginx -V
+cargo run -- add nginx@1.29 lua-nginx-module
+cargo run -- install nginx@1.29
+ls .phprt/nginx-1.29.8/modules/
+
+./myphp-8.5 -v
+./myphp-8.5 -m | grep -E 'openssl|curl|swoole|xdebug'
 ```
 
 测试和文档都对上才算改完。

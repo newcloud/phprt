@@ -1,7 +1,7 @@
 # phprt 版本数据库（测试用）
 #
 # 只保存每条版本线的“当前最新小版本”和下载地址。
-# 兼容性（哪条线支持哪个 PHP）写在 recipe 的 LINES / PHP_LINES 里。
+# 兼容性（哪条线支持哪个产品、依赖哪些库）写在 recipe 的 LINES / PRODUCT_LINES 里。
 #
 # 更新时只改对应线的 version / url / sha256，bundle 和 recipe 不动。
 
@@ -165,3 +165,21 @@
 # oniguruma 的 release tag 是 onig-<版本> 形式（不是 v 前缀）。
 [oniguruma]
 "6.9" = { version = "6.9.10", url = "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz", sha256 = "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05" }
+
+[nginx]
+"1.29" = { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz" }
+
+[pcre2]
+"10.49" = { version = "10.49", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz" }
+
+[luajit]
+"2.1" = { version = "2.1", url = "https://github.com/openresty/luajit2/archive/refs/tags/v2.1-20261107.tar.gz" }
+
+[lua-resty-core]
+"0.1" = { version = "0.1.32", url = "https://github.com/openresty/lua-resty-core/archive/refs/tags/v0.1.32.tar.gz" }
+
+[lua-resty-lrucache]
+"0.15" = { version = "0.15", url = "https://github.com/openresty/lua-resty-lrucache/archive/refs/tags/v0.15.tar.gz" }
+
+[lua-nginx-module]
+"0.10" = { version = "0.10.29", url = "https://github.com/openresty/lua-nginx-module/archive/refs/tags/v0.10.29.tar.gz" }

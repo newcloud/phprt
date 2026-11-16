@@ -1,14 +1,14 @@
 # Swoole 构建开关
 
 Swoole 有四条版本线（4.8 / 5.1 / 6.0 / 6.2），`config.m4` 的选项差别很大。本文是
-`recipes/ext/swoole.star` 的盘点记录和改造方案：哪些开关做成 feature、哪些固定在
+`recipes/components/php/swoole.star` 的盘点记录和改造方案：哪些开关做成 feature、哪些固定在
 `configure`、哪些进 `ignored`，默认值放在哪个 bundle。PHP 8.6 不提供 swoole。
 
 只覆盖 Swoole 自己的编译开关。PHP 扩展、依赖库的开关处置见 [FEATURES.md](FEATURES.md)。
 
 ## 1. 盘点方法
 
-`phprt --php <系列> audit` 读扩展源码里的 `config.m4`，用 `PHP_ARG_ENABLE` /
+`phprt audit php@<系列>` 读扩展源码里的 `config.m4`，用 `PHP_ARG_ENABLE` /
 `PHP_ARG_WITH` / `AC_ARG_*` 得到上游选项，再按选项名（去掉 `enable-` / `with-` 前缀）
 比对 recipe 的 `features`、`configure`、`ignored`。所以：
 
@@ -64,7 +64,7 @@ Swoole 有四条版本线（4.8 / 5.1 / 6.0 / 6.2），`config.m4` 的选项差�
 | `--with-openssl-dir` | 固定 / ignored | 6.0 / 6.2 的 `configure`；4.8 / 5.1 不用它，路径走环境变量 |
 | `--enable-swoole-curl` | 固定 | `dep_configure = {"libcurl": [...]}` |
 | `--enable-cares` | feature `cares` | 已有；`needs=["c-ares"]`，默认关 |
-| `--enable-sockets` | feature `sockets` | 默认开（`[ext_presets].swoole`） |
+| `--enable-sockets` | feature `sockets` | 默认开（`[component_presets].swoole`） |
 | `--enable-swoole-sqlite` | feature `sqlite` | `needs=["sqlite"]`，默认开；4.8 没有这个开关，不定义该 feature |
 | `--enable-http2`（4.8） | 固定 | 4.8 的 `configure` |
 | `--enable-brotli` | feature `brotli` | `needs=["brotli"]`，默认关；未选中时基础 `configure` 的 `--disable-brotli` 关掉自动探测 |
@@ -88,7 +88,7 @@ Swoole 有四条版本线（4.8 / 5.1 / 6.0 / 6.2），`config.m4` 的选项差�
 
 ## 4. 改动
 
-### 4.1 `recipes/ext/swoole.star`
+### 4.1 `recipes/components/php/swoole.star`
 
 ```python
 LINES = {
@@ -101,7 +101,7 @@ LINES = {
 
 def target(ctx):
     self = ctx["self"]
-    builtin = ctx["is_builtin"]
+    builtin = ctx["is_bundled"]
     line = self["line"]
 
     needs = ["libcurl"]
@@ -191,7 +191,7 @@ def target(ctx):
         ignored["--with-swoole-firebird"] = "少用：需要 Firebird 客户端"
         ignored["--with-swoole-ssh2"] = "少用：与 PHP ssh2 扩展冲突"
 
-    return ext(
+    return component(
         name = "swoole",
         modules = ["swoole"],
         link = ["shared"],
@@ -219,26 +219,26 @@ def target(ctx):
 
 ### 4.2 bundle 默认值
 
-`recipes/bundles/php8.0.toml` ~ `php8.5.toml` 的 `[ext_presets]` 各加一行：
+`recipes/bundles/php/8.0.toml` ~ `8.5.toml` 的 `[component_presets]` 各加一行：
 
 ```toml
 swoole = { features = ["sockets", "sqlite"] }
 ```
 
-`recipes/bundles/php7.4.toml` 现在没有 `[ext_presets]`，新增这个表（4.8 只有 `sockets`）：
+`recipes/bundles/php/7.4.toml` 现在没有 `[component_presets]`，新增这个表（4.8 只有 `sockets`）：
 
 ```toml
-[ext_presets]
+[component_presets]
 swoole = { features = ["sockets"] }
 ```
 
-`recipes/ext/swoole.star` 的 `LINES["6.2"].php` 改成 `["8.4", "8.5"]`：PHP 8.6 不提供
-swoole（原因见 §4.4）。`php8.6.toml` 里的 `swoole = "6.2"` 保留，这样
-`--php 8.6 --ext swoole` 的报错是「swoole 6.2 不支持 PHP 8.6」；删掉这一行只会变成
+`recipes/components/php/swoole.star` 的 `LINES["6.2"].product` 改成 `["8.4", "8.5"]`：PHP 8.6 不提供
+swoole（原因见 §4.4）。`bundles/php/8.6.toml` 里的 `swoole = "6.2"` 保留，这样
+`audit php@8.6 时的 --component swoole` 的报错是「swoole 6.2 不支持产品 8.6」；删掉这一行只会变成
 「请为扩展 swoole 指定版本线」，反而看不出原因。它只是默认线，不会让 swoole 在
 8.6 默认安装。
 
-- 只影响 `--ext swoole` / `ext add swoole`，不会让 swoole 变成默认安装的扩展。
+- 只影响 `--component swoole` / `add php@8.5 swoole`，不会让 swoole 变成默认安装的扩展。
 - 8.0 走 5.1 线，8.1 ~ 8.3 走 6.0 线，8.4 / 8.5 走 6.2 线，三条线都有 `sockets` / `sqlite`。
 - `brotli` / `zstd` 不写进 preset：它们要新增依赖库，默认关。
 - 显式写 `feature:` 会覆盖 preset；`feature:[]` 清空。
@@ -269,8 +269,8 @@ recipe 只写构建方式。
 
 6.2.5 的 `ext-src/php_swoole_private.h` 在 `PHP_VERSION_ID >= 80600` 直接
 `#error "require PHP version 8.5 or earlier"`。做法是把 8.6 从 `LINES["6.2"]` 撤掉；
-`php8.6.toml` 的 `swoole = "6.2"` 保留，让 `--php 8.6 --ext swoole` 在选线阶段报
-「swoole 6.2 不支持 PHP 8.6」，而不是产出一个必失败的计划。等 6.3 有版本线时再把
+`bundles/php/8.6.toml` 的 `swoole = "6.2"` 保留，让 `audit php@8.6 时的 --component swoole` 在选线阶段报
+「swoole 6.2 不支持产品 8.6」，而不是产出一个必失败的计划。等 6.3 有版本线时再把
 8.6 加回。
 
 ### 4.5 pdo_pgsql（PG 的方向）
@@ -279,7 +279,7 @@ Swoole 的 PostgreSQL 协程客户端上游已移除，swoole 不再暴露 pgsql
 支持改为 PHP 自己的 `pdo_pgsql` 内置扩展，照 `pdo_sqlite` 的写法：
 
 ```python
-PHP_DEP_LINES = {
+PRODUCT_DEP_LINES = {
     series: {"libpq": ["18"]}
     for series in ["7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"]
 }
@@ -287,12 +287,12 @@ PHP_DEP_LINES = {
 
 def target(ctx):
     self = ctx["self"]
-    builtin = ctx["is_builtin"]
+    builtin = ctx["is_bundled"]
 
-    return ext(
+    return component(
         name = "pdo_pgsql",
         modules = ["pdo_pgsql"],
-        link = ["static"],
+        modes = ["static"],
         needs = ["libpq"],
         dep_configure = {"libpq": []},
         configure = ["--with-pdo-pgsql={dep:libpq}"],
@@ -300,10 +300,10 @@ def target(ctx):
     )
 ```
 
-- `pdo` 是 PHP 内置，不需要额外声明；`pdo_pgsql` 不进 `[default_exts]`，
-  用 `--ext pdo_pgsql` 显式选择。
-- 各系列 `php<系列>.star` 的 `BUILTIN_EXTS` 已有 `pdo_pgsql`，
-  `BUILTIN_DISABLE` 不用加（PHP 默认不编它）。
+- `pdo` 是 PHP 内置，不需要额外声明；`pdo_pgsql` 不进 `[default_components]`，
+  用 `--component pdo_pgsql` 显式选择。
+- 各系列 `products/php/<系列>.star` 的 `BUNDLED` 已有 `pdo_pgsql`，
+  `BUNDLED_DISABLE` 不用加（PHP 默认不编它）。
 - `pdo_pgsql` 是静态内置扩展；swoole 只 hook PDO 层，不提供 PG 的协程客户端。
 
 ## 5. 依赖与运行期
@@ -314,8 +314,8 @@ def target(ctx):
   `include/php/ext/sockets/` 里有这个头（`phpincludedir` 在 include 路径里）。
 - 运行期 `swoole.so` 声明 `ZEND_MOD_REQUIRED("sockets")`，PHP 的 sockets 扩展
   必须加载，否则 swoole 直接加载失败。
-- 8.0 ~ 8.5 的 `[default_exts]` 都有 `sockets = {}`。如果用户显式
-  `--disable-default-ext sockets` 又启用 swoole，上游 configure 会报
+- 8.0 ~ 8.5 的 `[default_components]` 都有 `sockets = {}`。如果用户显式
+  `--disable-default-component sockets` 又启用 swoole，上游 configure 会报
   `cannot find php_sockets.h`，这是预期报错；契约目前没有「feature 依赖 PHP 扩展」
   字段，本次不新增。
 
@@ -362,7 +362,7 @@ def target(ctx):
   命中「依赖已经在默认集 → 默认开，并和依赖一起写」。
 - `cares`：引入新的 `c-ares` 依赖，默认关。
 - `brotli` / `zstd`：都要新增依赖库，默认关。
-- 两个默认值只写在 `[ext_presets]`，不写进 recipe。
+- 两个默认值只写在 `[component_presets]`，不写进 recipe。
 
 ## 7. 验收
 
@@ -372,31 +372,31 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 
 # 每个系列都要 0；swoole 源码要先解压（装过一次）
-phprt --php 7.4 audit
-phprt --php 8.0 audit
-phprt --php 8.5 audit
+phprt audit php@7.4
+phprt audit php@8.0
+phprt audit php@8.5
 
 # 预设：两个开关都在，且 dep:sqlite 进构建顺序
-phprt --php 8.5 --ext swoole plan
+phprt --component swoole plan
 
 # 显式清空：两个开关都不出现
-phprt --php 8.5 --ext 'swoole=feature:[]' plan
+phprt --component 'swoole=feature:[]' plan
 
 # 可选 feature：两个依赖都进构建顺序
-phprt --php 8.5 --ext 'swoole=feature:[sockets,sqlite,brotli,zstd]' plan
+phprt --component 'swoole=feature:[sockets,sqlite,brotli,zstd]' plan
 
 # pdo_pgsql：libpq 进构建顺序，PHP configure 带 --with-pdo-pgsql
-phprt --php 8.5 --ext pdo_pgsql plan
+phprt --component pdo_pgsql plan
 
 # 4.8 线：http2 在 configure 里，没有 sqlite / zstd
-phprt --php 7.4 --ext 'swoole=feature:[brotli]' plan
+phprt plan php@7.4 --component 'swoole=feature:[brotli]'
 
 # 5.1 线：没有 zstd
-phprt --php 8.0 --ext swoole plan
-phprt --php 8.0 --ext 'swoole=feature:[brotli]' plan
+phprt plan php@8.0 --component swoole
+phprt plan php@8.0 --component 'swoole=feature:[brotli]'
 
 # 8.6 不再提供 swoole：必须失败
-phprt --php 8.6 --ext swoole plan
+phprt audit php@8.6 --component swoole plan
 ```
 
 计划输出里应能看到 `--enable-sockets`、`--enable-swoole-sqlite`（8.0 及以上）、
@@ -405,8 +405,8 @@ phprt --php 8.6 --ext swoole plan
 出现 `dep:libpq` 和 `--with-pdo-pgsql=<libpq 前缀>`。真构建至少覆盖两条线：
 
 ```bash
-phprt install 8.5 --ext swoole
-phprt install 8.0 --ext swoole     # 5.1 线
+phprt install 8.5 --component swoole
+phprt install 8.0 --component swoole     # 5.1 线
 
 php --ri swoole | grep -E 'sockets|coroutine_sqlite'
 php -r 'var_dump(method_exists(Swoole\Client::class, "getSocket"));'
@@ -419,7 +419,7 @@ php -r 'Swoole\Coroutine\run(function () {
 ```
 
 已有安装根不会因为 bundle preset 变化自动重编扩展；验证默认值要用干净根，
-或显式写 `--ext 'swoole=feature:[sockets,sqlite]'`。
+或显式写 `--component 'swoole=feature:[sockets,sqlite]'`。
 
 ## 8. 未决
 

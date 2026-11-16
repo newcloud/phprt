@@ -1,7 +1,7 @@
 # phprtv3 框架
 
 这是设计文档的主入口。它从框架角度说明 phprtv3 由哪些层组成、每层只回答什么问题、
-彼此如何约束；recipe 字段、命令语法、输出格式分别写在各子文档里，见第 15 节。
+彼此如何约束；recipe 字段、命令语法、输出格式分别写在各子文档里，见第 14 节。
 
 ## 1. 起点：v2 是单版本式方案
 
@@ -31,491 +31,283 @@ php8.5.star
 - 具体补丁和下载地址（每次上游发版都变）
 - 本次构建的临时选择（每次命令都变）
 
+v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / 依赖库”三层。
+
 ## 2. 目标与非目标
 
-**目标：把上面四种信息拆开，每种只有一个来源。**
+**目标：把四种信息拆开，每种只有一个来源；同一套模型能构建 PHP 之外的产品。**
 
 | 目标 | 判据 |
 | --- | --- |
-| 新增 PHP 系列不复制依赖 recipe | 加一个系列只新增该系列自己的声明 |
-| 依赖版本可选、可换线、可升补丁 | 同一份 recipe 能服务多条 openssl 线 |
-| 兼容关系可声明、可校验 | 选错线在求解阶段失败，并给出候选 |
-| 一份 recipe 服务多个 PHP 系列 | ext/dep 声明与 PHP 系列数量无关 |
+| 新增产品系列不复制依赖 recipe | 加一个系列只新增该系列自己的声明 |
+| 依赖线由约束求交决定 | 兼容关系写在 recipe，默认线写在 bundle，当前选择来自 state / CLI |
+| 补丁只改 catalog | recipe、bundle、state 都不出现补丁号 |
+| 产品之间不互相绑定 | 一个可执行文件 `phprt`，一份下载缓存，安装树按产品隔离 |
+| 组件挂载方式由产品定义 | PHP 的 static/shared 和 nginx 的 builtin/dynamic 走同一套模型 |
 
-**非目标**：lock 文件、多 PHP 并行构建、LTO。
+**非目标：**
+
+- 不做跨产品共享安装树；每个产品一份 `.phprt/<产品>-<版本>/`。
+- 不做默认版本、当前产品、`phprt.toml` 项目清单。
+- 不做一条命令安装多个产品。
+- 不锁定精确补丁，不生成 lock 文件。
+- 不做交叉编译、LTO、`--static-all`。
 
 ## 3. 四层数据
 
-```text
-catalog.toml             组件 + 线  →  当前最新补丁 / url / sha256
-bundles/php<系列>.toml    某个 PHP 系列的默认版本线 + 扩展预设 + 默认启用扩展
-recipes/**.star          每条线支持哪些 PHP / 依赖、怎么构建，以及 PHP 版本事实
-CLI + state              本次覆盖哪条线 / 哪些扩展，以及要保留哪些显式选择
-```
+| 层 | 文件 | 只回答 |
+| --- | --- | --- |
+| catalog | `recipes/catalog.toml` | 这条线当前是哪个补丁、从哪下载 |
+| recipe | `recipes/products/**`、`components/**`、`dep/**` | 怎么编译、允许哪些线、需要哪些依赖 |
+| bundle | `recipes/bundles/<产品>/<系列>.toml` | 默认用哪条线、默认装哪些组件 |
+| state | `.phprt/<产品>-<系列>/state.json` | 本机这次实际选了什么、装到哪一步 |
 
-| 层 | 只回答 | 不回答 | 变更时机 |
-| --- | --- | --- | --- |
-| catalog | 线 3.5 现在是 3.5 几、从哪下载 | 能不能配 PHP 8.5 | 有补丁发布 |
-| bundle | php8.5 默认用 openssl 哪条线、默认启用哪些扩展 | 3.5 具体是 3.5 几、扩展怎么编 | 默认策略调整 |
-| recipe | 3.5 这条线支持哪些 PHP、需要哪些库、加什么参数；php recipe 还记录该版本的内置扩展事实 | 3.5 现在是几、默认启用谁 | 兼容性、构建方式或 PHP 版本事实变化 |
-| CLI / state | 这次强制用哪条线、上次显式选了哪条 | 线里有哪个补丁 | 每次命令 |
-
-数据流：
-
-```text
-        catalog + bundle
-               │
-               ▼
-       ① 选线（bind）──────────────► 冲突：失败或提示
-               │  ctx：线 + 补丁 + url + sha256
-               ▼
-       ② 构造目标 target(ctx)
-               │
-               ▼
-       ③ 依赖闭包 + 拓扑序
-               │
-               ▼
-       ④ 计划输出（文本 / JSON）
-               │
-               ▼
-       ⑤ 下载源码（install / update 默认；--downloads 只下载）
-               │
-               ▼
-       ⑥ 解压源码（构建顺序；--downloads 跳过）
-               │
-               ▼
-       ⑦ 编译安装（按节点签名跳过；失败不写状态）
-               │
-               ▼
-       ⑧ 状态写入（install / update 默认，ext add|remove）
-```
-
-补丁号只出现在 catalog。recipe、bundle、CLI 都只谈「线」。
+优先级从低到高：catalog < recipe < bundle < state < CLI。
 
 ## 4. 三个核心概念
 
 ### 4.1 线（line）与补丁（patch）
 
-- **线**是兼容性单位：`openssl 3.5`、`swoole 6.2`、`php 8.5`。
-- **补丁**是下载单位：`3.5.9`、`6.2.5`、`8.5.12`。
+```text
+线   8.5 / 1.29 / 6.2 / 3.5
+补丁 8.5.12 / 1.29.8 / 6.2.5 / 3.5.9
+```
 
-声明层只允许写线，`version:` 写 `6.2.5` 会被拒绝；补丁由 catalog 决定。因此：
+- 用户和 recipe 只写线；补丁只写在 catalog。
+- 换补丁不改 recipe、bundle、state。
+- 一个产品有多个系列时，每个系列一份产品 recipe、一份 state、一棵安装树。
 
-- 安全更新只改 catalog，recipe/bundle 自动跟随；
-- 兼容性判断永远发生在线上，不会因为补丁号变化而失效。
+### 4.2 兼容性归产品与组件，不归库
 
-### 4.2 兼容性归扩展，不归库
-
-这是 v3 与 v2 最大的结构差异。
-
-| 组件 | 是否声明 PHP 关系 | 原因 |
-| --- | --- | --- |
-| `ext/swoole.star` | 是，`LINES[线].php` | 扩展自己按 PHP 版本发线 |
-| `ext/xdebug.star` | 是，`LINES[线].php` | 同上 |
-| `ext/openssl.star` | 是，`PHP_LINES[php] → 允许的库线` | 扩展没有自己的版本线，但“PHP 8.5 的 openssl 扩展能不能配 OpenSSL 4.0”是扩展的事实 |
-| `dep/openssl.star` | 否 | OpenSSL 库不认识 PHP |
-
-由此推出：
-
-- dep recipe 声明 `LINES` 或 `PHP_LINES` 在加载阶段直接报错；
-- 多线 dep（openssl 有 4 条线）不要求兼容表，只按传入的线选择构建参数；
-- 只装 PHP、不装消费扩展时，`--dep openssl=3.5` 不会因为 PHP 版本被拒：库本身不关心 PHP。
-- catalog 里只有一条线的组件会被自动绑定；这条线不支持当前系列时直接跳过，
-  该系列不加载这个扩展的 recipe（例如 protobuf 5.36 最低支持 PHP 8.2）。
-
-`PHP_LINES` 的语义是**允许集合**，不是默认值。它回答“哪些线可以”，不回答“默认用哪条”，
-默认由 bundle 决定。
+- dep（OpenSSL、libcurl、PCRE2）只描述库本身，不声明属于哪个产品。
+- 产品 recipe 的 `LINES[系列]` 约束自己的依赖线。
+- 组件 recipe 的 `LINES[线].product` 约束支持哪些产品系列，其他 key 约束依赖线。
+- bundled 组件用 `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 约束同名 / 不同名依赖。
+- 默认线只在 bundle；显式线来自 state / CLI。
 
 ### 4.3 绑定（binding）
 
-一次求解的输出是一张表：
+一次安装对每个组件、依赖库选一条线，求解结果是 `Bindings`：
 
 ```text
-openssl → 线 3.5，补丁 3.5.9，url，sha256
-swoole  → 线 6.2，补丁 6.2.5，url，sha256
-php     → 线 8.5，补丁 8.5.12，url，sha256
+swoole = 6.2
+openssl = 3.5
+libcurl = 8.23
 ```
 
-这张表是 recipe 的唯一输入上下文。recipe 不自己找版本，只消费绑定结果；也不参与
-“选哪条线”的判断，只按拿到的线生成参数。
+绑定不写进 recipe；安装成功后把用户显式指定的部分写进 `state.bindings`。
 
 ## 5. 求解流程
 
-### 5.1 确定 PHP 系列
+### 5.1 确定产品和系列
 
-优先级：`install` 位置参数 / `--php` / 唯一的 state。都没有就报错并给示例。
+```bash
+phprt install php@8.5
+```
 
-PHP 系列本身也走 catalog：系列 → 当前补丁。
+产品、系列都来自命令行的唯一目标。没有默认产品，也没有“当前产品”。
 
 ### 5.2 建立初始选择
 
-对每个组件：
-
 ```text
-CLI 显式(version: / --dep)  >  state.bindings  >  bundle 默认  >  只有一条线时自动
+CLI --component version: / --dep
+  > state.bindings
+  > bundle 默认线（组件写顶层，依赖库写 [deps]）
+  > 组件只有一条线时直接用
 ```
-
-按来源分三类：
-
-- **硬选择**（CLI、state）：冲突必须报错，不静默改。
-- **软默认**（bundle）：冲突但只有一个候选时自动切换，并打印提示。
-- **单线**：没有选择空间，直接绑定。
 
 ### 5.3 校验并求约束交集
 
-扩展的约束有两个来源，进入同一个交集：
-
-1. 扩展自己版本线里的依赖约束：`LINES["4.8"]["openssl"] = ["1.1.1"]`
-2. builtin 扩展的 PHP 约束：`PHP_LINES["8.5"] = ["1.1.1","3.0","3.5","4.0"]`
-
-```text
-allowed = catalog 里该库的所有线
-        ∩ 每个已选扩展允许的线
-```
-
-处理规则：
-
-| 当前选择 | 结果 |
-| --- | --- |
-| 在交集里 | 保留 |
-| 硬选择不在交集 | 报错，列出可用线 |
-| bundle 默认不在交集，交集只有 1 条 | 自动切换 + 提示 |
-| bundle 默认不在交集，交集多条或为空 | 报错，要求 `--dep` 指定 |
-| 没有初始选择，交集只有 1 条 | 自动绑定 + 提示 |
-| 没有初始选择，交集多条 | 报错，要求 `--dep` 指定 |
-
-框架不会替用户在多条合法线里挑一条。
+- 组件的 `LINES[线].product` 必须包含当前系列；不满足时显式选择报错，bundle 默认在
+  只有一个候选时自动切换。
+- 产品 `LINES[系列]`、组件的 `LINES[线]`、`PRODUCT_LINES`、`PRODUCT_DEP_LINES`
+  共同约束每条依赖线，取交集。
+- 交集为空、或显式 pin 不在交集里，报错并列出候选。
 
 ### 5.4 注入上下文并构造目标
 
-选线完成后，才把绑定表交给 recipe。recipe 的职责压缩成一句话：
-**给定线，产出构建参数。**
+Rust 把产品名、系列、补丁、绑定和依赖记录注入 `ctx`，调用 recipe 的 `target(ctx)`；
+产品 recipe 的版本和下载地址直接由 catalog 注入。
 
 ### 5.5 依赖闭包与拓扑
 
-- `needs` 只指向 dep，`exts` 只指向 ext，命名空间不混用。
-- static 扩展是 PHP 的子节点；shared 扩展排在 PHP 之后单独展开，避免成环。
-- DFS 后序即构建顺序；成环时报出完整路径。
-- 无 state 时方案 = bundle `default_exts` - `--disable-default-ext` + `--ext`；
-  有 state 时以 `state.ext` 为准，再应用禁用和 `--ext`。
-- `[default_exts]` 是 TOML 表（`link` / `features` / `deps`）；有依赖的内置扩展必须一起写，不做依赖展开。
-- `[ext_presets]` 只给被选中的扩展补默认 feature，不改变默认安装集合；
-  `default_exts` 可用 `ref = "ext_presets.<同名扩展>"` 复用 preset。
+```text
+dep → fold 组件 → product → standalone 组件
+```
+
+- fold 组件是产品的子节点，只贡献源码路径和 configure 参数。
+- standalone 组件在产品之后展开，依赖产品的可执行文件（phpize / php-config 等）。
+- 成环检测、DFS 后序、工具依赖只在 standalone 时进 PATH，规则不变。
 
 ### 5.6 下载源码
 
-`install` / `update` 在计划输出之后、解压之前执行下载；`--downloads` 在这里结束：
-
-```text
-计划里的节点 → 源码清单 → 候选 URL → 缓存 / 续传 / 校验 → .phprt/downloads
-```
-
-- 清单直接来自求解结果：PHP 本体、dep、PECL 扩展；builtin 扩展的源码在 PHP tarball 里，跳过。
-- 缓存命中就跳过；下载失败直接退出，不写状态，也不会进入解压。
-- `--downloads` 只下载，不解压、不写状态。
-- 缓存按 PHP 系列共享，删除 `.phprt` 即清空。
-- 细节见 [DOWNLOAD.md](DOWNLOAD.md)。
+按 catalog 的 URL 下载到共享缓存 `.phprt/downloads/`；缓存文件名冲突时报错。
+`--downloads` 在这里结束。
 
 ### 5.7 解压源码
 
-下载完成后按拓扑序逐个解压，产物就是后续构建的源码根：
-
-```text
-源码清单 → build/<组件>/<补丁> → phpize / ./configure
-```
-
-- 目标目录已有内容时跳过；失败只删临时目录，不留下半份源码。
-- 解压失败直接退出，不写状态；已完成的目录保留。
-- 支持 `.tar.gz` / `.tgz` / `.tar.xz` / `.txz` / `.tar.bz2` / `.zip`。
-- PECL 包的 `package.xml` + 单个源码目录会提平成源码根。
-- 解压与编译分成两段，不按节点穿插：解压是廉价预检，源码树要留给签名跳过，
-  合并既不省时间也不省磁盘。
-- 细节见 [EXTRACT.md](EXTRACT.md)。
+按拓扑序解压到 `build/<名字>/<源码目录名>`；顶层只有一个目录时提升一层。
+bundled 组件不单独下载，源码在产品 tarball 里。
 
 ### 5.8 编译与安装
 
-解压完成后按拓扑序串行构建：
-
-```text
-dep → 静态扩展（只贡献 PHP 参数） → php → 共享扩展 → 运行时整理
-```
-
-- 每个节点有 configure/make 命令、环境变量、产物模式和签名；签名一致且产物齐全时跳过。
-- 共享扩展用树内 `phpize` / `php-config`；builtin 扩展先拷出 PHP 源码里的目录。
-- PHP configure 里每个内置扩展只出现正向参数或 `builtin_disable` 的关闭参数其中一组。
-- 依赖库收进 `{tree}/lib/phprt`，用 `$ORIGIN` rpath；共享扩展写 `etc/conf.d` ini。
-- 最后校验 `php -v` / `php -m`，生成 `myphp` 和 `.phprt/current`。
-- 失败打印日志末尾，不写状态。
-- 细节见 [BUILD.md](BUILD.md)。
+按拓扑序执行 recipe / profile 生成的步骤；每个节点一份日志、一份签名。
+安装树是 `.phprt/<产品>-<版本>/`；依赖库装在自己的 `deps/<名字>-<版本>/`。
 
 ## 6. 两阶段加载
 
-1. **元数据阶段**：只读顶层声明（`TARGET`、`LINES`、`PHP_LINES`、php 的 `series`），
-   不调用构建函数。
-2. **目标阶段**：选线完成后注入上下文，调用 `target(ctx)` 得到具体目标。
+1. **元数据阶段**：只读 recipe 顶层，拿到产品的系列 / bundled 事实、
+   组件的 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`，用于选线和校验。
+2. **目标阶段**：带着 ctx 求值 `TARGET`，得到具体参数，再构造 `Registry`。
 
-收益是边界清晰：
-
-- 选线不依赖构建函数，构建参数写错不会影响“能不能配”的判断，反之亦然；
-- recipe 可以按线返回完全不同的依赖和参数（swoole 4.8 与 6.2 的 needs 不同），
-  兼容性仍由声明层统一表达；
-- 非法组合在构造目标前就被拒绝，不会输出了半份计划才失败。
-
-代价是同一个 recipe 被求值两次。文件很小，这个代价可以接受。
+元数据阶段不做构建，不读 state；目标阶段不再改版本线。
 
 ## 7. 状态：记录方案，不锁版本
 
-状态按 PHP 系列存放：`.phprt/php-<系列>/state.json`。补丁升级不丢方案，安装树
-仍然按补丁版本命名。首次写 state 时把当前系列的 `default_exts` materialize 进去；
-被 `--ext` / `ext add` 新选中的扩展则把 `ext_presets` materialize 进去。之后 bundle
-默认集和 preset 变化不再影响已有项目。
+```json
+{
+  "version": 3,
+  "product": "php",
+  "series": "8.5",
+  "components": { "swoole": { "line": "6.2", "mode": "shared", "installed": true } },
+  "deps": { "openssl": { "line": "3.5", "version": "3.5.9" } }
+}
+```
 
-| 内容 | 作用 |
-| --- | --- |
-| 构建方案（扩展、链接方式、依赖集成、feature、installed） | 下次 install/update 装什么 |
-| 显式线 `bindings` | 用户用 `version:` / `--dep` 选过的线，下次继续生效 |
-| 每条线实际解析到的补丁 | 可观测，不参与求解 |
-
-bundle 默认线不写入 `bindings`：换默认策略后，没有显式选择的组件自然跟随新默认；
-显式选过的保持不动。
-
-`update` 只在线内换补丁，不换线；catalog 删掉该线时明确报错，不静默迁移。这是
-“不引入 lock”的边界：可复现性靠线，不靠固定补丁号。
+- `state.components` 是权威方案；`plan` / `install` 都从它出发。
+- 版本线记录在 state，补丁号只记录不锁定。
+- 旧 schema（version 2）不读取，不自动迁移，报错要求重新安装。
+- 多产品各自一份 state；`list` 扫描 `.phprt/*/state.json` 汇总。
 
 ## 8. 不变量
 
-框架层面的硬约束，改动不能破坏：
-
-1. 补丁号只出现在 catalog。
-2. 版本线的声明只写线，不写补丁号；bundle 的 `default_exts` 只写扩展名/spec。
-3. dep 不声明 PHP 关系。
-4. 每个组件的线集合在 catalog 和声明之间必须一致。
-5. `PHP_LINES` 必须覆盖所有 PHP 系列，引用的线必须存在。
-6. 硬选择冲突必须报错；软默认只在唯一候选时自动切换。
-7. 默认集只在首次写 state 时 materialize；已有 state 以 state.ext 为准。
-   版本线默认仍不落盘。
-8. feature 默认只增不减，只有显式移除扩展才允许收窄。
-9. 只读命令不写状态。
-10. 不实现没有明确要求的用法。
+1. 命令只接受一个 `产品@系列`；多产品 = 多条命令。
+2. 组件 spec 一次只写一个组件；多个组件分多条命令。
+3. 补丁号只出现在 catalog。
+4. 默认线只出现在 bundle；显式线来自 state / CLI。
+5. 同一个产品的多个系列并存，互不影响；不同产品不共享安装树。
+6. 失败不写 state；写入是最后一步。
+7. 产品 profile 只声明步骤模板、路径和验证命令，不写条件分支。
 
 ## 9. 演进成本
 
-| 变更 | 需要改的地方 | 不需要改的地方 |
-| --- | --- | --- |
-| 升 openssl 3.5 补丁 | catalog 一行 | recipe、bundle、state |
-| 新增 openssl 4.1 线 | catalog 一条 + 消费扩展的允许集合 | dep 构建参数（同 major 可复用） |
-| 新增 PHP 8.7 | catalog 一条 + bundle 一份 + php 声明一份 + 各扩展补兼容 | dep recipe |
-| 新增扩展 | 一份扩展声明（含 `LINES` 或 `PHP_LINES`） | 求解器 |
-| 换默认线 | bundle 一行 | recipe、catalog |
-| 换某条线构建参数 | 对应 recipe 的该线分支 | catalog、bundle |
-
-对比 v2：新增 PHP 版本要复制整套声明，升补丁要改 recipe 并重新验证构建参数。
-v3 把这两件事分别压到一条 catalog 记录和一行 bundle 记录。
+| 变更 | 要改的地方 |
+| --- | --- |
+| 升补丁 | catalog 一行 |
+| 换默认线 | bundle 一行 |
+| 加组件 | `components/<产品>/<名字>.star` + 需要时 catalog |
+| 加产品系列 | 产品 recipe + bundle + catalog |
+| 加产品 | 产品 recipe + bundle + catalog + 需要时新 dep |
+| 加依赖线 | catalog + 消费方的约束 |
 
 ## 10. 失败模式：宁可报错，不猜
 
-框架对以下情况显式失败，并给出候选：
-
-- PHP 版本未指定；
-- 线不存在 / 组件没有版本表 / 把补丁当线写；
-- 线不支持当前 PHP；
-- 显式选择与扩展约束冲突；
-- 多条合法线但没有默认；
-- 依赖关系指向不存在的目标、成环；
-- dep 声明了 PHP 关系；
-- 状态里有 recipe 已不存在的扩展或 feature。
-
-允许自动处理的只有一种：**软默认在唯一候选时切换，并打印提示。**
-其余情况不替用户做决定。
+- 未知产品 / 系列 / 组件 / 依赖：直接报错并列出候选。
+- 裸名有多个候选：要求写 `kind:name`，产品节点写 `product:<名字>@<版本>`。
+- 约束冲突：报冲突的线、可用线，不自动降级。
+- 组件契约不支持某个 mode：报支持列表。
+- state 与 recipe 不一致：报错，要求改 state 或重新安装。
+- 签名变化、源码缺失、产物缺失：重编；命令失败时打印日志末尾，不写 state。
 
 ## 11. 仓库中的落点
 
-数据层：
-
-| 层 | 位置 |
-| --- | --- |
-| catalog | `recipes/catalog.toml` |
-| 下载配置 | `recipes/phprt.toml` |
-| bundle | `recipes/bundles/php<系列>.toml` |
-| 目标声明 | `recipes/php<系列>.star`、`recipes/dep/*.star`、`recipes/ext/*.star` |
-| 构造函数契约 | `recipes/defs.star` |
-| 本次覆盖 | 命令行 |
-| 方案与显式线 | `.phprt/php-<系列>/state.json` |
-
-驱动侧按角色拆成模块，不出现具体包名：
-
-| 角色 | 模块 | 职责 |
-| --- | --- | --- |
-| 入口 | `src/main.rs` | 命令 → PHP 系列 → 串接其余角色、退出码 |
-| 版本库 | `src/catalog.rs` | 线/补丁查询、PHP 系列解析 |
-| 默认线 / 默认集 | `src/bundle.rs` | 读取扩展默认线、`[deps]` 库默认线、`ext_presets` 和 `default_exts` |
-| 选线 | `src/bind.rs` | 优先级、兼容校验、约束交集、生成上下文 |
-| 声明 | `src/recipe.rs` | 两阶段加载、契约校验、内置扩展事实、`--ext` 解析 |
-| 依赖 | `src/plan.rs` | 依赖边、拓扑序、成环检测 |
-| 输出 | `src/render.rs` | 占位符展开、文本与 JSON |
-| 选项盘点 | `src/audit.rs` | 读上游 config.m4 / configure --help，检查 recipe 的处置 |
-| 状态 | `src/state.rs` | 方案、显式线、feature 并集、写回 |
-| 路径 | `src/layout.rs` | 压缩包名、源码 stem、`build/<组件>/<补丁>` |
-| 清单 | `src/sources.rs` | 求解结果 → 下载/解压共用的 `Source` 列表 |
-| 构建计划 | `src/build.rs` | 求解结果 → 绝对路径的构建步骤、环境、rpath、入口 |
-| 执行器 | `crates/build` | 按步骤执行、日志、签名跳过、产物检查 |
-| 下载 | `crates/download` | 候选 URL、缓存与续传、分片传输 |
-| 解压 | `crates/extract` | 格式分派、tar/zip 解包、跳过与失败清理 |
-| 进度 | `crates/ui` | 进度框、逐行日志、标签与大小格式 |
-| 清单类型 | `crates/source` | `Source` 结构，供下载和解压共用 |
-
-目录：
-
 ```text
-phprtv3/
-├── Cargo.toml                  # workspace + phprt 根包
-├── src/
-│   ├── main.rs
-│   ├── catalog.rs
-│   ├── bundle.rs
-│   ├── bind.rs
-│   ├── recipe.rs
-│   ├── plan.rs
-│   ├── render.rs
-│   ├── state.rs
-│   ├── layout.rs
-│   ├── sources.rs
-│   └── build.rs
-├── crates/
-│   ├── source/                 # 下载/解压共用的 Source 类型
-│   ├── ui/                     # 进度框与逐行日志
-│   ├── download/               # candidate / store / transfer
-│   ├── extract/                # archive / 解压流程
-│   └── build/                  # 构建步骤执行、日志、签名、产物
-├── templates/
-│   └── myphp.tmpl              # 项目入口模板
-├── vendor/perl/                # 构建期补系统 perl 的纯 Perl 模块
-├── recipes/
-│   ├── catalog.toml
-│   ├── bundles/php{7.4,8.0,8.1,8.2,8.3,8.4,8.5,8.6}.toml
-│   ├── defs.star
-│   ├── php{7.4,8.0,8.1,8.2,8.3,8.4,8.5,8.6}.star
-│   ├── dep/{openssl,libcurl,nghttp2,autoconf}.star
-│   ├── dep/{libyaml,libmemcached,imagemagick,libssh2,rabbitmq-c,librdkafka}.star
-│   ├── dep/{sqlite,libzip,libsodium,oniguruma}.star
-│   └── ext/{openssl,curl,swoole,xdebug}.star
-│       + ext/{redis,apcu,igbinary,msgpack,protobuf,yaml,
-│              memcached,imagick,ssh2,amqp,rdkafka}.star
-│       + ext/{zlib,sqlite3,pdo_sqlite,mbstring,zip,sodium,gettext,
-│              pcntl,sockets,shmop,sysvmsg,sysvsem,sysvshm,mysqli,pdo_mysql}.star
-└── docs/
-    ├── DESIGN.md
-    ├── CONTRACT.md
-    ├── CLI.md
-    ├── SOLVER.md
-    ├── OUTPUT.md
-    ├── STATE.md
-    ├── DOWNLOAD.md
-    ├── EXTRACT.md
-    └── BUILD.md
+src/
+├── main.rs       CLI、命令分派、状态读写
+├── catalog.rs    catalog.toml
+├── recipe.rs     两阶段加载、契约校验、Registry、Selection
+├── bundle.rs     bundles/<产品>/<系列>.toml
+├── bind.rs       版本线求解
+├── plan.rs       依赖边与拓扑
+├── render.rs     plan 的文本 / JSON、占位符展开
+├── build.rs      构建步骤、环境、运行时整理、验证、入口
+├── audit.rs      上游选项盘点
+├── state.rs      state.json
+├── layout.rs     源码 / 安装路径
+├── sources.rs    下载清单
+└── config.rs     下载配置
+
+crates/
+├── download/     下载、镜像、分片续传、进度
+├── extract/      解压、原子目录、路径安全
+├── build/        命令执行、签名、日志、产物检查
+├── source/       下载清单类型
+└── ui/           进度显示
+
+recipes/
+├── products/<产品>/<系列>.star
+├── components/<产品>/<名字>.star
+├── dep/<名字>.star
+├── bundles/<产品>/<系列>.toml
+├── catalog.toml
+└── defs.star
 ```
+
+`crates/download`、`crates/extract`、`crates/build` 只接收“工作目录 + 命令 + 环境 + 产物”，
+不关心产品是 PHP 还是 nginx。
 
 ## 12. 不在范围内
 
-- 在线更新 catalog；
-- 精确补丁锁定（lock）；
-- 多 PHP 同时构建、LTO、`--static-all`；
-- 产物签名与分发。
+- 项目清单、当前产品、默认版本；
+- 一条命令构建多个产品；
+- 跨产品共享安装树；
+- 精确补丁锁定、lock 文件；
+- 交叉编译、LTO、`--static-all`。
 
-这些都能在现有四层之上追加，不需要改声明结构：
+## 13. 走查：`install php@8.5 --component openssl` 为什么是 3.5.9
 
-- 在线 catalog → 换掉 catalog 的来源，结构不变；
-- lock → 在 state 之上增加补丁固定层，不影响“线”的语义。
-
-## 13. 走查：`install 8.5 --ext openssl` 为什么是 3.5.9
-
-| 步骤 | 来源 | 结果 |
-| --- | --- | --- |
-| 1 | catalog `[php]` | 系列 8.5 → 补丁 8.5.12 |
-| 2 | bundle `php8.5.toml` | openssl 默认线 3.5 |
-| 3 | `ext/openssl.star` 的 `PHP_LINES["8.5"]` | 允许 1.1.1 / 3.0 / 3.5 / 4.0 |
-| 4 | 交集 | 3.5 在允许集合内，保留 3.5 |
-| 5 | catalog `[openssl]` | 3.5 → 3.5.9 + url + sha256 |
-| 6 | `target(ctx)` | 按 line=3.5 选 `./Configure` 与 artifacts，version 用 3.5.9 |
-
-4.0 是“允许”，不是“默认”。要 4.0 必须显式指定：
-
-```bash
-phprt install 8.5 --ext openssl --dep openssl=4.0
+```text
+命令行：产品 php，系列 8.5，组件 openssl（无 version:）
+bundle：php/8.5.toml 的 [deps].openssl = 3.5
+state：没有显式 binding
+catalog：openssl 3.5 → 3.5.9
 ```
 
-只装 swoole、不装 ext:openssl 时，openssl 线由 swoole 自己的
-`LINES["6.2"]["openssl"]` 约束，不经过 `PHP_LINES`。
+组件 `openssl` 的 `PRODUCT_LINES["8.5"]` 包含 3.5，所以 3.5 合法；补丁 3.5.9 来自 catalog。
 
-## 14. v2 与 v3 对照
+如果用户写：
 
-| 维度 | v2 | v3 |
-| --- | --- | --- |
-| 组织单位 | PHP 版本 | PHP 系列 + 组件线 |
-| 依赖版本 | 写死在 recipe | catalog 按线提供 |
-| 新增 PHP | 复制整套 recipe | 新增 php 声明 + bundle + catalog 记录 |
-| 换依赖版本 | 改 recipe 或复制 | 改 bundle / CLI / catalog |
-| 升级依赖补丁 | 改 recipe | 改 catalog |
-| 兼容关系 | 隐含在抄写的版本里 | `LINES` / `PHP_LINES` 显式声明并校验 |
-| 多 PHP 共存 | 结构上不支持 | 按系列独立存放方案 |
-| 冲突处理 | 无 | 硬选择报错，软默认唯一候选才切换 |
+```bash
+phprt install php@8.5 --component openssl --dep openssl=4.0
+```
 
-## 15. 子文档
+显式 pin 4.0 也在 `PRODUCT_LINES["8.5"]` 里，于是选 4.0.0；如果写 7.4 系列，4.0 不在
+允许线里，直接报冲突。
+
+## 14. 子文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、LINES/PHP_LINES、catalog、bundle、校验规则 |
-| [ADD-RECIPE.md](ADD-RECIPE.md) | 新增/更新版本线与补丁、下载地址跳转判定、catalog 注释规则 |
-| [CLI.md](CLI.md) | 子命令、`--php`、`--ext`、`--dep`、错误与退出码 |
-| [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、拓扑顺序、feature 传播 |
-| [OUTPUT.md](OUTPUT.md) | 文本/JSON 输出、路径规则、字段含义 |
-| [STATE.md](STATE.md) | state.json v2、bindings、line/version、写入时机 |
-| [DOWNLOAD.md](DOWNLOAD.md) | `--downloads`、缓存布局、镜像、分片与续传、进度输出 |
+| [CLI.md](CLI.md) | 子命令、`产品@系列`、`--component`、`--dep`、错误与退出码 |
+| [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle |
+| [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、feature 并集 |
+| [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |
+| [STATE.md](STATE.md) | state.json、bindings、line/version |
+| [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
-| [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、ini、入口、验收 |
+| [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
+| [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
-| [GENERIC.md](GENERIC.md) | 产品/组件/依赖三层通用模型；`产品@系列` 单目标 CLI；nginx、CPython 走查与实现顺序 |
+| [GENERIC.md](GENERIC.md) | 通用化设计的完整走查；与本文冲突时以本文和 CONTRACT.md 为准 |
 
-## 16. 验收
+## 15. 验收
 
 ```bash
-rm -rf .phprt build          # 从干净状态开始
+cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets
-cargo fmt --all --check
 
-cargo run -- install 8.5                                  # 默认 openssl + curl(ssl) + libxml
-cargo run -- install 8.5 --disable-default-ext openssl --disable-default-ext curl --disable-default-ext libxml  # 只装 PHP
-cargo run -- install 8.5 --ext swoole --ext xdebug        # 加上两个 PECL 扩展
-cargo run -- install 8.5 --ext 'curl=link:shared,dep:libcurl[ssl,nghttp2]'
-cargo run -- install 8.5 --ext gd
-cargo run -- install 8.5 --ext 'gd=dep:jpeg[simd]'
-cargo run -- install 8.5 --ext 'gd=feature:[jpeg,webp,freetype,avif]'
-./myphp -r 'var_export(gd_info());'
-cargo run -- install 8.5 --ext openssl --dep openssl=4.0  # openssl 4.0.0
-cargo run -- install 7.4 --ext openssl --dep openssl=3.5  # 必须失败
-cargo run -- install 8.2 --ext swoole=version:4.8         # 提示自动改用 1.1.1
-cargo run -- install                                      # 必须提示指定 PHP
-cargo run -- --php 8.5 ext list --installed
-cargo run -- --php 8.5 update
+cargo run -- install php@8.5
+./myphp-8.5 -v
+cargo run -- plan php@8.5 --json
 
-cargo run -- install 8.5 --downloads                          # 只下载，不写 state
-cargo run -- install 8.5 --ext swoole --downloads --offline   # 缓存命中路径
-cargo run -- install 8.5 --ext swoole --offline               # 下载+解压+编译+写 state
+cargo run -- install nginx@1.29
+./.phprt/nginx-1.29.8/sbin/nginx -V
+cargo run -- add nginx@1.29 lua-nginx-module
+cargo run -- install nginx@1.29
+ls .phprt/nginx-1.29.8/modules/
+
+cargo run -- list
+cargo run -- install php@8.5 nginx@1.29   # 必须失败：一次只能一个产品
 ```
-
-默认的 `install` / `update` 会写状态（构建方案和显式线），所以验收从
-`rm -rf .phprt build` 开始，避免上一条的扩展方案、`bindings` 和解压目录影响下一条。
-`--downloads` 只下载，不写 state；需要网络时直连失败会自动换镜像。
-
-测试覆盖：所有 PHP 系列的默认线、bundle `default_exts` / `ext_presets` / `ref`、
-两次 materialize 语义、
-内置扩展事实与 `builtin_disable`、`--disable-default-ext` 冲突/范围、软默认自动切换、
-硬选择冲突、版本线不支持 PHP、builtin 扩展的 `PHP_LINES` / `PHP_DEP_LINES`、
-单线组件在不支持的系列下跳过、
-dep 不允许声明 PHP 关系、feature 的 `requires.commands`、8.0 ~ 8.5 加载 gd、
-`--ext` 的 version 预解析、
-catalog PHP 版本解析、下载的 Range 分片/续传/镜像顺序/重试/校验，以及原有的
-依赖闭包/拓扑/契约测试，解压的四种格式、顶层提平、PECL 包提平、跳过、越界拒绝和
-失败清理，以及构建步骤的 glob、签名和命令拼装。
