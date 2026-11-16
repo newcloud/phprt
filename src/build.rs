@@ -1008,6 +1008,156 @@ mod tests {
     }
 
     #[test]
+    fn runtime_deps_include_enabled_feature_needs_and_transitive_deps() {
+        let mut curl = external("curl", &[], &[]);
+        curl.features.insert(
+            "ssl".into(),
+            crate::recipe::Feature {
+                needs: vec!["libssl".into()],
+                ..Default::default()
+            },
+        );
+        let mut prod = product(&["curl"]);
+        prod.bundled.clear();
+        let reg = Registry::from_targets(vec![
+            dep("libssl", &["libcrypto"]),
+            dep("libcrypto", &[]),
+            curl,
+            prod,
+        ])
+        .unwrap();
+
+        let features = BTreeMap::new();
+        let order: Vec<&Target> = [
+            "dep:libssl",
+            "dep:libcrypto",
+            "component:curl",
+            "product:php@8.5.12",
+        ]
+        .iter()
+        .map(|id| reg.get(id).unwrap())
+        .collect();
+
+        let mut enabled = Selection::default();
+        let spec = crate::recipe::ComponentSpec {
+            features: Some(["ssl".to_owned()].into_iter().collect()),
+            ..Default::default()
+        };
+        enabled.per_component.insert("curl".into(), spec);
+
+        let runtime = runtime_deps(&reg, &enabled, &features, &order).unwrap();
+        let expected: BTreeSet<String> = ["libcrypto", "libssl"]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(runtime, expected);
+
+        // 没有选中 feature 时，feature 的 needs 不进运行时闭包。
+        let runtime = runtime_deps(&reg, &Selection::default(), &features, &order).unwrap();
+        assert!(runtime.is_empty(), "{runtime:?}");
+    }
+
+    #[test]
+    fn dep_used_as_tool_and_need_is_deployed() {
+        let mut prod = product(&["swoole", "build-helper"]);
+        prod.bundled.clear();
+        let reg = Registry::from_targets(vec![
+            dep("autoconf", &[]),
+            dep("pcre2", &[]),
+            external("swoole", &["pcre2"], &["autoconf"]),
+            external("build-helper", &["autoconf"], &[]),
+            prod,
+        ])
+        .unwrap();
+        let sel = Selection::default();
+        let features = BTreeMap::new();
+        let order: Vec<&Target> = [
+            "dep:autoconf",
+            "dep:pcre2",
+            "component:swoole",
+            "component:build-helper",
+            "product:php@8.5.12",
+        ]
+        .iter()
+        .map(|id| reg.get(id).unwrap())
+        .collect();
+
+        let runtime = runtime_deps(&reg, &sel, &features, &order).unwrap();
+        assert!(runtime.contains("autoconf"), "{runtime:?}");
+        assert!(runtime.contains("pcre2"), "{runtime:?}");
+    }
+
+    #[test]
+    fn deploy_libs_copies_runtime_deps_but_not_build_tools() {
+        let root = std::env::temp_dir().join(format!("phprt-deploy-libs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let tree = root.join("tree");
+        let runtime_lib = tree.join("deps/demo-1/lib");
+        fs::create_dir_all(&runtime_lib).unwrap();
+
+        let source = root.join("demo.c");
+        fs::write(&source, "int demo(void) { return 0; }\n").unwrap();
+        let real = runtime_lib.join("libdemo.so.1.0");
+        let status = Command::new("cc")
+            .args(["-shared", "-fPIC", "-Wl,-soname,libdemo.so.1", "-o"])
+            .arg(&real)
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::os::unix::fs::symlink("libdemo.so.1.0", runtime_lib.join("libdemo.so.1")).unwrap();
+        std::os::unix::fs::symlink("libdemo.so.1", runtime_lib.join("libdemo.so")).unwrap();
+
+        let tool_lib = tree.join("deps/toolonly-1/lib");
+        fs::create_dir_all(&tool_lib).unwrap();
+        fs::write(tool_lib.join("libtoolonly.so"), b"build tool\n").unwrap();
+
+        let mut prod = product(&["sample"]);
+        prod.profile.runtime.lib_dir = "lib/phprt".into();
+        prod.bundled.clear();
+        let reg = Registry::from_targets(vec![
+            dep("demo", &[]),
+            dep("toolonly", &[]),
+            external("sample", &["demo"], &["toolonly"]),
+            prod,
+        ])
+        .unwrap();
+        let order: Vec<&Target> = [
+            "dep:demo",
+            "dep:toolonly",
+            "component:sample",
+            "product:php@8.5.12",
+        ]
+        .iter()
+        .map(|id| reg.get(id).unwrap())
+        .collect();
+
+        deploy_libs(
+            &reg,
+            &Selection::default(),
+            &BTreeMap::new(),
+            reg.get("product:php@8.5.12").unwrap(),
+            &order,
+            &tree,
+        )
+        .unwrap();
+
+        let flat = tree.join("lib/phprt");
+        assert!(flat.join("libdemo.so.1.0").is_file());
+        assert_eq!(
+            fs::read_link(flat.join("libdemo.so")).unwrap(),
+            Path::new("libdemo.so.1")
+        );
+        assert_eq!(
+            fs::read_link(flat.join("libdemo.so.1")).unwrap(),
+            Path::new("libdemo.so.1.0")
+        );
+        assert!(!flat.join("libtoolonly.so").exists());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn profile_env_tool_vars_follow_node_tools() {
         let mut product = product(&[]);
         product

@@ -369,4 +369,37 @@ mod tests {
         assert_eq!(sig_hash("a\nb"), sig_hash("a\nb"));
         assert_ne!(sig_hash("a\nb"), sig_hash("a\nc"));
     }
+
+    #[test]
+    fn copy_from_only_copies_sources() {
+        let root = std::env::temp_dir().join(format!("phprt-build-copy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        fs::create_dir_all(source.join("ext")).unwrap();
+        fs::write(source.join("config0.m4"), "AC_DEFUN([PHP_DEMO], [])\n").unwrap();
+        fs::write(source.join("ext/foo.c"), "int foo;\n").unwrap();
+
+        let cwd = root.join("work");
+        let step = Step {
+            tag: "demo".into(),
+            cwd: cwd.clone(),
+            copy_from: Some(source),
+            commands: Vec::new(),
+            env: BTreeMap::new(),
+            artifacts: Vec::new(),
+            sig: "demo".into(),
+            log: root.join("logs/demo.log"),
+        };
+        let ui = Tracker::new(vec!["demo".into()], Mode::Plain);
+        assert!(run_one(&step, 0, &ui).unwrap());
+
+        assert!(cwd.join("config0.m4").is_file());
+        assert!(!cwd.join("config.m4").exists());
+        assert_eq!(
+            fs::read_to_string(cwd.join("ext/foo.c")).unwrap(),
+            "int foo;\n"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
 }
