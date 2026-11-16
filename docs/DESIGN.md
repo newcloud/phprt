@@ -290,6 +290,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
+| [FLOW.md](FLOW.md) | **方案，未实现**：install / add / remove / scheme 的流程、交互、`--force`、ini 备份 |
 | [GENERIC.md](GENERIC.md) | 通用化设计的完整走查；与本文冲突时以本文和 CONTRACT.md 为准 |
 
 ## 15. 验收
