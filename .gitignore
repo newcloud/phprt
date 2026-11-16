@@ -4,3 +4,5 @@
 
 /build/
 /myphp
+/templates/target/
+/test.txt
