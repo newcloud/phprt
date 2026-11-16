@@ -39,5 +39,6 @@ phprt-source.workspace = true
 phprt-ui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 starlark.workspace = true
 toml.workspace = true

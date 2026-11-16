@@ -2447,6 +2447,30 @@ mod tests {
     }
 
     #[test]
+    fn nginx_profile_has_no_php_env_or_prepare() {
+        let (reg, _) = load_product("nginx", "1.29", &["lua-nginx-module"], &[]).unwrap();
+        let product = reg.product_any().unwrap();
+        let nginx_component = reg.component("lua-nginx-module").unwrap();
+        for key in product.profile.env.keys() {
+            assert!(!key.starts_with("PHP_"), "nginx profile 不应有 {key}");
+        }
+        for mode in product.profile.modes.values() {
+            for step in &mode.steps {
+                assert!(!step.contains("phpize"), "nginx 步骤不应含 phpize: {step}");
+            }
+        }
+
+        // PHP profile 反过来要有 phpize 步骤和 PHP_AUTOCONF。
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        let product = reg.product_any().unwrap();
+        assert!(product.profile.env.contains_key("PHP_AUTOCONF"));
+        let shared = product.profile.modes.get("shared").unwrap();
+        assert!(shared.steps.iter().any(|step| step.contains("phpize")));
+
+        assert!(nginx_component.prepare.is_empty());
+    }
+
+    #[test]
     fn php_bundled_extensions_declare_config_m4_prepare() {
         let (reg, _) = load("8.5", &[], &[]).unwrap();
         for name in ["openssl", "zlib"] {

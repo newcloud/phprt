@@ -433,6 +433,28 @@ TARGET = product(
 - `standalone`：产品构建完之后，按 `steps` 单独构建；支持 `{name}` / `{product}` /
   `{flags}` / `{build}` / `{prefix}`；`artifacts` 支持 `{name}`。
 
+### 6.1 动作契约
+
+通用执行器只实现机制，产品差异全部由 recipe 声明；Rust 核心不判断产品名。
+各动作的职责、顺序和签名规则：
+
+| 动作 | 声明位置 | 职责 | 执行顺序 | 变量解析 | 签名规则 |
+| --- | --- | --- | --- | --- | --- |
+| `env`（profile） | `product_profile(env=...)` | 产品专用环境变量，如 PHP 的 `CC` / `PHP_AUTOCONF` | 构建节点环境的一部分，先于命令执行 | `{tree}` / `{tool:<dep>}`；`{tool:}` 只在节点 `tools` 含该 dep 时展开，否则跳过 | 展开后的值进签名 |
+| `env`（component） | `component(env=...)` | 组件专用环境变量 | 在 profile env 之后合并 | `{tree}` / `{dep:}` / `{source:}` 等占位符 | 展开后的值进签名 |
+| `prepare` | `component(prepare=[...])` | 源码准备，如把 `config0.m4` 准备成 `config.m4`、打兼容补丁 | standalone 构建之前、源码拷贝之后、profile steps 之前 | 同 component env | 命令原文进签名 |
+| `configure` | `dep` / `component` / `product` 的 `configure` | 生成构建文件 | prepare 之后、make 之前 | 占位符展开；dep 追加 feature 参数 | 展开后的全部参数进签名 |
+| `steps`（profile mode） | `mode(steps=[...])` | standalone 组件的构建步骤模板 | prepare 之后，按声明顺序 | `{name}` / `{product}` / `{flags}` / `{build}` / `{prefix}` 先替换，再展开占位符 | 替换后的命令进签名 |
+| `make` | 各 target 的 `make` | 编译 / 安装 | configure 之后 | 占位符展开 | 展开后的命令进签名 |
+| `runtime` | `runtime(lib_dir, rpath)` | 运行时收库和 rpath | 全部构建完成之后 | 不适用 | `lib_dir` / `rpath` 变化会改变环境或 patchelf 输入，间接进签名 |
+| `post_install` | `product_profile(post_install=[...])` | 安装后整理：目录、文件、CA、组件 ini | 构建完成、收库之后，按声明顺序 | 固定原语，不执行任意 shell | 动作参数进 recipe 内容，间接进签名 |
+| `verify` / `verify_modules` | `product_profile(...)` | 安装后验证 | `post_install` 之后 | `{tree}` | 不进签名（只验证不重编） |
+| `entry` / `entry_template` | `product_profile(...)` | 项目入口 | 安装完成时 | `{series}` | 不进签名 |
+
+边界：执行器只负责「按顺序展开占位符并执行」；选什么参数、什么步骤、什么环境，
+由 PHP / nginx 等产品 recipe 自己声明。新增产品行为时先查这张表，
+能在现有动作里表达就不要加 Rust 分支。
+
 ## 7. 占位符
 
 | 占位符 | 展开为 |

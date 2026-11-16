@@ -64,11 +64,17 @@ dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 
 
 每个工作目录写 `.phprt-sig`，内容包含：
 
-- 节点名、版本、挂载策略；
+- 节点 id、版本、源码 `url` / `sha256`、`host_tools`、挂载策略；
 - configure 程序和全部参数；
-- 组件 steps / make 命令；
+- 组件 `prepare` / profile mode 的 steps / make 命令（按声明顺序）；
 - 注入的环境变量；
-- 预期的产物路径。
+- 预期的产物路径；
+- `copy_from` 源码目录的内容指纹（相对路径 + 内容 hash，软链记目标）；
+- 依赖闭包里每个 dep 的名字、版本和它的构建签名。
+
+依赖签名只按实际依赖闭包（`needs` / 已启用 feature 的 `needs`）计算，
+不把整个 Registry 的 recipe 塞进签名；未选中的 feature 不进签名。
+签名不含时间戳、临时目录和随机数，同样的输入必然得到同样的签名。
 
 签名一致且产物齐全时跳过。签名变化时先执行 `make distclean`（忽略失败），
 再重新 configure / make。源码目录在 `build/`，删除它即可强制重新开始。

@@ -41,6 +41,7 @@ pub fn run(
         .map(|n| n.get())
         .unwrap_or(4);
     let vendor = fs::canonicalize(opts.recipes.join("../vendor/perl")).ok();
+    let mut dep_sigs: BTreeMap<String, String> = BTreeMap::new();
 
     let mut steps = Vec::new();
     for target in order {
@@ -161,20 +162,8 @@ pub fn run(
             Kind::Component => {
                 let mode_name = mode.clone().unwrap_or_default();
                 let def = reg.product_mode(target, &mode_name)?;
-                let mut commands = Vec::new();
-                for line in &target.prepare {
-                    commands.push(Cmd::Shell(render::expand(line, &node_ctx, reg)?));
-                }
                 let flags = render::component_configure(reg, target, sel, &node_ctx)?;
-                for template in &def.steps {
-                    let line = template
-                        .replace("{name}", &target.name)
-                        .replace("{product}", &tree)
-                        .replace("{flags}", &flags.join(" "))
-                        .replace("{build}", &work.display().to_string())
-                        .replace("{prefix}", &tree);
-                    commands.push(Cmd::Shell(render::expand(&line, &node_ctx, reg)?));
-                }
+                let commands = component_commands(target, def, &flags, &node_ctx, reg)?;
                 let artifacts = if target.artifacts.is_empty() {
                     artifacts_expanded(&def.artifacts, target)
                 } else {
@@ -192,7 +181,21 @@ pub fn run(
             }
             _ => None,
         };
-        let sig = signature(target, strategy, &commands, &env, &artifacts);
+        let copy_sig = copy_from.as_deref().map(source_sig).transpose()?;
+        let sig = signature(
+            reg,
+            target,
+            &SigInputs {
+                strategy,
+                commands: &commands,
+                env: &env,
+                artifacts: &artifacts,
+                copy_from: copy_sig.as_deref(),
+                dep_sigs: &dep_sigs,
+                deps: &deps,
+            },
+        )?;
+        dep_sigs.insert(target.name.clone(), sig.clone());
 
         steps.push(Step {
             tag: format!(
@@ -268,6 +271,31 @@ fn ctx<'a>(tree: &'a str, build: &Path, prefix: &Path) -> Ctx<'a> {
     }
 }
 
+/// standalone 组件的命令序列：先组件自己的 prepare，再 profile mode 的 steps。
+/// 顺序即声明顺序，写进构建签名。
+fn component_commands(
+    target: &Target,
+    def: &crate::recipe::ProfileMode,
+    flags: &[String],
+    node_ctx: &Ctx<'_>,
+    reg: &Registry,
+) -> Result<Vec<Cmd>> {
+    let mut commands = Vec::new();
+    for line in &target.prepare {
+        commands.push(Cmd::Shell(render::expand(line, node_ctx, reg)?));
+    }
+    for template in &def.steps {
+        let line = template
+            .replace("{name}", &target.name)
+            .replace("{product}", node_ctx.tree)
+            .replace("{flags}", &flags.join(" "))
+            .replace("{build}", &node_ctx.build)
+            .replace("{prefix}", &node_ctx.prefix);
+        commands.push(Cmd::Shell(render::expand(&line, node_ctx, reg)?));
+    }
+    Ok(commands)
+}
+
 fn program_commands(
     mut configure: Vec<String>,
     make: &[String],
@@ -299,21 +327,43 @@ fn register_action<'a>(product: &'a Target, mode: &str) -> Option<&'a str> {
     product.profile.register.get(mode).map(String::as_str)
 }
 
-fn signature(
-    target: &Target,
+/// 签名输入：除节点身份外的全部构建输入，打包传递避免参数表过长。
+struct SigInputs<'a> {
     strategy: Option<Strategy>,
-    commands: &[Cmd],
-    env: &BTreeMap<String, String>,
-    artifacts: &[PathBuf],
-) -> String {
+    commands: &'a [Cmd],
+    env: &'a BTreeMap<String, String>,
+    artifacts: &'a [PathBuf],
+    copy_from: Option<&'a str>,
+    dep_sigs: &'a BTreeMap<String, String>,
+    deps: &'a BTreeSet<String>,
+}
+
+/// 一次构建的完整输入：身份、源码、命令、环境、产物、源码拷贝内容、
+/// 以及依赖闭包里每个 dep 的版本和构建签名。
+/// 依赖只按实际闭包计入，不把整个 Registry 的 recipe 塞进签名。
+fn signature(reg: &Registry, target: &Target, inputs: &SigInputs<'_>) -> Result<String> {
+    let SigInputs {
+        strategy,
+        commands,
+        env,
+        artifacts,
+        copy_from,
+        dep_sigs,
+        deps,
+    } = inputs;
     let mut out = String::new();
     out.push_str(&format!("id={}\n", target.id()));
     out.push_str(&format!("version={}\n", target.version));
+    out.push_str(&format!("url={}\n", target.url));
+    out.push_str(&format!("sha256={}\n", target.sha256));
+    for tool in &target.host_tools {
+        out.push_str(&format!("host-tool={} {}\n", tool.name, tool.min));
+    }
     out.push_str(&format!(
         "strategy={}\n",
         strategy.map(|s| s.as_str()).unwrap_or("")
     ));
-    for cmd in commands {
+    for cmd in *commands {
         match cmd {
             Cmd::Program { program, args } => {
                 out.push_str(&format!("program={program}\n"));
@@ -324,13 +374,65 @@ fn signature(
             Cmd::Shell(line) => out.push_str(&format!("shell={line}\n")),
         }
     }
-    for (key, value) in env {
+    for (key, value) in *env {
         out.push_str(&format!("env={key}={value}\n"));
     }
-    for artifact in artifacts {
+    for artifact in *artifacts {
         out.push_str(&format!("artifact={}\n", artifact.display()));
     }
-    out
+    if let Some(hash) = *copy_from {
+        out.push_str(&format!("copy-from={hash}\n"));
+    }
+    for name in *deps {
+        let dep = reg
+            .get(&format!("dep:{name}"))
+            .with_context(|| format!("签名里找不到依赖 {name}"))?;
+        out.push_str(&format!("dep={} {}\n", name, dep.version));
+        if let Some(sig) = dep_sigs.get(name) {
+            out.push_str(&format!("dep-sig={sig}\n"));
+        }
+    }
+    Ok(out)
+}
+
+/// copy_from 源码目录的内容指纹：相对路径 + 内容 hash，软链记目标。
+/// 目录按路径排序，结果与遍历顺序无关。
+fn source_sig(dir: &Path) -> Result<String> {
+    let mut entries: BTreeMap<String, String> = BTreeMap::new();
+    walk_source(dir, dir, &mut entries)?;
+    let mut text = String::new();
+    for (rel, digest) in &entries {
+        text.push_str(&format!("{rel} {digest}\n"));
+    }
+    Ok(sig_hash(&text))
+}
+
+fn walk_source(base: &Path, dir: &Path, out: &mut BTreeMap<String, String>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let rel = entry.path().strip_prefix(base)?.display().to_string();
+        let meta = fs::symlink_metadata(entry.path())?;
+        if meta.file_type().is_symlink() {
+            out.insert(
+                rel,
+                format!("link:{}", fs::read_link(entry.path())?.display()),
+            );
+        } else if meta.is_dir() {
+            walk_source(base, &entry.path(), out)?;
+        } else {
+            out.insert(
+                rel,
+                sig_hash(&String::from_utf8_lossy(&fs::read(entry.path())?)),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn sig_hash(text: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(text.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn dep_prefix(tree: &Path, dep: &Target) -> PathBuf {
@@ -450,12 +552,6 @@ fn build_env(
     }
     if let Some(existing) = std::env::var_os("PATH") {
         path.push(existing.to_string_lossy().into_owned());
-    }
-    if let Some(existing) = std::env::var_os("PKG_CONFIG_PATH") {
-        pc.push(existing.to_string_lossy().into_owned());
-    }
-    if let Some(existing) = std::env::var_os("LD_LIBRARY_PATH") {
-        lib_path.push(existing.to_string_lossy().into_owned());
     }
 
     env.insert("CPPFLAGS".to_owned(), join_env("CPPFLAGS", &cpp));
@@ -1182,5 +1278,297 @@ mod tests {
         node.tools.clear();
         let env = profile_env(&product, &node, &ctx, &order).unwrap();
         assert!(!env.contains_key("PHP_AUTOCONF"));
+    }
+
+    fn component_def(steps: &[&str]) -> crate::recipe::ProfileMode {
+        crate::recipe::ProfileMode {
+            strategy: "standalone".into(),
+            steps: steps.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn node_ctx() -> Ctx<'static> {
+        Ctx {
+            tree: "/tree",
+            build: "/build".into(),
+            prefix: "/tree".into(),
+        }
+    }
+
+    fn sig_of(
+        reg: &Registry,
+        target: &Target,
+        commands: &[Cmd],
+        copy_from: Option<&str>,
+        dep_sigs: &BTreeMap<String, String>,
+        deps: &BTreeSet<String>,
+    ) -> String {
+        signature(
+            reg,
+            target,
+            &SigInputs {
+                strategy: Some(Strategy::Standalone),
+                commands,
+                env: &BTreeMap::new(),
+                artifacts: &[],
+                copy_from,
+                dep_sigs,
+                deps,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn signature_changes_when_prepare_changes() {
+        let reg = fixture();
+        let def = component_def(&["phpize", "make"]);
+        let ctx = node_ctx();
+
+        let mut first = bundled("curl", &["libcurl"], &[]);
+        first.prepare = vec!["echo one".into()];
+        let commands = component_commands(&first, &def, &[], &ctx, &reg).unwrap();
+        let sig_a = sig_of(
+            &reg,
+            &first,
+            &commands,
+            None,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+
+        let mut second = first.clone();
+        second.prepare = vec!["echo two".into()];
+        let commands = component_commands(&second, &def, &[], &ctx, &reg).unwrap();
+        let sig_b = sig_of(
+            &reg,
+            &second,
+            &commands,
+            None,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+
+        assert_ne!(sig_a, sig_b);
+        assert!(sig_a.contains("shell=echo one"));
+        assert!(sig_b.contains("shell=echo two"));
+    }
+
+    #[test]
+    fn signature_changes_when_copy_from_content_changes() {
+        let root = std::env::temp_dir().join(format!("phprt-sig-copy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let mut sources = Vec::new();
+        for content in ["first", "second"] {
+            let dir = root.join(format!("src-{content}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("foo.c"), content).unwrap();
+            sources.push(dir);
+        }
+        let hash_a = source_sig(&sources[0]).unwrap();
+        let hash_b = source_sig(&sources[1]).unwrap();
+        assert_ne!(hash_a, hash_b);
+
+        let reg = fixture();
+        let target = bundled("curl", &["libcurl"], &[]);
+        let sig_a = sig_of(
+            &reg,
+            &target,
+            &[],
+            Some(&hash_a),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+        let sig_b = sig_of(
+            &reg,
+            &target,
+            &[],
+            Some(&hash_b),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+        assert_ne!(sig_a, sig_b);
+        assert!(sig_a.contains(&format!("copy-from={hash_a}")));
+
+        // 同样的内容重复计算，签名稳定。
+        assert_eq!(hash_a, source_sig(&sources[0]).unwrap());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn signature_follows_dep_version_and_dep_signature() {
+        let sel = Selection::default();
+        let features = BTreeMap::new();
+
+        let reg = Registry::from_targets(vec![
+            dep("libcurl", &[]),
+            bundled("curl", &["libcurl"], &[]),
+            product(&["curl"]),
+        ])
+        .unwrap();
+        let component = reg.get("component:curl").unwrap();
+        let deps = link_closure(&reg, &sel, &features, component).unwrap();
+        let ctx = node_ctx();
+        let def = reg.product_mode(component, "shared").unwrap();
+        let commands = component_commands(component, def, &[], &ctx, &reg).unwrap();
+        let sig_v1 = sig_of(&reg, component, &commands, None, &BTreeMap::new(), &deps);
+        assert!(sig_v1.contains("dep=libcurl 1\n"));
+
+        // dep 版本变化，下游签名变化。
+        let reg = Registry::from_targets(vec![
+            dep("libcurl-2", &[]),
+            bundled("curl", &["libcurl-2"], &[]),
+            product(&["curl"]),
+        ])
+        .unwrap();
+        let component = reg.get("component:curl").unwrap();
+        let deps = link_closure(&reg, &sel, &features, component).unwrap();
+        let def = reg.product_mode(component, "shared").unwrap();
+        let commands = component_commands(component, def, &[], &ctx, &reg).unwrap();
+        let sig_v2 = sig_of(&reg, component, &commands, None, &BTreeMap::new(), &deps);
+        assert_ne!(sig_v1, sig_v2);
+
+        // dep 构建签名变化（版本没变），下游签名也要变化。
+        let reg = Registry::from_targets(vec![
+            dep("libcurl", &[]),
+            bundled("curl", &["libcurl"], &[]),
+            product(&["curl"]),
+        ])
+        .unwrap();
+        let component = reg.get("component:curl").unwrap();
+        let deps = link_closure(&reg, &sel, &features, component).unwrap();
+        let ctx = node_ctx();
+        let def = reg.product_mode(component, "shared").unwrap();
+        let commands = component_commands(component, def, &[], &ctx, &reg).unwrap();
+        let mut dep_sigs = BTreeMap::new();
+        dep_sigs.insert("libcurl".into(), "old-dep-sig".into());
+        let sig_old = sig_of(&reg, component, &commands, None, &dep_sigs, &deps);
+        dep_sigs.insert("libcurl".into(), "new-dep-sig".into());
+        let sig_new = sig_of(&reg, component, &commands, None, &dep_sigs, &deps);
+        assert_ne!(sig_old, sig_new);
+        assert!(sig_new.contains("dep-sig=new-dep-sig"));
+    }
+
+    #[test]
+    fn unselected_feature_does_not_change_signature() {
+        let sel = Selection::default();
+        let features = BTreeMap::new();
+        let ctx = node_ctx();
+
+        let mut with_feature = external("curl", &["libcurl"], &[]);
+        with_feature.features.insert(
+            "extra".into(),
+            crate::recipe::Feature {
+                needs: vec!["libextra".into()],
+                ..Default::default()
+            },
+        );
+        let mut prod = product(&["curl"]);
+        prod.bundled.clear();
+        let reg = Registry::from_targets(vec![
+            dep("libcurl", &[]),
+            dep("libextra", &[]),
+            with_feature,
+            prod,
+        ])
+        .unwrap();
+        let component = reg.get("component:curl").unwrap();
+        let deps = link_closure(&reg, &sel, &features, component).unwrap();
+        let def = reg.product_mode(component, "shared").unwrap();
+        let commands = component_commands(component, def, &[], &ctx, &reg).unwrap();
+        let sig_with = sig_of(&reg, component, &commands, None, &BTreeMap::new(), &deps);
+
+        // 同样的组件，但没有那个未启用的 feature 定义。
+        let plain = external("curl", &["libcurl"], &[]);
+        let mut prod = product(&["curl"]);
+        prod.bundled.clear();
+        let reg =
+            Registry::from_targets(vec![dep("libcurl", &[]), dep("libextra", &[]), plain, prod])
+                .unwrap();
+        let component = reg.get("component:curl").unwrap();
+        let deps = link_closure(&reg, &sel, &features, component).unwrap();
+        let def = reg.product_mode(component, "shared").unwrap();
+        let commands = component_commands(component, def, &[], &ctx, &reg).unwrap();
+        let sig_without = sig_of(&reg, component, &commands, None, &BTreeMap::new(), &deps);
+
+        assert_eq!(sig_with, sig_without);
+    }
+
+    #[test]
+    fn same_inputs_produce_same_signature() {
+        let reg = fixture();
+        let target = bundled("curl", &["libcurl"], &[]);
+        let commands = vec![Cmd::Shell("make".into())];
+        let deps: BTreeSet<String> = ["libcurl"].iter().map(|s| s.to_string()).collect();
+        let dep_sigs: BTreeMap<String, String> =
+            [("libcurl".to_string(), "dep-sig".to_string())].into();
+        let sig_a = sig_of(&reg, &target, &commands, None, &dep_sigs, &deps);
+        let sig_b = sig_of(&reg, &target, &commands, None, &dep_sigs, &deps);
+        assert_eq!(sig_a, sig_b);
+    }
+
+    #[test]
+    fn profile_actions_run_in_declared_order() {
+        let reg = fixture();
+        let target = bundled("curl", &["libcurl"], &[]);
+        let def = component_def(&["step one", "step two"]);
+        let mut target = target;
+        target.prepare = vec!["prepare one".into(), "prepare two".into()];
+        let commands =
+            component_commands(&target, &def, &["--flag".to_string()], &node_ctx(), &reg).unwrap();
+
+        let lines: Vec<String> = commands
+            .iter()
+            .map(|cmd| match cmd {
+                Cmd::Shell(line) => line.clone(),
+                Cmd::Program { .. } => panic!("组件动作不应出现 Program"),
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            vec!["prepare one", "prepare two", "step one", "step two"]
+        );
+    }
+
+    #[test]
+    fn profile_steps_change_updates_signature() {
+        let reg = fixture();
+        let target = bundled("curl", &["libcurl"], &[]);
+        let ctx = node_ctx();
+
+        let commands =
+            component_commands(&target, &component_def(&["make"]), &[], &ctx, &reg).unwrap();
+        let sig_a = sig_of(
+            &reg,
+            &target,
+            &commands,
+            None,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+
+        let commands = component_commands(
+            &target,
+            &component_def(&["make", "make check"]),
+            &[],
+            &ctx,
+            &reg,
+        )
+        .unwrap();
+        let sig_b = sig_of(
+            &reg,
+            &target,
+            &commands,
+            None,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+
+        assert_ne!(sig_a, sig_b);
+        assert!(sig_a.contains("shell=make"));
+        assert!(sig_b.contains("shell=make check"));
     }
 }
