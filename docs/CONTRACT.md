@@ -142,10 +142,15 @@ libcurl、nghttp2 与 PHP 没有直接关系；哪个 PHP 能用哪条 OpenSSL �
 
 ## 2. catalog
 
-`recipes/catalog.toml` 只存“组件 + 线 → 当前最新补丁 + 下载地址”：
+`recipes/catalog.toml` 存“组件 + 线 → 当前补丁 + 下载地址”，需要时再登记旧补丁：
 
 ```toml
 [php]
+"8.4" = { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz",
+          patches = [
+              { version = "8.4.13", url = "https://www.php.net/distributions/php-8.4.13.tar.gz" },
+              { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz" },
+          ] }
 "8.5" = { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz" }
 
 [nginx]
@@ -159,7 +164,10 @@ libcurl、nghttp2 与 PHP 没有直接关系；哪个 PHP 能用哪条 OpenSSL �
 ```
 
 - 产品名就是 catalog 的组件名；不再强制 `[php]`。
-- 每条线必须有 `version` 和 `url`。
+- 每条线必须有 `version` 和 `url`；`version` 是这条线的当前补丁。
+- `patches` 可选，登记同一条线的旧补丁（`version` / `url` / `sha256`），
+  让 `install php@8.4.13` 能装指定补丁；不写就只能装当前补丁。
+- `patches` 里的补丁不能和当前补丁重复，版本号不能重复。
 - `url` 写上游最终地址；跳转链路用注释记录，判定规则见 [ADD-RECIPE.md](ADD-RECIPE.md)。
 - 不写产品兼容性、不写构建参数。
 - 补丁更新只改这里。

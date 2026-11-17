@@ -1638,11 +1638,13 @@ pub fn load_meta(dir: &Path, catalog: &Catalog) -> Result<Vec<RecipeMeta>> {
 }
 
 /// 第二阶段：按 ctx 构造具体 Target。
+#[allow(clippy::too_many_arguments)]
 pub fn load_targets(
     dir: &Path,
     catalog: &Catalog,
     product_name: &str,
     series: &str,
+    product_version: &str,
     metas: &[RecipeMeta],
     lines: &BTreeMap<String, String>,
     base_ctx: &serde_json::Value,
@@ -1689,8 +1691,8 @@ pub fn load_targets(
             bail!("{}: TARGET.kind 必须是 product", file.path.display());
         }
         let artifact = catalog
-            .get(product_name, series)
-            .ok_or_else(|| anyhow!("catalog 里没有 {product_name} {series}"))?;
+            .artifact_for(product_name, series, product_version)
+            .ok_or_else(|| anyhow!("catalog 里没有 {product_name} {product_version}"))?;
         target.name = product_name.to_owned();
         target.version = artifact.version.clone();
         target.url = artifact.url.clone();
@@ -2470,13 +2472,14 @@ mod tests {
         let bindings = bind::resolve(
             &catalog, &bundle, &metas, product, series, &selected, &pin_map,
         )?;
-        let version = catalog.product_version(product, series)?.to_owned();
+        let version = catalog.product_version_for(product, series, series)?;
         let ctx = bind::context(product, series, &version, &bindings);
         let reg = load_targets(
             &dir,
             &catalog,
             product,
             series,
+            &version,
             &metas,
             &bindings.lines,
             &ctx,
@@ -2693,12 +2696,15 @@ mod tests {
     fn every_series_builds_with_bundle_defaults() {
         let dir = dir();
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
-        for series in catalog.product_series("php") {
+        for series in catalog.lines("php").unwrap().keys() {
+            let series = series.clone();
             let (reg, bindings) = load(&series, &["swoole", "openssl", "xdebug"], &[]).unwrap();
             let product = reg.product_any().unwrap();
             assert_eq!(
                 product.version,
-                catalog.product_version("php", &series).unwrap()
+                catalog
+                    .product_version_for("php", &series, &series)
+                    .unwrap()
             );
             assert_eq!(product.line, series);
             assert!(reg.get("dep:swoole").is_none());
@@ -2871,9 +2877,9 @@ gd = { ref = "component_presets.gd", mode = "shared" }
             .iter()
             .find(|m| m.kind == Kind::Component && m.name == "gd")
             .unwrap();
-        for series in catalog.product_series("php") {
+        for series in catalog.lines("php").unwrap().keys() {
             assert!(
-                gd.product_dep_lines.contains_key(&series),
+                gd.product_dep_lines.contains_key(series),
                 "gd 的 PRODUCT_DEP_LINES 缺少 {series}"
             );
         }
@@ -2901,6 +2907,7 @@ gd = { ref = "component_presets.gd", mode = "shared" }
                 version: "4.0.0".into(),
                 url: "https://example.com/jpeg-4.0.0.tar.gz".into(),
                 sha256: String::new(),
+                patches: Vec::new(),
             },
         );
         let metas = load_meta(&dir, &catalog).unwrap();
@@ -2958,10 +2965,19 @@ gd = { ref = "component_presets.gd", mode = "shared" }
             &BTreeMap::new(),
         )
         .unwrap();
-        let version = catalog.product_version("php", "8.5").unwrap().to_owned();
+        let version = catalog.product_version_for("php", "8.5", "8.5").unwrap();
         let ctx = crate::bind::context("php", "8.5", &version, &bindings);
-        let mut reg =
-            load_targets(&dir, &catalog, "php", "8.5", &metas, &bindings.lines, &ctx).unwrap();
+        let mut reg = load_targets(
+            &dir,
+            &catalog,
+            "php",
+            "8.5",
+            &version,
+            &metas,
+            &bindings.lines,
+            &ctx,
+        )
+        .unwrap();
         let id = "dep:jpeg".to_owned();
         let dep = reg.targets.get_mut(&id).unwrap();
         dep.features.insert(

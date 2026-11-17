@@ -343,7 +343,7 @@ fn run() -> Result<()> {
                 available_products(&metas, &product_name)
             )
         })?;
-    let version = catalog.product_version(&product_name, &series)?.to_owned();
+    let version = catalog.product_version_for(&product_name, &series, &requested)?;
 
     let bundle_path = recipes
         .join("bundles")
@@ -495,6 +495,7 @@ fn run() -> Result<()> {
         &catalog,
         &product_name,
         &series,
+        &version,
         &metas,
         &bindings.lines,
         &ctx,

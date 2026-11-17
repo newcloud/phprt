@@ -75,6 +75,20 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 - `sha256` 用于缓存校验，也用于下载完成后的校验。
 - 没有 `sha256` 时只能按远端大小校验，见 [DOWNLOAD.md](DOWNLOAD.md) 第 7 节。
 
+## 4.1 登记旧补丁
+
+需要装指定旧补丁（降级、测试）时，在 catalog 的线里加 `patches`：
+
+```toml
+"8.4" = { version = "8.4.14", url = ".../php-8.4.14.tar.gz", patches = [
+    { version = "8.4.13", url = ".../php-8.4.13.tar.gz" },
+] }
+```
+
+- `version` / `url` / `sha256` 仍是当前最新补丁；
+- `patches` 只放旧补丁，不能和当前补丁重复；
+- 不写 `patches` 时 `install php@8.4.13` 会报错并列出可用补丁。
+
 ## 5. 新增版本线
 
 除 catalog 外，还要同步：

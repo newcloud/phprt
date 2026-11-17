@@ -1,6 +1,7 @@
 # phprt 版本数据库（测试用）
 #
-# 只保存每条版本线的“当前最新小版本”和下载地址。
+# 每条线保存“当前最新小版本”和下载地址；patches 里登记旧补丁，
+# 供 `install php@8.4.13` 这类显式补丁安装和测试使用。
 # 兼容性（哪条线支持哪个产品、依赖哪些库）写在 recipe 的 LINES / PRODUCT_LINES 里。
 #
 # 更新时只改对应线的 version / url / sha256，bundle 和 recipe 不动。
@@ -11,7 +12,11 @@
 "8.1" = { version = "8.1.34", url = "https://www.php.net/distributions/php-8.1.34.tar.gz" }
 "8.2" = { version = "8.2.29", url = "https://www.php.net/distributions/php-8.2.29.tar.gz" }
 "8.3" = { version = "8.3.26", url = "https://www.php.net/distributions/php-8.3.26.tar.gz" }
-"8.4" = { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz" }
+"8.4" = { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz", patches = [
+    { version = "8.4.13", url = "https://www.php.net/distributions/php-8.4.13.tar.gz" },
+    { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz" },
+    { version = "8.4.11", url = "https://www.php.net/distributions/php-8.4.11.tar.gz" },
+] }
 "8.5" = { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209" }
 "8.6" = { version = "8.6.0", url = "https://www.php.net/distributions/php-8.6.0.tar.gz" }
 
