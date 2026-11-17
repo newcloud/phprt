@@ -46,7 +46,7 @@ pub fn set_rpath(path: &Path, rpath: &str, opts: &Options) -> Result<()>
 `phprt_rpath::set_rpath(&path, rpath, &opts.rpath)`；`build::Options` 加
 `pub rpath: phprt_rpath::Backend`，由 `src/main.rs` 从 `Config` 传入。
 
-## 3. 配置：`recipes/phprt.toml` 新增 `rpath_backend`
+## 3. 配置：`<项目根>/phprt.toml` 新增 `rpath_backend`
 
 默认 `oxipatch`。`src/config.rs` 加同名字段（`serde(default)`），
 校验规则对齐 `enable_github_proxy_download`：未知值 bail，
@@ -115,7 +115,7 @@ patchelf 命令后端天然随系统工具走。两条后端在 ARM 上都需实
 | `src/build.rs` | `Options` 加 `rpath` 字段；删 `patchelf_rpath()`；`deploy_libs` 改调 crate；`run()` 开头按需探测 patchelf |
 | `src/main.rs` | 构造 `build::Options` 时传 backend |
 | `recipes/products/php/_profile.star`、`recipes/products/nginx/_profile.star` | 删 `tool("patchelf", min = "0.13")` |
-| `recipes/phprt.toml` | 加第 3 节的注释键 |
+| `<项目根>/phprt.toml` | 加第 3 节的注释键 |
 | 文档 | BUILD.md §6 第 2 条与 §7 的 dnf 行；README 工具表与报错示例；CLI.md:317；PRODUCT.md 的 tools 示例与固定名单表述；CONTRACT.md:449「patchelf 输入」措辞；DESIGN.md crates 列表与 config.rs 一行 |
 
 ## 9. 验收

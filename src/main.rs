@@ -35,9 +35,9 @@ use phprt_ui::Mode;
     about = "phprt v3：Starlark 写 recipe，Rust 负责求解、下载、解压和构建"
 )]
 struct Cli {
-    /// recipe 目录
-    #[arg(long, default_value = "recipes", global = true)]
-    recipes: PathBuf,
+    /// recipe 目录；空或未指定时用 phprt.toml 的 recipes，再退回 ./recipes
+    #[arg(long, global = true, value_parser = path_value)]
+    recipes: Option<PathBuf>,
 
     /// 项目根目录；工具目录默认 <root>/.phprt，名字由 phprt.toml 的 internal_dir 决定
     #[arg(long, default_value = ".", global = true)]
@@ -202,8 +202,9 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let config = config::Config::load(&cli.recipes.join(config::FILE_NAME))?;
+    let config = config::Config::load(&cli.root.join(config::FILE_NAME))?;
     layout::set_internal_dir_name(&config.internal_dir_name()?);
+    let recipes = effective_recipes(cli.recipes.as_deref(), &cli.root, &config);
     // 只有 install 判定“已装/中断/该升级”，update 的语义就是跟到最新补丁。
     let install_cmd = matches!(&cli.cmd, Cmd::Install { .. });
     let force = matches!(&cli.cmd, Cmd::Install { force: true, .. });
@@ -323,12 +324,12 @@ fn run() -> Result<()> {
     };
     let (product_name, requested) = split_target(&target_spec)?;
 
-    let catalog = Catalog::load(&cli.recipes.join("catalog.toml"))
-        .with_context(|| format!("加载 {}", cli.recipes.display()))?;
+    let catalog = Catalog::load(&recipes.join("catalog.toml"))
+        .with_context(|| format!("加载 {}", recipes.display()))?;
     // 先按 catalog 把 `php@8.5` / `php@8.5.12` 归一成系列，recipe 和 bundle 都按系列找。
     let series = catalog.find_product_series(&product_name, &requested)?;
     let explicit_patch = requested != series;
-    let metas = recipe::load_meta(&cli.recipes, &catalog)?;
+    let metas = recipe::load_meta(&recipes, &catalog)?;
     let product_meta = metas
         .iter()
         .find(|meta| {
@@ -344,8 +345,7 @@ fn run() -> Result<()> {
         })?;
     let version = catalog.product_version(&product_name, &series)?.to_owned();
 
-    let bundle_path = cli
-        .recipes
+    let bundle_path = recipes
         .join("bundles")
         .join(&product_name)
         .join(format!("{series}.toml"));
@@ -491,7 +491,7 @@ fn run() -> Result<()> {
 
     let ctx = bind::context(&product_name, &series, &version, &bindings);
     let mut reg = recipe::load_targets(
-        &cli.recipes,
+        &recipes,
         &catalog,
         &product_name,
         &series,
@@ -633,7 +633,7 @@ fn run() -> Result<()> {
                 &features,
             )?;
             print!("{}", render::to_text(&sim));
-            if fetch_sources(&cli.root, &cli.recipes, &reg, &order, &download)? {
+            if fetch_sources(&cli.root, &reg, &order, &download, &config)? {
                 return Ok(());
             }
 
@@ -656,7 +656,7 @@ fn run() -> Result<()> {
                 &features,
                 &build::Options {
                     root: &cli.root,
-                    recipes: &cli.recipes,
+                    recipes: &recipes,
                     ui: download.ui,
                     scheme: &scheme,
                     backup,
@@ -857,7 +857,7 @@ fn run() -> Result<()> {
                 return Ok(());
             }
 
-            if fetch_sources(&cli.root, &cli.recipes, &reg, &order, &download)? {
+            if fetch_sources(&cli.root, &reg, &order, &download, &config)? {
                 return Ok(());
             }
             build::run(
@@ -867,7 +867,7 @@ fn run() -> Result<()> {
                 &features,
                 &build::Options {
                     root: &cli.root,
-                    recipes: &cli.recipes,
+                    recipes: &recipes,
                     ui: download.ui,
                     scheme: &scheme,
                     backup,
@@ -974,7 +974,7 @@ fn run() -> Result<()> {
                     &features,
                 )?;
                 print!("{}", render::to_text(&sim));
-                if !fetch_sources(&cli.root, &cli.recipes, &reg, &order, &download)? {
+                if !fetch_sources(&cli.root, &reg, &order, &download, &config)? {
                     build::run(
                         &reg,
                         &order,
@@ -982,7 +982,7 @@ fn run() -> Result<()> {
                         &features,
                         &build::Options {
                             root: &cli.root,
-                            recipes: &cli.recipes,
+                            recipes: &recipes,
                             ui: download.ui,
                             scheme: &scheme,
                             backup,
@@ -1027,17 +1027,16 @@ fn run() -> Result<()> {
 /// 下载并解压；返回 true 表示这次只下载（`--downloads`），不继续编译。
 fn fetch_sources(
     root: &Path,
-    recipes: &Path,
     reg: &Registry,
     order: &[&Target],
     download: &DownloadArgs,
+    config: &config::Config,
 ) -> Result<bool> {
     if !download.downloads {
         tools::check(reg.product_any()?, order)?;
     }
     let cache = layout::internal_dir(root).join("downloads");
     let sources = sources::collect(order, root, &cache)?;
-    let config = config::Config::load(&recipes.join(config::FILE_NAME))?;
     let options = phprt_download::Options {
         jobs: download.download_jobs,
         host_jobs: download.download_host_jobs,
@@ -1086,6 +1085,29 @@ fn install_target(target: &[String]) -> Result<(String, Option<String>)> {
         [] => bail!("install 需要指定一个产品，例如 phprt install php@8.5"),
         _ => bail!("install 最多接一个产品和一个方案列表，例如 phprt install php@8.5 'swoole'"),
     }
+}
+
+/// recipe 目录的优先级：`--recipes` > phprt.toml 的 `recipes` > `./recipes`。
+/// 配置里的相对路径按项目根解析；命令行和默认值按当前目录解析。
+/// 允许 `--recipes ""`：空值按“没写”处理。
+fn path_value(value: &str) -> std::result::Result<PathBuf, String> {
+    Ok(PathBuf::from(value))
+}
+
+fn effective_recipes(given: Option<&Path>, root: &Path, config: &config::Config) -> PathBuf {
+    if let Some(path) = given
+        && !path.as_os_str().is_empty()
+    {
+        return path.to_path_buf();
+    }
+    if let Some(path) = config.recipes_path() {
+        return if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        };
+    }
+    PathBuf::from("recipes")
 }
 
 fn single_target(target: &[String], command: &str) -> Result<String> {
@@ -1285,6 +1307,32 @@ fn plan_root(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn config_with(recipes: &str) -> config::Config {
+        toml::from_str(&format!("recipes = '{recipes}'\n")).unwrap()
+    }
+
+    #[test]
+    fn recipes_precedence_is_cli_then_config_then_default() {
+        let root = Path::new("/proj");
+        let cli = Path::new("/cli/recipes");
+        assert_eq!(
+            effective_recipes(Some(cli), root, &config_with("/cfg/recipes")),
+            PathBuf::from("/cli/recipes")
+        );
+        assert_eq!(
+            effective_recipes(None, root, &config_with("/cfg/recipes")),
+            PathBuf::from("/cfg/recipes")
+        );
+        assert_eq!(
+            effective_recipes(None, root, &config_with("recipes")),
+            PathBuf::from("/proj/recipes")
+        );
+        assert_eq!(
+            effective_recipes(Some(Path::new("")), root, &config_with("")),
+            PathBuf::from("recipes")
+        );
+    }
 
     fn metas() -> Vec<RecipeMeta> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");

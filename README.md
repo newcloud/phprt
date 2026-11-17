@@ -11,9 +11,11 @@ cp target/release/phprt ~/.local/bin/      # 或者直接用 ./target/release/ph
 
 ## 2. 在项目里使用
 
-`--recipes` 是 recipe 目录，默认是当前目录下的 `recipes`；`--root` 是项目根，默认 `.`，
-安装树和状态都写在 `<root>/.phprt/` 下（目录名可在 `recipes/phprt.toml` 的 `internal_dir` 改）。
-项目里没有 `recipes/` 时必须显式指定：
+`--recipes` 是 recipe 目录，默认当前目录下的 `./recipes`；`--root` 是项目根，默认 `.`，
+安装树和状态都写在 `<root>/.phprt/` 下。两者都可以写进项目根的 `phprt.toml`：
+`recipes`、`internal_dir`；命令行 `--recipes` 优先于配置。
+
+项目里没有 `recipes/` 时，要么在 `phprt.toml` 里配 `recipes = "..."`，要么显式传 `--recipes`：
 
 ```bash
 cd ~/myproject

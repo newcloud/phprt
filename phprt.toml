@@ -1,10 +1,12 @@
-# 下载和目录配置，和 catalog.toml 同级。
+# 项目配置，放在项目根（--root 指向的目录）。
+
+# recipe 目录。留空用 ./recipes；相对路径按项目根解析。
+# 命令行 --recipes 优先于这里。
+recipes = ""
 
 # 项目内工具目录名：状态、安装树、下载缓存、备份都放这里。
 # 留空用 .phprt。
 internal_dir = ""
-
-# 下载配置，和 catalog.toml 同级。
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable
 enable_github_proxy_download = "enable"

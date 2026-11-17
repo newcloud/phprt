@@ -6,8 +6,26 @@ phprt [--recipes <目录>] [--root <目录>] <子命令> <产品>@<系列> [组�
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--recipes` | `recipes` | recipe 目录；`catalog.toml`、`bundles/` 也在这里 |
+| `--recipes` | `./recipes` | recipe 目录；`catalog.toml`、`bundles/` 也在这里。空或未指定时用 `phprt.toml` 的 `recipes`，再退回 `./recipes`；命令行优先 |
 | `--root` | `.` | 项目根目录；工具目录默认 `<root>/.phprt`，名字由 `phprt.toml` 的 `internal_dir` 决定 |
+
+## 项目配置
+
+`<root>/phprt.toml`，文件不存在时全部用默认值：
+
+```toml
+# recipe 目录；空用 ./recipes，相对路径按项目根解析。--recipes 优先。
+recipes = ""
+
+# 工具目录名；空用 .phprt，只接受单个目录名。
+internal_dir = ""
+
+# 下载镜像，见 DOWNLOAD.md。
+enable_github_proxy_download = "enable"
+proxy_urls = ["https://gh-proxy.com/"]
+```
+
+优先级：`--recipes` > `phprt.toml` 的 `recipes` > `./recipes`。
 
 ## 目标
 
@@ -362,7 +380,7 @@ phprt install nginx@1.29 --downloads --offline
 - 下载失败、解压失败或编译失败都退出 1，并且不写状态。
 - `--downloads` 结束时只打印源码缓存位置，不修改 state。
 - GitHub 直连失败或 30 秒没下完会换镜像；`PHPRT_GITHUB_DIRECT_TIMEOUT` 可改秒数，
-  镜像开关和列表在 `recipes/phprt.toml`。
+  镜像开关和列表在项目根的 `phprt.toml`。
 - 下载细节见 [DOWNLOAD.md](DOWNLOAD.md)，解压细节见 [EXTRACT.md](EXTRACT.md)，
   编译细节见 [BUILD.md](BUILD.md)。
 

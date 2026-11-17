@@ -51,9 +51,12 @@ phprt install php@7.4 --component swoole --offline
 
 ## 4. 候选 URL
 
-`recipes/phprt.toml` 控制 GitHub 镜像：
+`<项目根>/phprt.toml` 控制 GitHub 镜像（同一个文件也配置 recipes 和工具目录）：
 
 ```toml
+# recipe 目录；空用 ./recipes
+recipes = ""
+
 # 项目内工具目录名（状态、安装树、缓存、备份）；留空用 .phprt
 internal_dir = ""
 
@@ -88,7 +91,7 @@ proxy_urls = [
   [ADD-RECIPE.md](ADD-RECIPE.md)。
 - `enable_github_proxy_download = "disable"` 时只请求原始地址，不追加镜像。
 - 镜像顺序：`PHPRT_GITHUB_MIRRORS`（空格分隔）非空时用它，空字符串关闭；否则用
-  `proxy_urls`；`phprt.toml` 不存在时 `proxy_urls` 用内置 4 个镜像。
+  `proxy_urls`；项目根的 `phprt.toml` 不存在时 `proxy_urls` 用内置 4 个镜像。
 - `enable_github_proxy_download` 只接受 `enable` / `disable`，写错直接报错。
 - 站点并发按桶计算：GitHub 主站、codeload、raw、objects 和所有镜像共用一个 `github` 桶，
   避免直连失败后所有任务同时压到同一个镜像。

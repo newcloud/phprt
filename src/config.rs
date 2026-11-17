@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use phprt_download::GitHubProxy;
@@ -8,7 +8,7 @@ use serde::Deserialize;
 /// 下载配置文件，和 catalog.toml 同级放在 recipe 目录下。
 pub const FILE_NAME: &str = "phprt.toml";
 
-/// `recipes/phprt.toml`：下载和目录配置。文件不存在时用内置默认值。
+/// 项目根下的 `phprt.toml`：recipe 目录、工具目录和下载配置。文件不存在时用内置默认值。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default = "default_switch")]
@@ -18,6 +18,9 @@ pub struct Config {
     /// 项目内工具目录名（状态、安装树、缓存、备份）；空表示 `.phprt`。
     #[serde(default)]
     pub internal_dir: String,
+    /// recipe 目录；空表示 `./recipes`。相对路径按项目根解析。
+    #[serde(default)]
+    pub recipes: String,
 }
 
 fn default_switch() -> String {
@@ -34,6 +37,7 @@ impl Default for Config {
             enable_github_proxy_download: default_switch(),
             proxy_urls: default_proxy_urls(),
             internal_dir: String::new(),
+            recipes: String::new(),
         }
     }
 }
@@ -52,6 +56,16 @@ impl Config {
         config.github_proxy()?;
         config.internal_dir_name()?;
         Ok(config)
+    }
+
+    /// 配置里的 recipe 目录；没配置或为空时返回 None。
+    pub fn recipes_path(&self) -> Option<PathBuf> {
+        let value = self.recipes.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(value))
+        }
     }
 
     /// 工具目录名：空配置时是 `.phprt`；只允许单个目录名。
