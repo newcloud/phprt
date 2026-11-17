@@ -83,7 +83,7 @@ PROFILE = product_profile(
     ),
     register = {"shared": "php-ini"},
     backup = backup(
-        dir = "backup",
+        relative_dir = "backup",
         name = "{timestamp}_{component}.ini",
     ),
     post_install = [
@@ -283,7 +283,7 @@ runtime（收库、rpath）
 
 ```python
 backup = backup(
-    dir = "backup",                          # 相对工具内部目录（默认 .phprt）
+    relative_dir = "backup",                 # 相对工具目录（默认 .phprt，安装树所在）
     name = "{timestamp}_{component}.ini",     # 必须含 {component}
 )
 ```

@@ -229,7 +229,7 @@ $ phprt add php@8.5 xdebug --force        # 手改过 30-xdebug.ini
 已备份 ini: .phprt/backup/20261117-163053_xdebug.ini
 ```
 
-- 备份规则来自产品 profile 的 `backup(dir, name)`；没声明的产品（如 nginx）不备份。
+- 备份规则来自产品 profile 的 `backup(relative_dir, name)`；没声明的产品（如 nginx）不备份。
 - 备份目录不写 state，也不是安装版本，`list` 不会把它当成安装产品；不自动清理。
 - 只备份 ini，不备份 `.so`，也不备份安装版本本身。
 

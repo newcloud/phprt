@@ -249,7 +249,7 @@ pub fn backup_file(
     }
 
     let saved = (|| -> Result<PathBuf> {
-        let dir = crate::layout::internal_dir(root).join(&policy.dir);
+        let dir = crate::layout::internal_dir(root).join(&policy.relative_dir);
         fs::create_dir_all(&dir).with_context(|| format!("建不了 {}", dir.display()))?;
         let stamp = stamp()?;
         let name = expand_backup_name(&policy.name, component, mode, &stamp);
@@ -672,7 +672,7 @@ mod tests {
 
     fn policy() -> BackupPolicy {
         BackupPolicy {
-            dir: "backup".into(),
+            relative_dir: "backup".into(),
             name: "{timestamp}_{component}.ini".into(),
         }
     }

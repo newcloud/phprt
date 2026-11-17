@@ -109,21 +109,21 @@ impl Strategy {
     }
 }
 
-/// 组件登记文件的备份规则，来自产品 profile 的 `backup(dir, name)`。
+/// 组件登记文件的备份规则，来自产品 profile 的 `backup(relative_dir, name)`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupPolicy {
-    /// 相对项目根的目录，如 `backup`。
-    pub dir: String,
+    /// 相对工具目录（默认 `.phprt`，构建后的安装树所在），如 `backup`。
+    pub relative_dir: String,
     /// 文件名模板，支持 `{timestamp}` / `{component}` / `{mode}`。
     pub name: String,
 }
 
 impl BackupPolicy {
     fn validate(&self, at: &str) -> Result<()> {
-        if self.dir.is_empty() {
-            bail!("{at}: profile.backup.dir 不能为空");
+        if self.relative_dir.is_empty() {
+            bail!("{at}: profile.backup.relative_dir 不能为空");
         }
-        check_relative(&self.dir, "profile.backup.dir")?;
+        check_relative(&self.relative_dir, "profile.backup.relative_dir")?;
         if self.name.is_empty() {
             bail!("{at}: profile.backup.name 不能为空");
         }
@@ -2539,7 +2539,7 @@ mod tests {
             .backup
             .as_ref()
             .expect("PHP 应该声明 backup");
-        assert_eq!(backup.dir, "backup");
+        assert_eq!(backup.relative_dir, "backup");
         assert_eq!(backup.name, "{timestamp}_{component}.ini");
     }
 
@@ -2551,8 +2551,8 @@ mod tests {
 
     #[test]
     fn backup_policy_rejects_bad_templates() {
-        let policy = |dir: &str, name: &str| BackupPolicy {
-            dir: dir.into(),
+        let policy = |relative_dir: &str, name: &str| BackupPolicy {
+            relative_dir: relative_dir.into(),
             name: name.into(),
         };
         policy("backup", "{timestamp}_{component}.ini")

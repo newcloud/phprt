@@ -52,7 +52,7 @@ PROFILE = product_profile(
     ),
     register = {"shared": "php-ini"},
     backup = backup(
-        dir = "backup",
+        relative_dir = "backup",
         name = "{timestamp}_{component}.ini",
     ),
     post_install = [

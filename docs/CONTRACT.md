@@ -399,7 +399,7 @@ TARGET = product(
       },
       defaults = {"bundled": "static", "external": "shared"},
       register = {"shared": "php-ini"},
-      backup = backup(dir = "backup", name = "{timestamp}_{component}.ini"),
+      backup = backup(relative_dir = "backup", name = "{timestamp}_{component}.ini"),
       post_install = [
           ensure_dir("etc/conf.d"),
           write_component_ini("etc/conf.d", register = "php-ini"),
@@ -422,7 +422,7 @@ TARGET = product(
 | `runtime.lib_dir` | 依赖库统一运行目录，相对安装树；同时作为构建时 `LD_LIBRARY_PATH` 的首项；空表示不整理 |
 | `runtime.rpath` | 安装树内相对 glob → rpath |
 | `register` | 挂载方式 → 登记动作名；要和 `post_install` 里 `write_component_ini` 的 `register` 一致 |
-| `backup` | 组件登记文件的备份规则 `backup(dir, name)`；`dir` 相对工具内部目录（现在 `.phprt`），`name` 支持 `{timestamp}` / `{component}` / `{mode}` 且必须含 `{component}`；不写就不备份 |
+| `backup` | 组件登记文件的备份规则 `backup(relative_dir, name)`；`relative_dir` 相对工具目录（默认 `.phprt`，构建后的安装树所在），`name` 支持 `{timestamp}` / `{component}` / `{mode}` 且必须含 `{component}`；不写就不备份 |
 | `post_install` | 安装后动作列表：`ensure_dir` / `write_file` / `copy_ca_bundle` / `write_component_ini` |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 用来检查组件模块 |
 | `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件名（如 `entry.sh`） |

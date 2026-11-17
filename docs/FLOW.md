@@ -156,7 +156,7 @@ gd（static）需要和 php 一起重新 configure/make（约 3 分钟），并�
 
 | 项 | 规则 |
 | --- | --- |
-| 目录 | 由产品 profile 的 `backup(dir, name)` 声明；`dir` 相对工具内部目录（默认 `.phprt`），PHP 声明为 `backup` |
+| 目录 | 由产品 profile 的 `backup(relative_dir, name)` 声明；`relative_dir` 相对工具目录（默认 `.phprt`，构建后的安装树所在），PHP 声明为 `backup` |
 | 文件名 | `<日期时间>_<组件名>.ini`，如 `20261117-003012_swoole.ini`；重名加 `-2` |
 | 范围 | 只备份 ini；不备份 `.so`、不备份已装版本 |
 | 时机 | remove 删除 ini 前；add 覆盖已有 ini 前；以后修改 php.ini 等同理 |
