@@ -221,6 +221,8 @@ src/
 ├── plan.rs       依赖边与拓扑
 ├── render.rs     plan 的文本 / JSON、占位符展开
 ├── build.rs      构建步骤、环境、运行时整理、验证、入口
+├── marker.rs     完成标记、方案指纹、install 判定
+├── manage.rs     add / remove 的现场检查、确认交互、ini 备份、产物删除
 ├── audit.rs      上游选项盘点
 ├── state.rs      state.json
 ├── layout.rs     源码 / 安装路径
@@ -290,7 +292,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
-| [FLOW.md](FLOW.md) | **方案，未实现**：install / add / remove / scheme 的流程、交互、`--force`、ini 备份 |
+| [FLOW.md](FLOW.md) | install / add / remove / scheme 的流程、判定矩阵、交互、`--force`、ini 备份 |
 | [GENERIC.md](GENERIC.md) | 通用化设计的完整走查；与本文冲突时以本文和 CONTRACT.md 为准 |
 
 ## 15. 验收

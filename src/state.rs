@@ -366,6 +366,27 @@ impl ProjectState {
         Ok(())
     }
 
+    /// 保存的组件方案转成 Selection，供 `scheme` 导出。
+    pub fn as_selection(&self) -> Selection {
+        Selection {
+            per_component: self
+                .components
+                .iter()
+                .map(|(name, entry)| {
+                    (
+                        name.clone(),
+                        ComponentSpec {
+                            mode: (!entry.mode.is_empty()).then(|| entry.mode.clone()),
+                            features: Some(entry.features.iter().cloned().collect()),
+                            deps: entry.deps.clone(),
+                            version: None,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
     pub fn merged_features(
         &self,
         current: BTreeMap<String, Vec<String>>,

@@ -10,6 +10,7 @@ use phprt_ui::Mode;
 
 use crate::actions;
 use crate::layout;
+use crate::marker;
 use crate::recipe::{Kind, Registry, Selection, Strategy, Target};
 use crate::render::{self, Ctx};
 
@@ -17,6 +18,8 @@ pub struct Options<'a> {
     pub root: &'a Path,
     pub recipes: &'a Path,
     pub ui: Mode,
+    /// 方案指纹和可复制的 install 命令，写进完成标记。
+    pub scheme: &'a marker::Scheme,
 }
 
 pub fn run(
@@ -41,9 +44,11 @@ pub fn run(
         .map(|n| n.get())
         .unwrap_or(4);
     let vendor = fs::canonicalize(opts.recipes.join("../vendor/perl")).ok();
+    let host = HostEnv::from_process();
     let mut dep_sigs: BTreeMap<String, String> = BTreeMap::new();
 
     let mut steps = Vec::new();
+    let mut component_artifacts: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for target in order {
         let mode = if target.kind == Kind::Component {
             Some(sel.mode_of(target))
@@ -169,6 +174,7 @@ pub fn run(
                 } else {
                     artifacts_expanded(&target.artifacts, target)
                 };
+                component_artifacts.insert(target.name.clone(), artifacts.clone());
                 (commands, artifacts)
             }
         };
@@ -196,6 +202,10 @@ pub fn run(
             },
         )?;
         dep_sigs.insert(target.name.clone(), sig.clone());
+
+        // 签名只用工具生成的确定性环境；宿主的 PATH / CFLAGS 等在这里才接上，
+        // 换 shell 或上 CI 不会让整棵树重编。
+        add_host_env(&mut env, &host);
 
         steps.push(Step {
             tag: format!(
@@ -234,33 +244,87 @@ pub fn run(
     verify(reg, product, &tree)?;
     let target = format!("{}@{}", product.name, product.series);
     write_entry(&root, product, opts.recipes, &target)?;
+    // 整条流水线（含产品校验和入口）都成功了才写完成标记，且是最后一步。
+    let installed = marker::InstalledTree {
+        version: product.version.clone(),
+        scheme: opts.scheme.digest.clone(),
+        scheme_cmd: opts.scheme.command.clone(),
+        components: component_facts(reg, product, sel, &tree, &component_artifacts)?,
+    };
+    marker::write(&root, &product.name, &installed)?;
     Ok(())
 }
 
-/// `remove` 之后立刻停用：删掉这个组件的登记文件。树不存在时什么也不做。
-pub fn disable_component(
-    root: &Path,
+/// 把产物模式（可含一个 `*`）展开成实际文件，相对安装树。
+/// 一个都没匹配到就保留模式本身，让“缺少产物”的检查能把它报出来。
+fn concrete_artifacts(tree: &Path, patterns: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for pattern in patterns {
+        let parts: Vec<&str> = pattern.split('/').collect();
+        let mut found = Vec::new();
+        walk_glob(tree, &parts, &mut found);
+        if found.is_empty() {
+            out.push(pattern.clone());
+            continue;
+        }
+        for path in found {
+            if let Ok(relative) = path.strip_prefix(tree) {
+                out.push(relative.display().to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 每个组件在这棵树里留下的产物和 ini。删组件、核对 ini 有没有被改都靠它。
+fn component_facts(
+    reg: &Registry,
     product: &Target,
-    component: &Target,
-    mode: &str,
-) -> Result<()> {
-    let Some(register) = register_action(product, mode) else {
-        return Ok(());
-    };
-    let Some(dir) = product.profile.register_dir(register) else {
-        return Ok(());
-    };
-    if component.ini.is_empty() {
-        return Ok(());
+    sel: &Selection,
+    tree: &Path,
+    standalone: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<marker::ComponentFacts>> {
+    let mut out = Vec::new();
+    for name in &product.components {
+        let component = reg.component(name)?;
+        let mode = sel.mode_of(component);
+        let def = reg.product_mode(component, &mode)?;
+        let artifacts = match def.strategy_kind()? {
+            // fold 组件的产物算在产品产物里，按 profile mode 的声明取。
+            Strategy::Fold => artifacts_expanded(&def.artifacts, component),
+            Strategy::Standalone => standalone.get(name).cloned().unwrap_or_else(|| {
+                if component.artifacts.is_empty() {
+                    artifacts_expanded(&def.artifacts, component)
+                } else {
+                    artifacts_expanded(&component.artifacts, component)
+                }
+            }),
+        };
+        let ini = product
+            .profile
+            .register
+            .get(&mode)
+            .and_then(|register| product.profile.register_dir(register))
+            .filter(|_| !component.ini.is_empty())
+            .map(|dir| format!("{dir}/{}", component.ini))
+            .filter(|relative| tree.join(relative).is_file())
+            .unwrap_or_default();
+        let ini_hash = if ini.is_empty() {
+            String::new()
+        } else {
+            marker::file_digest(&tree.join(&ini))?
+        };
+        out.push(marker::ComponentFacts {
+            name: name.clone(),
+            mode,
+            ini,
+            ini_hash,
+            artifacts: concrete_artifacts(tree, &artifacts),
+        });
     }
-    let path = root
-        .join(format!(".phprt/{}-{}", product.name, product.version))
-        .join(dir)
-        .join(&component.ini);
-    if path.exists() {
-        fs::remove_file(&path).with_context(|| format!("删不了 {}", path.display()))?;
-    }
-    Ok(())
+    Ok(out)
 }
 
 fn ctx<'a>(tree: &'a str, build: &Path, prefix: &Path) -> Ctx<'a> {
@@ -321,10 +385,6 @@ fn artifacts_expanded(patterns: &[String], target: &Target) -> Vec<String> {
         .iter()
         .map(|pattern| pattern.replace("{name}", &target.name))
         .collect()
-}
-
-fn register_action<'a>(product: &'a Target, mode: &str) -> Option<&'a str> {
-    product.profile.register.get(mode).map(String::as_str)
 }
 
 /// 签名输入：除节点身份外的全部构建输入，打包传递避免参数表过长。
@@ -550,29 +610,85 @@ fn build_env(
     for tool in tools {
         path.push(tool.join("bin").display().to_string());
     }
-    if let Some(existing) = std::env::var_os("PATH") {
-        path.push(existing.to_string_lossy().into_owned());
-    }
 
-    env.insert("CPPFLAGS".to_owned(), join_env("CPPFLAGS", &cpp));
-    env.insert("LDFLAGS".to_owned(), join_env("LDFLAGS", &ld));
+    env.insert("CPPFLAGS".to_owned(), cpp.trim_end().to_owned());
+    env.insert("LDFLAGS".to_owned(), ld.trim_end().to_owned());
     env.insert("PKG_CONFIG_PATH".to_owned(), pc.join(":"));
     env.insert("LD_LIBRARY_PATH".to_owned(), lib_path.join(":"));
     env.insert("PATH".to_owned(), path.join(":"));
-    env.insert("CFLAGS".to_owned(), append_env("CFLAGS", "-O2"));
-    env.insert("CXXFLAGS".to_owned(), append_env("CXXFLAGS", "-O2"));
+    env.insert("CFLAGS".to_owned(), "-O2".to_owned());
+    env.insert("CXXFLAGS".to_owned(), "-O2".to_owned());
     env.insert("MAKEFLAGS".to_owned(), format!("-j{jobs}"));
     if let Some(vendor) = vendor {
-        let mut perl = vendor.display().to_string();
-        if let Some(existing) = std::env::var_os("PERL5LIB")
-            && !existing.is_empty()
-        {
-            perl.push(':');
-            perl.push_str(&existing.to_string_lossy());
-        }
-        env.insert("PERL5LIB".to_owned(), perl);
+        env.insert("PERL5LIB".to_owned(), vendor.display().to_string());
     }
     env
+}
+
+/// 宿主环境里会被接进构建环境的部分。执行时才追加，
+/// 签名只算上面 `build_env` 的确定性结果：换 shell、上 CI 不该导致全量重编。
+#[derive(Default)]
+struct HostEnv {
+    path: Option<String>,
+    cppflags: Option<String>,
+    ldflags: Option<String>,
+    cflags: Option<String>,
+    cxxflags: Option<String>,
+    perl5lib: Option<String>,
+}
+
+impl HostEnv {
+    fn from_process() -> Self {
+        fn get(key: &str) -> Option<String> {
+            std::env::var(key).ok().filter(|value| !value.is_empty())
+        }
+        Self {
+            path: std::env::var_os("PATH")
+                .map(|value| value.to_string_lossy().into_owned())
+                .filter(|value| !value.is_empty()),
+            cppflags: get("CPPFLAGS"),
+            ldflags: get("LDFLAGS"),
+            cflags: get("CFLAGS"),
+            cxxflags: get("CXXFLAGS"),
+            perl5lib: get("PERL5LIB"),
+        }
+    }
+}
+
+/// 把宿主的值接到工具生成的值后面，等价于 shell 里的 `VAR=base $VAR`。
+fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv) {
+    fn append(env: &mut BTreeMap<String, String>, key: &str, extra: &Option<String>) {
+        let Some(extra) = extra else {
+            return;
+        };
+        let base = env.get(key).cloned().unwrap_or_default();
+        let base = base.trim_end();
+        let value = if base.is_empty() {
+            extra.clone()
+        } else {
+            format!("{base} {extra}")
+        };
+        env.insert(key.to_owned(), value);
+    }
+
+    append(env, "CPPFLAGS", &host.cppflags);
+    append(env, "LDFLAGS", &host.ldflags);
+    append(env, "CFLAGS", &host.cflags);
+    append(env, "CXXFLAGS", &host.cxxflags);
+    if let Some(path) = &host.path {
+        let base = env.get("PATH").cloned().unwrap_or_default();
+        let value = if base.is_empty() {
+            path.clone()
+        } else {
+            format!("{base}:{path}")
+        };
+        env.insert("PATH".to_owned(), value);
+    }
+    if let Some(perl) = &host.perl5lib
+        && let Some(base) = env.get("PERL5LIB").cloned()
+    {
+        env.insert("PERL5LIB".to_owned(), format!("{base}:{perl}"));
+    }
 }
 
 /// 产品 profile 声明的环境变量；引用了不在本次构建里的工具时跳过。
@@ -629,21 +745,6 @@ fn expand_tool(
         value.replace_range(start..start + 6 + end + 1, &prefix);
     }
     Ok(Some(value))
-}
-
-fn join_env(key: &str, base: &str) -> String {
-    let base = base.trim_end();
-    match std::env::var(key) {
-        Ok(existing) if !existing.is_empty() => format!("{base} {existing}"),
-        _ => base.to_owned(),
-    }
-}
-
-fn append_env(key: &str, base: &str) -> String {
-    match std::env::var(key) {
-        Ok(existing) if !existing.is_empty() => format!("{base} {existing}"),
-        _ => base.to_owned(),
-    }
 }
 
 fn deploy_libs(
@@ -1074,6 +1175,44 @@ mod tests {
         let env = build_env("/tree", "", &deps, &[], 4, None);
         assert!(!env["LD_LIBRARY_PATH"].contains("/tree/"));
         assert!(env["LD_LIBRARY_PATH"].starts_with("/deps/zlib/lib"));
+    }
+
+    #[test]
+    fn signature_env_has_no_host_values() {
+        let env = build_env("/tree", "", &[], &[], 4, None);
+        assert_eq!(env["PATH"], "/tree/bin");
+        assert_eq!(env["CFLAGS"], "-O2");
+        assert_eq!(env["CXXFLAGS"], "-O2");
+        assert_eq!(env["CPPFLAGS"], "");
+        assert_eq!(env["LDFLAGS"], "");
+        assert!(!env.contains_key("PERL5LIB"));
+    }
+
+    #[test]
+    fn host_env_is_added_for_execution_only() {
+        let mut env = build_env("/tree", "", &[], &[], 4, None);
+        let host = HostEnv {
+            path: Some("/host/bin".into()),
+            cflags: Some("-march=native".into()),
+            cxxflags: Some("-fPIC".into()),
+            cppflags: Some("-DHOST".into()),
+            ldflags: Some("-L/host/lib".into()),
+            perl5lib: Some("/host/perl".into()),
+        };
+        add_host_env(&mut env, &host);
+        assert_eq!(env["CFLAGS"], "-O2 -march=native");
+        assert_eq!(env["CXXFLAGS"], "-O2 -fPIC");
+        assert_eq!(env["CPPFLAGS"], "-DHOST");
+        assert_eq!(env["LDFLAGS"], "-L/host/lib");
+        assert_eq!(env["PATH"], "/tree/bin:/host/bin");
+        // build_env 没给 PERL5LIB 时，宿主的也不补：和原来一致。
+        assert!(!env.contains_key("PERL5LIB"));
+
+        let deps = vec![PathBuf::from("/deps/zlib")];
+        let mut env = build_env("/tree", "", &deps, &[], 4, Some(Path::new("/vendor/perl")));
+        add_host_env(&mut env, &host);
+        assert_eq!(env["CPPFLAGS"], "-I/deps/zlib/include -DHOST");
+        assert_eq!(env["PERL5LIB"], "/vendor/perl:/host/perl");
     }
 
     #[test]

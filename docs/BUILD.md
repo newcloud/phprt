@@ -12,6 +12,7 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
   → post_install（目录、文件、CA、ini）
   → verify
   → entry
+  → 完成标记 `.phprt/<产品>-<版本>/.phprt-installed`
 ```
 
 - 拓扑序由求解器决定，构建阶段不再排序。
@@ -21,6 +22,12 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 - standalone 组件在产品之后构建：PHP 需要 `php-config`、`phpize` 和产品源码里的组件目录；
   nginx dynamic 模块是 fold，不单独构建。
 - `tools`（如 autoconf）作为 dep 节点参与顺序，只进 `PATH`，不参与链接和运行时收库。
+
+完成标记是整条流水线（含产品校验和写入口）成功后的最后一步，用临时文件加改名
+原子写入，内容是补丁号、方案指纹与当时的方案命令（组件、mode、feature、依赖转授、
+版本线、绑定），以及每个组件在这棵树里留下的产物路径和 ini 指纹；字段格式见
+[STATE.md](STATE.md#7-安装树与完成标记)。
+中途失败不会留下标记，所以“目录在、标记不在”说明上次没装完。
 
 ## 2. 每个节点
 
@@ -51,7 +58,12 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
 | `PATH` | `{tree}/bin`、工具 dep 的 `bin`，再接原有 PATH |
 | `CFLAGS` / `CXXFLAGS` | `-O2`，再接用户已有的值 |
 | `MAKEFLAGS` | `-j<nproc>` |
-| `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块） |
+| `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块），再接用户已有的值 |
+
+表格里“再接原有 PATH”“再接用户已有的值”只发生在执行时。宿主 `PATH` / `CPPFLAGS` /
+`LDFLAGS` / `CFLAGS` / `CXXFLAGS` / `PERL5LIB` 不参与签名，所以换 shell、上 CI、
+`.bashrc` 里多一条路径都不会让整棵树重编；反过来，改了这些值也不会自动触发重编，
+要重编用 `install --force` 或删 `build/`。
 
 产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX` / `PHP_AUTOCONF` /
 `PHP_AUTOHEADER`；8.0 / 7.4 的 `CFLAGS`）。`{tool:NAME}` 只在当前节点的 `tools` 含该工具
@@ -67,7 +79,7 @@ dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 
 - 节点 id、版本、源码 `url` / `sha256`、`host_tools`、挂载策略；
 - configure 程序和全部参数；
 - 组件 `prepare` / profile mode 的 steps / make 命令（按声明顺序）；
-- 注入的环境变量；
+- 注入的环境变量（只算工具生成的部分，见第 3 节）；
 - 预期的产物路径；
 - `copy_from` 源码目录的内容指纹（相对路径 + 内容 hash，软链记目标）；
 - 依赖闭包里每个 dep 的名字、版本和它的构建签名。

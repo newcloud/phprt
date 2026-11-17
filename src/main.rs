@@ -6,6 +6,8 @@ mod bundle;
 mod catalog;
 mod config;
 mod layout;
+mod manage;
+mod marker;
 mod plan;
 mod recipe;
 mod render;
@@ -22,7 +24,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::bundle::Bundle;
 use crate::catalog::Catalog;
-use crate::recipe::{Kind, RawComponent, RecipeMeta, Registry, Selection};
+use crate::recipe::{Kind, RawComponent, RecipeMeta, Registry, Selection, Strategy, Target};
 use crate::state::ProjectState;
 use phprt_ui::Mode;
 
@@ -75,14 +77,22 @@ enum Cmd {
         #[command(flatten)]
         components: ComponentArgs,
     },
+    /// 打印一条可复制执行的重建命令
+    Scheme {
+        /// 产品@系列，如 php@8.5
+        target: String,
+    },
     /// 下载、解压、编译并安装；只接受一个产品
     Install {
-        /// 产品@系列，如 php@8.5
+        /// 产品@系列，如 php@8.5；后面可以再跟一份完整方案列表
         target: Vec<String>,
         #[command(flatten)]
         components: ComponentArgs,
         #[command(flatten)]
         download: DownloadArgs,
+        /// 已装的补丁先改名备份再全新安装；补丁不同时直接装目标补丁
+        #[arg(long)]
+        force: bool,
     },
     /// 更新：重新从 catalog 解析该产品线的最新补丁并构建
     Update {
@@ -93,7 +103,7 @@ enum Cmd {
         #[command(flatten)]
         download: DownloadArgs,
     },
-    /// 把组件加入构建方案（待安装）
+    /// 把组件加入方案并立即增量构建
     Add {
         /// 产品@系列，如 php@8.5
         target: String,
@@ -102,13 +112,29 @@ enum Cmd {
         /// 直接绑定依赖库的版本线：NAME=LINE，可重复
         #[arg(long = "dep", value_name = "NAME=LINE")]
         dep: Vec<String>,
+        #[command(flatten)]
+        download: DownloadArgs,
+        /// 跳过磁盘一致性检查
+        #[arg(long)]
+        force: bool,
+        /// 本次不备份 ini
+        #[arg(long)]
+        no_ini_backup: bool,
     },
-    /// 把组件移出构建方案
+    /// 把组件移出方案并删掉它的产物
     Remove {
         /// 产品@系列，如 php@8.5
         target: String,
         /// 组件名
         name: String,
+        #[command(flatten)]
+        download: DownloadArgs,
+        /// 跳过磁盘一致性检查（缺文件时只更新方案）
+        #[arg(long)]
+        force: bool,
+        /// 本次不备份 ini
+        #[arg(long)]
+        no_ini_backup: bool,
     },
     /// 对照上游选项清单，检查 recipe 是否漏掉或静默忽略了开关
     Audit {
@@ -170,6 +196,9 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    // 只有 install 判定“已装/中断/该升级”，update 的语义就是跟到最新补丁。
+    let install_cmd = matches!(&cli.cmd, Cmd::Install { .. });
+    let force = matches!(&cli.cmd, Cmd::Install { force: true, .. });
 
     if let Cmd::List {
         target: None,
@@ -184,6 +213,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    let mut scheme_list: Option<String> = None;
     let (target_spec, components, download, goal, json) = match &cli.cmd {
         Cmd::List { target, .. } => (
             target.clone().unwrap_or_default(),
@@ -193,6 +223,7 @@ fn run() -> Result<()> {
             false,
         ),
         Cmd::Graph { target } => (target.clone(), ComponentArgs::default(), None, None, false),
+        Cmd::Scheme { target } => (target.clone(), ComponentArgs::default(), None, None, false),
         Cmd::Plan {
             target,
             goal,
@@ -209,8 +240,19 @@ fn run() -> Result<()> {
             target,
             components,
             download,
+            ..
+        } => {
+            let (one, list) = install_target(target)?;
+            if list.is_some()
+                && (!components.component.is_empty()
+                    || !components.disable_default_component.is_empty())
+            {
+                bail!("方案列表不能和 --component / --disable-default-component 一起用");
+            }
+            scheme_list = list;
+            (one, components.clone(), Some(download.clone()), None, false)
         }
-        | Cmd::Update {
+        Cmd::Update {
             target,
             components,
             download,
@@ -225,6 +267,8 @@ fn run() -> Result<()> {
             target,
             component,
             dep,
+            download,
+            ..
         } => (
             target.clone(),
             ComponentArgs {
@@ -232,19 +276,30 @@ fn run() -> Result<()> {
                 dep: dep.clone(),
                 ..ComponentArgs::default()
             },
-            None,
+            Some(download.clone()),
             None,
             false,
         ),
-        Cmd::Remove { target, .. } => (target.clone(), ComponentArgs::default(), None, None, false),
+        Cmd::Remove {
+            target, download, ..
+        } => (
+            target.clone(),
+            ComponentArgs::default(),
+            Some(download.clone()),
+            None,
+            false,
+        ),
         Cmd::Audit { target, json } => {
             (target.clone(), ComponentArgs::default(), None, None, *json)
         }
     };
-    let (product_name, series) = split_target(&target_spec)?;
+    let (product_name, requested) = split_target(&target_spec)?;
 
     let catalog = Catalog::load(&cli.recipes.join("catalog.toml"))
         .with_context(|| format!("加载 {}", cli.recipes.display()))?;
+    // 先按 catalog 把 `php@8.5` / `php@8.5.12` 归一成系列，recipe 和 bundle 都按系列找。
+    let series = catalog.find_product_series(&product_name, &requested)?;
+    let explicit_patch = requested != series;
     let metas = recipe::load_meta(&cli.recipes, &catalog)?;
     let product_meta = metas
         .iter()
@@ -259,7 +314,6 @@ fn run() -> Result<()> {
                 available_products(&metas, &product_name)
             )
         })?;
-    let series = catalog.find_product_series(&product_name, &series)?;
     let version = catalog.product_version(&product_name, &series)?.to_owned();
 
     let bundle_path = cli
@@ -294,7 +348,10 @@ fn run() -> Result<()> {
         }
     }
 
-    let raw = recipe::preparse(&components.component)?;
+    let raw = match &scheme_list {
+        Some(list) => recipe::preparse_scheme(list)?,
+        None => recipe::preparse(&components.component)?,
+    };
     let mut disabled_defaults = BTreeSet::new();
     for name in &components.disable_default_component {
         if !disabled_defaults.insert(name.clone()) {
@@ -317,8 +374,18 @@ fn run() -> Result<()> {
 
     let mut cli_pins = pins_from_cli(&raw, &components.dep, &metas)?;
 
+    // 方案列表是完整方案：直接替换，不补 bundle 默认集。
+    // 这里只按名字铺开，mode / feature / dep 在 recipe 加载后由 parse_scheme 校验。
+    if scheme_list.is_some() {
+        project.components = raw
+            .iter()
+            .map(|item| (item.name.clone(), state::ComponentState::default()))
+            .collect();
+        project.active = true;
+    }
     // 首次方案从 bundle 的默认组件开始；已有 state 时以 state 为准。
-    let seeded_defaults = !project.active;
+    // scheme 只导出已保存的方案，不凭空展示“默认会装什么”。
+    let seeded_defaults = !project.active && !matches!(cli.cmd, Cmd::Scheme { .. });
     if seeded_defaults {
         for name in &default_names {
             if disabled_defaults.contains(name) {
@@ -348,7 +415,6 @@ fn run() -> Result<()> {
     }
 
     // add / remove 在解析绑定之前调整方案，避免给已移除的组件做校验。
-    let mut removed_mode = None;
     match &cli.cmd {
         Cmd::Add { component, .. } => {
             let name = raw
@@ -367,7 +433,6 @@ fn run() -> Result<()> {
             let _ = component;
         }
         Cmd::Remove { name, .. } => {
-            removed_mode = project.components.get(name).map(|c| c.mode.clone());
             if !project.remove_component(name) {
                 bail!("component:{name} 不在构建方案里");
             }
@@ -388,8 +453,12 @@ fn run() -> Result<()> {
         &selected,
         &pins,
     )?;
-    for note in &bindings.notes {
-        eprintln!("注意: {note}");
+    // install 的绑定提示推迟到现场判定之后打印，拒绝时不先刷“注意”；
+    // scheme 的输出要能直接复制执行，也不要提示。
+    if !install_cmd && !matches!(cli.cmd, Cmd::Scheme { .. }) {
+        for note in &bindings.notes {
+            eprintln!("注意: {note}");
+        }
     }
 
     let ctx = bind::context(&product_name, &series, &version, &bindings);
@@ -427,7 +496,10 @@ fn run() -> Result<()> {
 
     project.validate(&reg)?;
 
-    let cli_sel = Selection::parse(&reg, &components.component)?;
+    let cli_sel = match &scheme_list {
+        Some(list) => recipe::parse_scheme(&reg, list)?,
+        None => Selection::parse(&reg, &components.component)?,
+    };
     let product_id = reg.product_any()?.id();
 
     match cli.cmd {
@@ -480,6 +552,49 @@ fn run() -> Result<()> {
             project.apply_scheme(&mut reg, &names)?;
             let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             let features = reg_features(&reg, &sel, &project);
+
+            let download = download.expect("install/update 一定有下载参数");
+            let mut scheme_bindings = project.bindings.clone();
+            scheme_bindings.extend(cli_pins.clone());
+            let scheme = marker::Scheme::new(
+                &product_name,
+                &series,
+                &sel,
+                &scheme_bindings,
+                &is_dep_kind(&metas),
+            );
+
+            // 现场判定放在下载之前：拒绝重复安装时不碰网络、不写文件。
+            // `--downloads` 只取源码，不算安装，所以不判定。
+            let mut plan = marker::Plan::Install;
+            if install_cmd && !download.downloads {
+                plan = marker::decide(
+                    &marker::InstallFacts {
+                        product: &product_name,
+                        series: &series,
+                        target: &version,
+                        installed: &project.installed_version,
+                        explicit_patch,
+                        site: marker::site(&cli.root, &product_name, &version),
+                        scheme: &scheme.digest,
+                        requested_command: &scheme.command,
+                    },
+                    force,
+                )?;
+                if plan == marker::Plan::Continue {
+                    println!(
+                        "上次安装没有收尾（缺 .phprt/{product_name}-{version}/{}），继续安装",
+                        marker::FILE_NAME
+                    );
+                }
+            }
+            // install 的绑定提示放在判定之后：拒绝时不该先刷“注意”。
+            if install_cmd {
+                for note in &bindings.notes {
+                    eprintln!("注意: {note}");
+                }
+            }
+
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
             let sim = render::build(
                 &reg,
@@ -489,33 +604,21 @@ fn run() -> Result<()> {
                 &features,
             )?;
             print!("{}", render::to_text(&sim));
-
-            let download = download.expect("install/update 一定有下载参数");
-            if !download.downloads {
-                tools::check(reg.product_any()?, &order)?;
-            }
-            let cache = cli.root.join(".phprt").join("downloads");
-            let sources = sources::collect(&order, &cli.root, &cache)?;
-            let config = config::Config::load(&cli.recipes.join(config::FILE_NAME))?;
-            let options = phprt_download::Options {
-                jobs: download.download_jobs,
-                host_jobs: download.download_host_jobs,
-                connections: download.connections,
-                timeout: download.timeout,
-                proxy: download.proxy.clone(),
-                github_proxy: config.github_proxy()?,
-                offline: download.offline,
-                ui: download.ui,
-            };
-            phprt_download::run(&sources, &options)?;
-
-            if download.downloads {
-                println!();
-                println!("源码已下载到 {}（未解压）", cache.display());
+            if fetch_sources(&cli.root, &cli.recipes, &reg, &order, &download)? {
                 return Ok(());
             }
 
-            phprt_extract::run(&sources, download.ui)?;
+            // 下载、解压都成功了才动现场：--force 重装时把旧树改名备份，
+            // 中途失败不会让原来的安装不可用。
+            if plan == marker::Plan::InstallAfterBackup {
+                let from = marker::tree_path(&cli.root, &product_name, &version);
+                let to = marker::backup_tree(&cli.root, &product_name, &version)?;
+                println!(
+                    "已把旧版本改名：{} → {}",
+                    relative(&cli.root, &from),
+                    relative(&cli.root, &to)
+                );
+            }
 
             build::run(
                 &reg,
@@ -526,6 +629,7 @@ fn run() -> Result<()> {
                     root: &cli.root,
                     recipes: &cli.recipes,
                     ui: download.ui,
+                    scheme: &scheme,
                 },
             )?;
 
@@ -540,6 +644,22 @@ fn run() -> Result<()> {
             project.save(&state_file)?;
             println!();
             println!("已写入 {}", state_file.display());
+        }
+        Cmd::Scheme { .. } => {
+            if !project.active {
+                bail!("当前没有构建过 {product_name} {series}");
+            }
+            let sel = project.as_selection();
+            println!(
+                "{}",
+                marker::scheme_command(
+                    &product_name,
+                    &series,
+                    &sel,
+                    &project.bindings,
+                    &is_dep_kind(&metas)
+                )
+            );
         }
         Cmd::Audit { .. } => {
             let names = scheme_names(&project, &raw, None);
@@ -595,61 +715,346 @@ fn run() -> Result<()> {
                 );
             }
         }
-        Cmd::Add { .. } => {
+        Cmd::Add {
+            force,
+            no_ini_backup,
+            ..
+        } => {
+            let download = download.expect("add 一定带下载参数");
             let name = raw
                 .first()
                 .map(|item| item.name.clone())
                 .ok_or_else(|| anyhow!("缺少组件名"))?;
-            let added = project.add_component_with_preset(
-                &reg,
-                &name,
-                preset_sel.per_component.get(&name),
+            let product = reg.product_any()?.clone();
+            let component = reg.component(&name)?.clone();
+            let explicit = cli_sel
+                .per_component
+                .get(&name)
+                .and_then(|spec| spec.mode.as_deref());
+            let mode = manage::mode_for_add(&reg, &product, &series, &component, explicit)?;
+
+            let tree_version = project.installed_version.clone();
+            let tree = marker::tree_path(&cli.root, &product_name, &tree_version);
+            let site = if tree_version.is_empty() {
+                marker::Site::Absent
+            } else {
+                marker::site(&cli.root, &product_name, &tree_version)
+            };
+            let installed = match &site {
+                marker::Site::Complete(installed) => Some(installed.clone()),
+                _ => None,
+            };
+
+            let in_scheme = project.components.contains_key(&name);
+            let stored_mode = project
+                .components
+                .get(&name)
+                .map(|entry| entry.mode.clone())
+                .unwrap_or_default();
+            if in_scheme && !stored_mode.is_empty() && stored_mode != mode {
+                bail!(
+                    "{name} 已经在方案里，挂载方式是 {stored_mode}；\
+                     要换成 {mode} 先 phprt remove {product_name}@{series} {name}"
+                );
+            }
+
+            manage::check_add(
+                &product,
+                &component,
+                &mode,
+                &tree,
+                installed.as_ref(),
+                force,
             )?;
+
+            // 已在方案里、产物齐全：不重复加，也不重编（--force 才重编）。
+            if in_scheme && !force {
+                println!("{name} 已在方案里（{mode}），产物齐全");
+                return Ok(());
+            }
+
+            // 静态组件要把产品整个重编，和 remove 一样先提示代价、确认。
+            let rebuild = reg.product_mode(&component, &mode)?.strategy_kind()? == Strategy::Fold;
+            if rebuild && !matches!(site, marker::Site::Absent) && !force {
+                let warning = manage::rebuild_warning(&product, &name, &tree_version);
+                if !manage::interactive() {
+                    bail!("{warning}\n\n非交互环境用 --force 确认重编");
+                }
+                if !manage::confirm(&warning)? {
+                    bail!("已取消；确认重编就再跑一次并回答 y，或用 --force");
+                }
+            }
+            if !in_scheme {
+                let mut spec = preset_sel
+                    .per_component
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_default();
+                spec.mode = Some(mode.clone());
+                project.add_component_with_preset(&reg, &name, Some(&spec))?;
+            }
+
             let names = scheme_names(&project, &raw, None);
             project.apply_scheme(&mut reg, &names)?;
             let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             let features = reg_features(&reg, &sel, &project);
+            let mut scheme_bindings = project.bindings.clone();
+            scheme_bindings.extend(cli_pins.clone());
+            let scheme = marker::Scheme::new(
+                &product_name,
+                &series,
+                &sel,
+                &scheme_bindings,
+                &is_dep_kind(&metas),
+            );
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
+            let sim = render::build(
+                &reg,
+                &order,
+                &cli.root.display().to_string(),
+                &sel,
+                &features,
+            )?;
+            print!("{}", render::to_text(&sim));
+
+            // 没有安装树时不代跑 install，只记方案。
+            if matches!(site, marker::Site::Absent) {
+                project.bindings.extend(cli_pins.clone());
+                project.sync_selection(&reg, &sel, &names)?;
+                project.set_deps(&order, &features);
+                project.save(&state_file)?;
+                println!();
+                println!(
+                    "已加入 {name}（{mode}）；这个版本还没装过，先 phprt install {product_name}@{series}"
+                );
+                println!("已写入 {}", state_file.display());
+                return Ok(());
+            }
+
+            if fetch_sources(&cli.root, &cli.recipes, &reg, &order, &download)? {
+                return Ok(());
+            }
+            // 构建会重写这个组件的 ini：内容有变化就备份，默认静默。
+            if !no_ini_backup
+                && let Some(ini) = manage::ini_path(&product, &component, &mode)
+                && tree.join(&ini).is_file()
+            {
+                manage::backup_ini(
+                    &cli.root,
+                    &name,
+                    &tree.join(&ini),
+                    Some(&actions::ini_text(&component)),
+                )?;
+            }
+            build::run(
+                &reg,
+                &order,
+                &sel,
+                &features,
+                &build::Options {
+                    root: &cli.root,
+                    recipes: &cli.recipes,
+                    ui: download.ui,
+                    scheme: &scheme,
+                },
+            )?;
 
             project.bindings.extend(cli_pins.clone());
             project.installed_version = version.clone();
             project.sync_selection(&reg, &sel, &names)?;
             project.set_deps(&order, &features);
+            project.set_installed_all();
             project.save(&state_file)?;
-            if added {
-                println!("已加入组件 {name}（待安装）");
-            } else {
-                println!("组件 {name} 已在方案里");
-            }
+            println!();
+            println!("已加入 {name}（{mode}）并完成编译");
             println!("已写入 {}", state_file.display());
         }
-        Cmd::Remove { name, .. } => {
-            // 已经在解析绑定前从 project.components / selected 里移除。
+        Cmd::Remove {
+            name,
+            force,
+            no_ini_backup,
+            ..
+        } => {
+            let download = download.expect("remove 一定带下载参数");
+            let product = reg.product_any()?.clone();
+            let component = reg.component(&name)?.clone();
+
+            // 方案里已经从 project / selected 移除了。
             let names = scheme_names(&project, &raw, Some(&name));
             project.apply_scheme(&mut reg, &names)?;
             let mut sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             sel.per_component.remove(&name);
             let features = reg_features(&reg, &sel, &project);
+            let mut scheme_bindings = project.bindings.clone();
+            scheme_bindings.extend(cli_pins.clone());
+            let scheme = marker::Scheme::new(
+                &product_name,
+                &series,
+                &sel,
+                &scheme_bindings,
+                &is_dep_kind(&metas),
+            );
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
 
+            let tree_version = project.installed_version.clone();
+            let tree = marker::tree_path(&cli.root, &product_name, &tree_version);
+            let site = if tree_version.is_empty() {
+                marker::Site::Absent
+            } else {
+                marker::site(&cli.root, &product_name, &tree_version)
+            };
+
+            let mut rebuilt = false;
+            match &site {
+                marker::Site::Complete(installed) => {
+                    let removal = manage::remove_plan(&reg, &component, installed, &tree, force)?;
+                    if removal.fold {
+                        let warning = manage::rebuild_warning(&product, &name, &tree_version);
+                        if !force {
+                            if !manage::interactive() {
+                                bail!("{warning}\n\n非交互环境用 --force 确认重编");
+                            }
+                            if !manage::confirm(&warning)? {
+                                bail!("已取消；确认重编就再跑一次并回答 y，或用 --force");
+                            }
+                        }
+                        println!("{warning}");
+                        rebuilt = true;
+                    } else {
+                        let deleted = manage::apply(&cli.root, &tree, &removal, !no_ini_backup)?;
+                        if deleted.is_empty() {
+                            println!(
+                                "已移除 {name}（{}），磁盘上没有可删的文件",
+                                removal.facts.mode
+                            );
+                        } else {
+                            println!(
+                                "已移除 {name}（{}），删掉 {} 个文件：",
+                                removal.facts.mode,
+                                deleted.len()
+                            );
+                            for item in &deleted {
+                                println!("  {item}");
+                            }
+                        }
+                    }
+                }
+                _ => println!("这个版本没有装完，只更新方案"),
+            }
+
+            if rebuilt {
+                let sim = render::build(
+                    &reg,
+                    &order,
+                    &cli.root.display().to_string(),
+                    &sel,
+                    &features,
+                )?;
+                print!("{}", render::to_text(&sim));
+                if !fetch_sources(&cli.root, &cli.recipes, &reg, &order, &download)? {
+                    build::run(
+                        &reg,
+                        &order,
+                        &sel,
+                        &features,
+                        &build::Options {
+                            root: &cli.root,
+                            recipes: &cli.recipes,
+                            ui: download.ui,
+                            scheme: &scheme,
+                        },
+                    )?;
+                }
+            }
+
             project.bindings.extend(cli_pins.clone());
-            project.installed_version = version.clone();
+            if rebuilt {
+                project.installed_version = version.clone();
+                project.set_installed_all();
+            }
             project.sync_selection(&reg, &sel, &names)?;
             project.set_deps(&order, &features);
-            let product = reg.product_any()?.clone();
-            let component = reg.component(&name)?.clone();
-            build::disable_component(
-                &cli.root,
-                &product,
-                &component,
-                removed_mode.as_deref().unwrap_or(&component.default_mode),
-            )?;
             project.save(&state_file)?;
+
+            // 动态组件删完不用重编，标记里的组件和方案指纹跟着改。
+            if let marker::Site::Complete(installed) = &site
+                && !rebuilt
+            {
+                let mut record = installed.clone();
+                record.components.retain(|item| item.name != name);
+                record.scheme = scheme.digest.clone();
+                record.scheme_cmd = scheme.command.clone();
+                marker::write(&cli.root, &product_name, &record)?;
+            }
             println!("已移除组件 {name}");
             println!("已写入 {}", state_file.display());
         }
     }
     Ok(())
+}
+
+/// 下载并解压；返回 true 表示这次只下载（`--downloads`），不继续编译。
+fn fetch_sources(
+    root: &Path,
+    recipes: &Path,
+    reg: &Registry,
+    order: &[&Target],
+    download: &DownloadArgs,
+) -> Result<bool> {
+    if !download.downloads {
+        tools::check(reg.product_any()?, order)?;
+    }
+    let cache = root.join(".phprt").join("downloads");
+    let sources = sources::collect(order, root, &cache)?;
+    let config = config::Config::load(&recipes.join(config::FILE_NAME))?;
+    let options = phprt_download::Options {
+        jobs: download.download_jobs,
+        host_jobs: download.download_host_jobs,
+        connections: download.connections,
+        timeout: download.timeout,
+        proxy: download.proxy.clone(),
+        github_proxy: config.github_proxy()?,
+        offline: download.offline,
+        ui: download.ui,
+    };
+    phprt_download::run(&sources, &options)?;
+
+    if download.downloads {
+        println!();
+        println!("源码已下载到 {}（未解压）", cache.display());
+        return Ok(true);
+    }
+
+    phprt_extract::run(&sources, download.ui)?;
+    Ok(false)
+}
+
+/// 判断一个绑定名是不是依赖库：是就走 `--dep`，不是就当组件版本线。
+fn is_dep_kind(metas: &[RecipeMeta]) -> impl Fn(&str) -> bool + '_ {
+    |name: &str| {
+        metas
+            .iter()
+            .any(|meta| meta.kind == Kind::Dep && meta.name == name)
+    }
+}
+
+/// `install` 的位置参数：一个产品，后面可以再跟一份完整方案列表。
+fn install_target(target: &[String]) -> Result<(String, Option<String>)> {
+    match target {
+        [one] => Ok((one.clone(), None)),
+        [one, list] => {
+            // `install php@8.5 nginx@1.29` 仍然是“多个产品”而不是方案列表。
+            if list.contains('@') && !list.contains('=') && !list.contains(':') {
+                bail!(
+                    "install 只接受一个产品，例如 phprt install php@8.5；\
+                     多个产品请分多条命令"
+                );
+            }
+            Ok((one.clone(), Some(list.clone())))
+        }
+        [] => bail!("install 需要指定一个产品，例如 phprt install php@8.5"),
+        _ => bail!("install 最多接一个产品和一个方案列表，例如 phprt install php@8.5 'swoole'"),
+    }
 }
 
 fn single_target(target: &[String], command: &str) -> Result<String> {
@@ -661,6 +1066,14 @@ fn single_target(target: &[String], command: &str) -> Result<String> {
              多个产品请分多条命令"
         ),
     }
+}
+
+/// 打印路径时去掉项目根前缀，输出 `.phprt/...` 这种可复制的相对路径。
+fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 fn split_target(spec: &str) -> Result<(String, String)> {
@@ -904,5 +1317,75 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("不是依赖库"), "{err}");
+    }
+    #[test]
+    fn scheme_command_renders_reusable_install_line() {
+        let state = ProjectState {
+            product: "php".into(),
+            series: "8.5".into(),
+            components: BTreeMap::from([
+                (
+                    "curl".to_owned(),
+                    state::ComponentState {
+                        mode: "static".into(),
+                        deps: BTreeMap::from([("libcurl".into(), vec!["ssl".into()])]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "gd".to_owned(),
+                    state::ComponentState {
+                        mode: "static".into(),
+                        features: vec!["jpeg".into()],
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "swoole".to_owned(),
+                    state::ComponentState {
+                        mode: "shared".into(),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "zip".to_owned(),
+                    state::ComponentState {
+                        mode: "shared".into(),
+                        deps: BTreeMap::from([("libzip".into(), vec!["encryption".into()])]),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            bindings: BTreeMap::from([
+                ("swoole".to_owned(), "6.2".to_owned()),
+                ("openssl".to_owned(), "3.5".to_owned()),
+            ]),
+            ..ProjectState::default()
+        };
+
+        let line = marker::scheme_command(
+            &state.product,
+            &state.series,
+            &state.as_selection(),
+            &state.bindings,
+            &|name| name == "openssl",
+        );
+        assert_eq!(
+            line,
+            "phprt install php@8.5 'curl=mode:static,dep:libcurl[ssl],gd=mode:static,feature:[jpeg],swoole=mode:shared,version:6.2,zip=mode:shared,dep:libzip[encryption]' --dep openssl=3.5"
+        );
+    }
+
+    #[test]
+    fn install_target_separates_product_from_scheme_list() {
+        let (one, list) =
+            install_target(&["php@8.5".to_owned(), "curl=mode:static,swoole".to_owned()]).unwrap();
+        assert_eq!(one, "php@8.5");
+        assert_eq!(list.as_deref(), Some("curl=mode:static,swoole"));
+
+        let err = install_target(&["php@8.5".to_owned(), "nginx@1.29".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("只接受一个产品"), "{err}");
     }
 }

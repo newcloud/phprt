@@ -1,7 +1,7 @@
 # 使用流程（方案）
 
-> 状态：**方案，未实现**。本文定稿后按第 11 节落地；实现完成后把内容并入
-> [CLI.md](CLI.md) / [STATE.md](STATE.md) / [BUILD.md](BUILD.md)，删除本文件。
+> 状态：已实现。具体行为以 [CLI.md](CLI.md) / [STATE.md](STATE.md) / [BUILD.md](BUILD.md)
+> 为准；本文保留判定矩阵与交互规则的设计说明。
 
 目标：把 `install` / `add` / `remove` 的职责分开，让“装好之后加扩展”变成一条命令，
 并且所有破坏性操作都先检查现场、可跳过、可回退。
@@ -33,29 +33,36 @@ phprt scheme php@8.5                        # 打印一条 install 命令
 
 | 现状 | 命令 | 行为 |
 | --- | --- | --- |
-| 没装过 | `install php@8.5` | 按 catalog 最新安装 |
-| 已装 8.5.12、完整，catalog 有 8.5.13 | `install php@8.5` | **拒绝**（见 2.2） |
-| 已装 8.5.12、完整 | `install php@8.5.12` | **拒绝**，除非 `--force` |
+| 没装过 | `install php@8.5` | 按 catalog 里的目标补丁安装 |
+| 已装 8.5.12、完整，catalog 解析到 8.5.13 | `install php@8.5` | **拒绝**：提示已存在旧版本，要求显式写补丁号（见 2.2） |
+| 已装 8.5.12、完整 | `install php@8.5.12` | **拒绝**：说明编译配置一致 / 不一致 |
+| 已装 8.5.12、完整 | `install php@8.5.12 --force` | 下载、解压成功后旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
 | 已装 8.5.12（无完成标记） | 任意 | 视为中断，继续安装 |
 | 已装 8.5.12、完整 | `install php@8.5.13` | 升级：构建新树 → 成功后才写 state |
 | 已装 8.5.13 | `install php@8.5.12` | 降级：旧树完整就切回，否则重建 |
-| state 有、树或标记缺失 | 任意 | `--force` 修复，否则报错要求修复 |
+| state 说装过、目标补丁的树不存在 | 任意 | 直接装（树被删过，没有要保护的东西） |
 
 ### 2.2 拒绝重复安装
 
 ```text
 $ phprt install php@8.5.12
-error: php 8.5.12 已安装且方案一致，不重复安装
-  重装/修复: phprt install php@8.5.12 --force
-  换版本:    phprt update php@8.5
+error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置与本次方案一致
+  要重新安装，任选其一：
+    phprt install php@8.5.12 --force     # 现有树改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
+    rm -rf .phprt/php-8.5.12             # 确认不再需要这个版本，删掉后再装
 ```
 
 ```text
-$ phprt install php@8.5            # catalog 已有 8.5.13
-error: php 8.5.12 已安装；catalog 里已有 8.5.13
-  phprt update php@8.5             # 升级到最新补丁
-  phprt install php@8.5.13         # 指定版本
+$ phprt install php@8.5            # 已装 8.5.12
+error: 已存在旧版本 php 8.5.12（.phprt/php-8.5.12），本次解析到 8.5.13
+  要装 8.5.13，请显式写补丁号：
+    phprt install php@8.5.13
+  或者交给 --force：直接装 8.5.13，不动 8.5.12 这个版本
+    phprt install php@8.5 --force
 ```
+
+方案指纹不同时说明“编译配置与本次方案不一致”，并把已装方案和本次方案两条命令都打出来。
+catalog 里的补丁号只代表“本次解析到的目标”，文案里不出现“最新/过期”。
 
 ### 2.3 完成标记
 
@@ -70,6 +77,7 @@ error: php 8.5.12 已安装；catalog 里已有 8.5.13
 | 有 | 有 | 8.5.12 | 完整 |
 | 有 | 无 | 8.5.12 | 上次失败/中断，可继续 |
 | 有 | 无 | 空 | 首次安装没收尾 |
+| 无 | 无 | 8.5.12 | 树被删过，直接装 |
 | 有 | 有 | 其他版本 | 旧版本残留，可切回或清理 |
 
 ## 3. add
@@ -84,9 +92,9 @@ error: php 8.5.12 已安装；catalog 里已有 8.5.13
 
 ```text
 $ phprt add php@8.5 gd
-error: gd 是 PHP 内置扩展，add 时必须显式选择编译方式：
-  phprt add php@8.5 'gd=mode:shared'   # 编成动态扩展，不重编 PHP
-  phprt add php@8.5 'gd=mode:static'   # 编进 PHP，需要重编（约 3 分钟）
+error: gd 是内置组件，add 时必须显式选择编译方式：
+  phprt add php@8.5 'gd=mode:static'   # 编进产品，需要重编
+  phprt add php@8.5 'gd=mode:shared'   # 编成动态扩展，不重编产品
 
 $ phprt add php@8.5 'xdebug=mode:static'
 error: component:xdebug 契约不支持 mode:static（支持：shared）
@@ -126,7 +134,7 @@ swoole 已在方案里（shared），磁盘不一致：
 - 非 TTY 环境无法确认 → 一律拒绝并提示 `--force`；
 - `--force` 跳过检查与确认，但仍执行 ini 自动备份（见第 5 节）。
 
-### 4.2 静态删除：提示用户自行备份安装树
+### 4.2 静态删除：提示用户自行备份已装版本
 
 静态扩展编进 PHP，删除需要原地重编，会覆盖 `.phprt/php-8.5.12/`：
 
@@ -139,7 +147,7 @@ gd 是静态编进 PHP 的：需要重新 configure/make，并覆盖 .phprt/php-
 ```
 
 - 只提示，不代做备份，不提供 `--backup`；
-- 同一提示适用于所有会重编安装树的操作：`add 'xxx=mode:static'`、`install <补丁> --force`；
+- 同一提示适用于所有会重编已装版本的操作：`add 'xxx=mode:static'`、`install <补丁> --force`；
 - 动态删除（只删 ini 和 `.so`）不提示备份。
 
 ## 5. ini 自动备份
@@ -150,7 +158,7 @@ gd 是静态编进 PHP 的：需要重新 configure/make，并覆盖 .phprt/php-
 | --- | --- |
 | 目录 | `.phprt/backup/`，不存在则创建 |
 | 文件名 | `<日期时间>_<组件名>.ini`，如 `20261117-003012_swoole.ini`；重名加 `-2` |
-| 范围 | 只备份 ini；不备份 `.so`、不备份安装树 |
+| 范围 | 只备份 ini；不备份 `.so`、不备份已装版本 |
 | 时机 | remove 删除 ini 前；add 覆盖已有 ini 前；以后修改 php.ini 等同理 |
 | 跳过 | 内容与将要写入的一致时不备份；ini 不存在时不备份 |
 | 失败 | 备份失败则终止本次操作，并提示可用 `--no-ini-backup` |
@@ -158,8 +166,10 @@ gd 是静态编进 PHP 的：需要重新 configure/make，并覆盖 .phprt/php-
 
 ```text
 $ phprt remove php@8.5 swoole
-已备份 ini: .phprt/backup/20261117-003012_swoole.ini
-已移除 swoole（shared）：删除 27-swoole.ini 和 swoole.so，未重编 PHP
+已移除 swoole（shared），删掉 2 个文件：
+  lib/php/extensions/no-debug-non-zts-20250925/swoole.so
+  etc/conf.d/27-swoole.ini
+已移除组件 swoole
 ```
 
 `.phprt/backup/` 没有 `state.json`，`list` 不会把它当成安装产品。
@@ -181,9 +191,11 @@ phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,zip=dep:libzip[enc
 
 - `install <产品>@<系列> '列表'` 的列表是**完整方案**，直接替换，不与 bundle 默认集合并；
 - 列表里有 recipe 已删除的组件 → 报错并指出名字；
-- 同一份列表在别的机器上得到相同方案、当时的补丁（补丁跟随 catalog，不锁）。
+- 同一份列表在别的机器上得到相同方案、当时的补丁（补丁跟随 catalog，不锁）；
+- 方案列表不能和 `--component` / `--disable-default-component` 一起用。
 
-可选开关：`--diff` 只列相对默认集的差异；`--expand` 展开每个组件生效的 feature/dep。
+`scheme` 只打印一条命令，不提供差异或展开开关；该系列没有 state 时直接报
+「当前没有构建过 <产品> <系列>」，不凭空展示默认集。
 
 ## 7. state 模型
 
@@ -230,6 +242,8 @@ state 只保存两类数据，解析结果每次重算：
 ## 8. `--force` 的边界
 
 - 只跳过一致性检查、覆盖确认、重复安装限制；
+- `install --force` 在“目标补丁已经装过”时，等下载和解压成功后把现有树改名
+  `<产品>-<补丁>-backup-<日期>`（重名加 `-2`），再全新安装；补丁不同时不改名；
 - 不忽略下载失败、编译错误、校验失败；
 - 不替代 ini 备份（备份仍需 `--no-ini-backup` 才跳过）；
 - 非 TTY 下所有需要确认的操作都必须靠它放行。
@@ -252,7 +266,7 @@ phprt install php@8.5                     # catalog 更新后：拒绝并提示 
 
 phprt add php@8.5 gd                      # 拒绝：内置扩展必须写 mode
 phprt add php@8.5 'gd=mode:shared'        # 只编 gd，PHP 不动
-phprt add php@8.5 'gd=mode:static'        # 提示备份安装树，确认后重编
+phprt add php@8.5 'gd=mode=static'        # 提示备份已装版本，确认后重编
 phprt add php@8.5 swoole                  # pecl：默认 shared
 phprt remove php@8.5 swoole               # 备份 ini → 删 ini + .so
 phprt remove php@8.5 swoole --no-ini-backup

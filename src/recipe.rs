@@ -821,6 +821,15 @@ pub struct RawComponent {
 
 /// 只解析组件 spec 的名字和 `version:`，不依赖 recipe。
 pub fn preparse(specs: &[String]) -> Result<Vec<RawComponent>> {
+    preparse_with(specs, false)
+}
+
+/// 方案列表的预解析：一个 spec 里允许多个组件。
+pub fn preparse_scheme(list: &str) -> Result<Vec<RawComponent>> {
+    preparse_with(&[list.to_owned()], true)
+}
+
+fn preparse_with(specs: &[String], multiple: bool) -> Result<Vec<RawComponent>> {
     let mut out: Vec<RawComponent> = Vec::new();
     let mut seen: BTreeMap<String, ()> = BTreeMap::new();
 
@@ -849,7 +858,7 @@ pub fn preparse(specs: &[String]) -> Result<Vec<RawComponent>> {
                 }
                 continue;
             }
-            if current.is_some() {
+            if current.is_some() && !multiple {
                 bail!(
                     "一次只能指定一个组件：{spec} 里的 {part} 是第二个组件名；\
                      多个组件请分多条命令"
@@ -892,6 +901,34 @@ pub fn preparse(specs: &[String]) -> Result<Vec<RawComponent>> {
 #[derive(Debug, Clone, Default)]
 pub struct Selection {
     pub per_component: BTreeMap<String, ComponentSpec>,
+}
+
+/// 解析一份完整方案列表：逗号分隔多个组件，选项并入前一个组件。
+/// 与 `--component` 的唯一区别是这里允许一次写多个组件。
+pub fn parse_scheme(reg: &Registry, list: &str) -> Result<Selection> {
+    if list.trim().is_empty() {
+        return Ok(Selection::default());
+    }
+    let mut specs: Vec<String> = Vec::new();
+    for raw in split_top(list, ',')? {
+        let part = raw.trim();
+        if part.is_empty() {
+            bail!("方案列表 {list} 里有空的片段");
+        }
+        let is_option = part.starts_with("mode:")
+            || part.starts_with("dep:")
+            || part.starts_with("feature:")
+            || part.starts_with("version:");
+        match (specs.last_mut(), is_option) {
+            (Some(last), true) => {
+                last.push(',');
+                last.push_str(part);
+            }
+            (None, true) => bail!("方案列表 {list} 的第一个片段不能是 {part}"),
+            _ => specs.push(part.to_owned()),
+        }
+    }
+    Selection::parse(reg, &specs)
 }
 
 impl Selection {
@@ -2942,5 +2979,19 @@ TARGET = target
             "8.5"
         );
         assert!(catalog.find_product_series("php", "8.9").is_err());
+    }
+    #[test]
+    fn preparse_scheme_reads_many_components_and_version_lines() {
+        let raw = preparse_scheme(
+            "curl=mode:shared,dep:libcurl[ssl,nghttp2],zip=dep:libzip[encryption],swoole=version:6.2",
+        )
+        .unwrap();
+        let names: Vec<&str> = raw.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, vec!["curl", "zip", "swoole"]);
+        assert_eq!(raw[2].version.as_deref(), Some("6.2"));
+
+        // 单组件 spec 仍然只接受一个组件。
+        let err = preparse(&["a,b".to_owned()]).unwrap_err().to_string();
+        assert!(err.contains("一次只能指定一个组件"), "{err}");
     }
 }

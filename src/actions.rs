@@ -51,6 +51,21 @@ pub fn run(reg: &Registry, product: &Target, sel: &Selection, tree: &Path) -> Re
     Ok(())
 }
 
+/// 组件 ini 的内容。写入和“有没有被手改”的比对共用一份。
+pub fn ini_text(component: &Target) -> String {
+    let lines = if component.ini_lines.is_empty() {
+        vec![format!("extension={}.so", component.name)]
+    } else {
+        component.ini_lines.clone()
+    };
+    let mut text = String::from("; 由 phprt 生成，勿手改\n");
+    for line in lines {
+        text.push_str(&line);
+        text.push('\n');
+    }
+    text
+}
+
 fn write_component_ini(
     reg: &Registry,
     product: &Target,
@@ -71,17 +86,8 @@ fn write_component_ini(
             && product.profile.register.get(&mode).map(String::as_str) == Some(register);
         let path = dir.join(&component.ini);
         if enabled {
-            let lines = if component.ini_lines.is_empty() {
-                vec![format!("extension={}.so", component.name)]
-            } else {
-                component.ini_lines.clone()
-            };
-            let mut text = String::from("; 由 phprt 生成，勿手改\n");
-            for line in lines {
-                text.push_str(&line);
-                text.push('\n');
-            }
-            fs::write(&path, text).with_context(|| format!("写不了 {}", path.display()))?;
+            fs::write(&path, ini_text(component))
+                .with_context(|| format!("写不了 {}", path.display()))?;
         } else if path.exists() {
             fs::remove_file(&path).with_context(|| format!("删不了旧 ini {}", path.display()))?;
         }

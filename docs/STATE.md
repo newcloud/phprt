@@ -117,7 +117,7 @@ allowed = catalog 里该依赖的线
 | `install` / `update` | 是 | 是 | 方案内全部设为 true |
 | `install` / `update --downloads` | 是 | 否 | 不变 |
 | `install --component` | 是 | 是 | 只写状态里已有的方案，不保留临时组件 |
-| `add` | 是 | 是 | 新组件 false |
+| `add` | 是 | 是 | 新组件 false，编译成功后全部 true |
 | `remove` | 是 | 是 | 删除条目 |
 
 第一次写状态时从当前产品系列的 `bundle.default_components` 补种；php 8.5 会写入
@@ -154,7 +154,8 @@ allowed = catalog 里该依赖的线
 5. 编译安装到 `.phprt/<产品>-<补丁>/`。
 6. 按产品 profile 做运行时整理和校验；PHP 再写 `myphp-<系列>`（只有一个 PHP 系列时
    额外写 `myphp`）。
-7. 更新 `state.json`。
+7. 写完成标记 `.phprt/<产品>-<补丁>/.phprt-installed`。
+8. 更新 `state.json`。
 
 `add` 只把组件写进方案（待安装）；`remove` 改状态并删掉该组件的 `conf.d` ini（PHP），
 让它在下次启动时不再加载。全新项目上的 `add` / `remove` 会先把当前系列的默认集
@@ -166,3 +167,40 @@ seed 进 state。
 
 `--downloads` 只做第 1～3 步，不解压、不编译、不写状态；下载、解压或编译失败时
 命令直接退出，也不写状态文件。
+
+## 7. 安装树与完成标记
+
+安装树目录和完成标记分工不同：
+
+| 目录 | 标记 | 结论 |
+| --- | --- | --- |
+| 没有 | 没有 | 没装过 |
+| 有 | 没有 | 上次失败或中断，可以继续 |
+| 有 | 有 | 装完，标记里是补丁号和方案指纹 |
+
+```text
+.phprt/php-8.5.12/.phprt-installed
+version=8.5.12
+scheme=a348356a…（sha256，方案指纹）
+scheme_cmd=phprt install php@8.5 'curl=mode:static,swoole=mode:shared'（写标记时的方案）
+component=swoole mode=shared
+ini=swoole etc/conf.d/27-swoole.ini
+ini_hash=swoole 7397bc9b…（sha256）
+artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
+```
+
+- `component` 一行一个组件；`ini` / `ini_hash` / `artifact` 用组件名开头，可重复出现。
+- 产物写的是展开后的实际路径（recipe 里的 `*` 已经展开），删组件时按它删文件。
+- `ini_hash` 是安装时 ini 的内容指纹，`remove` 用它判断文件有没有被手改。
+- state 记录的是**方案**，并按系列存放；标记记录的是**这一棵安装树**，按补丁存放。
+- `state.installed_version` 指向当前生效的补丁；切回旧补丁时，旧树的标记还在就不用重编。
+- `install` 用标记判断“这个补丁装过没有”：装过就拒绝重复安装，并说明本次方案与之
+  一致还是不一致，细节见 [CLI.md](CLI.md#重复安装与中断)。
+- 补丁不同时不看标记：显式写补丁号就装，只写系列则提示已存在旧版本。
+- `install --force` 在下载、解压成功后把已装的树改名 `<产品>-<补丁>-backup-<日期>`，
+  再全新安装；备份目录不是安装树，`list` 不会把它当成产品。
+- `remove` 按标记里的记录删 ini 和产物，删完把标记里的组件和方案指纹一起改掉；
+  静态组件走重编，标记由构建重新写。
+- 标记不写进 state，也不参与 `list`。
+- `.phprt/backup/` 存 `add` / `remove` 改动 ini 前的备份，不写 state、不写标记，
+  `list` 不会把它当成安装产品。

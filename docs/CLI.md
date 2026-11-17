@@ -44,10 +44,11 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `list <产品>@<系列> [--installed\|--pending]` | 列出该产品的组件及状态 | 否 |
 | `graph <产品>@<系列>` | 按当前方案打印依赖边，只包含本次构建闭包内的节点 | 否 |
 | `plan <产品>@<系列> [目标] [--json]` | 求解并输出构建计划 | 否 |
-| `install <产品>@<系列> [--downloads]` | 下载、解压、编译并安装；只接受一个产品 | 默认是，`--downloads` 否 |
+| `install <产品>@<系列\|补丁> [--force] [--downloads]` | 下载、解压、编译并安装；只接受一个产品 | 默认是，`--downloads` 否 |
 | `update <产品>@<系列> [--downloads]` | 在该产品线上重新解析补丁并构建 | 默认是，`--downloads` 否 |
-| `add <产品>@<系列> <组件>` | 把组件加入方案（待安装） | 是 |
-| `remove <产品>@<系列> <组件>` | 从方案移除并重算 feature | 是 |
+| `scheme <产品>@<系列>` | 打印一条可复制执行的重建命令 | 否 |
+| `add <产品>@<系列> <组件> [--force]` | 把组件加入方案并立即增量构建 | 是 |
+| `remove <产品>@<系列> <组件> [--force]` | 移出方案并删掉产物；静态组件重编 | 是 |
 | `audit <产品>@<系列> [--json]` | 对照上游选项清单检查 recipe 的处置 | 否 |
 
 `install` / `update` / `plan` 另外支持：
@@ -136,8 +137,9 @@ phprt install nginx@1.29
 - 和 `--component` 同名同时出现 → 报错。
 - `install` / `update` 默认把方案写进状态；`--downloads` 不写。
 - `plan` / `graph` 只做本次预览，不写状态。
-- `add` 持久化添加；`remove` 持久化移除。
-- 全新项目上 `add` / `remove` 会先把当前系列的默认集 seed 进 state。
+- `add` 持久化添加并立即编译；`remove` 持久化移除并删产物。
+- 全新项目上 `add` / `remove` 会先把当前系列的默认集 seed 进 state；该版本还没装过时
+  `add` 只记方案，不代跑 `install`。
 
 ```bash
 phprt install php@8.5 --disable-default-component openssl
@@ -147,6 +149,179 @@ phprt remove php@8.5 xdebug
 
 phprt 不展开组件之间的依赖：需要 libxml 的扩展（如 DOM/SimpleXML）必须把 `libxml`
 一起写进方案，漏写时 PHP configure 会报错。
+
+## add / remove 的现场检查
+
+`add` / `remove` 先看磁盘再动手，改完方案就立即增量构建；需要重编时提示代价，
+不代做备份。
+
+`add` 的编译方式：
+
+- 组件 `modes` 是契约，写了不在列表里的方式直接报支持列表。
+- 不写 `mode` 时：内置组件（`bundled`）报错，要求显式选；其他按产品 profile 的
+  `defaults` 取（PHP 的 pecl 扩展是 `shared`）。
+- 已在方案里：方式相同就提示“已在方案里（shared），产物齐全”，退出 0；方式不同拒绝，
+  要求先 `remove`。
+
+| 现场 | 行为 |
+| --- | --- |
+| 方案里没有、目标 ini 不存在 | 正常加入并编译 |
+| 方案里没有、目标 ini 已存在 | 拒绝（可能是你自己的文件），`--force` 才覆盖 |
+| 方案里、产物和模块都一致 | 提示已存在，退出 0 |
+| 方案里、缺 `.so` / ini / 模块没加载 | 拒绝并列出差异，`--force` 重新编译登记 |
+
+`remove` 的检查：
+
+| 现场 | 行为 |
+| --- | --- |
+| ini 与安装时记录的指纹一致、`.so` 在 | 删 ini 和 `.so`，不重编 |
+| ini 被改过 | 拒绝并列出差异；TTY 下问 `y/N`，回答 `y` 才删 |
+| ini 或 `.so` 缺失 | 拒绝并列出缺失项；`--force` 只更新方案，不改磁盘 |
+| 组件是静态编进产品的 | 提示重编代价，TTY 确认后重编；非 TTY 要 `--force` |
+
+```text
+$ phprt add php@8.5 gd
+error: gd 是内置组件，add 时必须显式选择编译方式：
+  phprt add php@8.5 'gd=mode:static'   # 编进产品，需要重编
+  phprt add php@8.5 'gd=mode=shared'   # 编成动态扩展，不重编产品
+```
+
+```text
+$ phprt remove php@8.5 swoole
+已备份 ini: .phprt/backup/20261117-163035_swoole.ini
+已移除 swoole（shared），删掉 2 个文件：
+  lib/php/extensions/no-debug-non-zts-20250925/swoole.so
+  etc/conf.d/27-swoole.ini
+已移除组件 swoole
+已写入 /path/to/project/.phprt/php-8.5/state.json
+```
+
+```text
+$ phprt remove php@8.5 zip
+error: zip 是静态编进产品的：需要重新 configure/make，并覆盖 .phprt/php-8.5.12/ 里的文件
+建议先自行备份：
+  cp -a .phprt/php-8.5.12 .phprt/php-8.5.12.bak-$(date +%F-%H%M)
+
+非交互环境用 --force 确认重编
+```
+
+- 需要重编时只提示自行备份这个版本的目录，不代做备份，也没有 `--backup`。
+- 非 TTY 环境不做任何确认，一律拒绝并提示 `--force`，不会阻塞等输入。
+- `add` / `remove` 同样接受下载参数（`--downloads` / `--offline` / `--proxy` …），
+  编译前的下载和解压与 `install` 一致；`--downloads` 只取源码，不改方案也不写状态。
+- `remove` 删除的是这个版本里的 ini 和产物，不改 `state.json` 以外的文件。
+
+### ini 自动备份
+
+`add` / `remove` 改动 ini 之前默认先备份：
+
+| 项 | 规则 |
+| --- | --- |
+| 目录 | `.phprt/backup/`，不存在则创建 |
+| 文件名 | `<日期时间>_<组件名>.ini`，如 `20261117-163035_swoole.ini`；重名加 `-2` |
+| 时机 | `remove` 删 ini 前；`add` 会重写 ini 前 |
+| 不备份 | ini 不存在；内容与将要写入的一致 |
+| 失败 | 终止本次操作，提示可以加 `--no-ini-backup` 跳过 |
+| 参数 | `--no-ini-backup` 跳过本次备份；`--force` 不隐含跳过 |
+
+```text
+$ phprt add php@8.5 xdebug --force        # 手改过 30-xdebug.ini
+已备份 ini: .phprt/backup/20261117-163053_xdebug.ini
+```
+
+- 备份目录不写 state，也不是安装版本，`list` 不会把它当成安装产品；不自动清理。
+- 只备份 ini，不备份 `.so`，也不备份安装版本本身。
+
+## 重复安装与中断
+
+`install` 先看现场再决定装、续装还是拒绝；判定发生在打印计划、下载之前，
+被拒绝时不联网也不写文件。catalog 里的补丁号只代表“本次解析到的目标”，
+不代表上游最新。
+
+| 现场 | 命令 | 行为 |
+| --- | --- | --- |
+| 没装过 | 任意 | 正常安装 |
+| 本次补丁已装、方案指纹一致 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案一致”，退出 1 |
+| 本次补丁已装、方案指纹不同 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案不一致”，退出 1 |
+| 本次补丁已装 | `install 产品@补丁 --force` | 等下载、解压都成功后，旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
+| 本次补丁的树在、缺完成标记 | 任意 | 当成中断，打印提示后继续 |
+| state 说装过、本次补丁的树不存在 | 任意 | 直接装（树被删过，没有要保护的东西） |
+| 已装别的补丁、命令只写系列 | `install 产品@系列` | 拒绝：提示已存在旧版本，要求显式写补丁号 |
+| 已装别的补丁 | `install 产品@系列 --force` | 直接装本次解析到的补丁，不动已装的旧版本 |
+| 已装别的补丁、显式写补丁号 | `install 产品@补丁` | 正常升级 / 降级 |
+| `--downloads` | 任意 | 不判定，只取源码 |
+
+```text
+$ phprt install php@8.4.14
+error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案一致
+  要重新安装，任选其一：
+    phprt install php@8.4.14 --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
+    rm -rf .phprt/php-8.4.14             # 确认不再需要这个版本，删掉后再装
+```
+
+```text
+$ phprt install php@8.4            # 已装 8.4.12
+error: 已存在旧版本 php 8.4.12（.phprt/php-8.4.12），本次解析到 8.4.14
+  要装 8.4.14，请显式写补丁号：
+    phprt install php@8.4.14
+  或者交给 --force：直接装 8.4.14，不动 8.4.12 这个版本
+    phprt install php@8.4 --force
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `--force` | 跳过上述判定：本次补丁已装时先改名备份再全新安装；补丁不同时直接装目标补丁（不忽略下载、编译、校验错误） |
+
+配置不一致时把**已装方案**和**本次方案**都打出来，两条命令都能直接复制：
+
+```text
+$ phprt install php@8.4 'swoole=mode:shared,xdebug=mode:shared'
+error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案不一致
+  已装方案: phprt install php@8.4 'swoole=mode:shared'
+  本次方案: phprt install php@8.4 'swoole=mode:shared,xdebug=mode:shared'
+  要重新安装，任选其一：
+    phprt install php@8.4.14 --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
+    rm -rf .phprt/php-8.4.14             # 确认不再需要这个版本，删掉后再装
+```
+
+`install --component` / `--dep` / `--disable-default-component` 与普通 `install` 走同一套判定，
+方案不同同样会先停下并打印两份方案。
+
+`--force` 的改名发生在下载和解压成功之后，中途失败不会让原来的安装不可用；
+备份目录不自动清理。
+
+完成标记是 `.phprt/<产品>-<补丁>/.phprt-installed`，最后一步原子写入，
+所以“目录在、标记不在”说明上次没装完；标记内容和写入时机见
+[BUILD.md](BUILD.md)，与 state 的关系见 [STATE.md](STATE.md#7-安装树与完成标记)。
+
+## scheme 与方案导入
+
+```text
+$ phprt scheme php@8.5
+phprt install php@8.5 'curl=mode:static,dep:libcurl[ssl],gd=mode:static,feature:[jpeg],swoole=mode:shared,xdebug=mode:shared'
+```
+
+导出内容：
+
+- 完整组件列表（含当时生效的默认组件）；
+- 每个组件的 `mode`、自己的 `feature`、依赖转授、用户钉的版本线；
+- 用户用 `--dep` 钉的依赖线，写成命令行上的 `--dep NAME=LINE`；
+- **不含**补丁号、解析出的依赖线交集、feature 并集、configure 参数。
+
+导入就是 `install` 的第二个位置参数：
+
+```bash
+phprt install php@8.5 'curl=mode:static,swoole=mode:shared,xdebug=mode:shared'
+```
+
+- 列表是**完整方案**：直接替换，不与 bundle 默认集合并。
+- 列表里的组件在 recipe 里找不到 → 报错并指出名字（`未知组件 component:xxx`）。
+- `scheme` 只导出已保存的方案：该系列没有构建过时直接报错
+  （`当前没有构建过 php 8.2`），不会凭空展示默认集。
+- 同一份列表在别的机器上得到相同方案；补丁跟随 catalog，不锁。
+- 方案列表不能和 `--component` / `--disable-default-component` 一起用。
+- 空列表 `''` 表示一个组件都不选。
+- 粘贴执行后如果和已装树一致，会按「重复安装与中断」拒绝并说明配置一致。
 
 ## 下载与解压
 
@@ -316,6 +491,13 @@ xdebug           external  shared             3.5.3      available
 | default_components ref 写法不对 | `default_components.gd 的 ref 不合法：ref 必须是 "component_presets.<名字>"` |
 | 状态文件是旧格式 | `state.json 是旧格式（version=2）...` |
 | 移除不在方案里的组件 | `component:nope 不在构建方案里` |
+| add 内置组件没写 mode | `gd 是内置组件，add 时必须显式选择编译方式：...` |
+| add 已换方式 | `swoole 已经在方案里，挂载方式是 shared；要换成 static 先 phprt remove php@8.5 swoole` |
+| add 目标 ini 已存在 | `方案里没有 swoole，但已装版本里已经有 etc/conf.d/27-swoole.ini ...` |
+| add 产物缺失 | `swoole 在方案里（shared），磁盘不一致：缺少 ...` |
+| remove 产物缺失 | `swoole 的产物不全，不能直接删：...` |
+| remove ini 被改过 | `etc/conf.d/27-swoole.ini 被改过：+ ...；非交互环境用 --force 跳过检查` |
+| remove 静态组件没确认 | `zip 是静态编进产品的：...非交互环境用 --force 确认重编` |
 | 离线且缓存里没有源码包 | `离线模式，缓存里没有这个文件` |
 | 源码包下载失败 | `N 个源码包下载失败`（退出码 1，不写状态） |
 | 解压时源码包不在缓存 | `源码包不在缓存: ...`（提示先 `--downloads`） |

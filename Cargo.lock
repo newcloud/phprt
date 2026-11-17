@@ -1380,6 +1380,7 @@ dependencies = [
  "phprt-ui",
  "serde",
  "serde_json",
+ "sha2",
  "starlark",
  "toml",
 ]
