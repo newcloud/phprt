@@ -140,7 +140,7 @@ swoole 已在方案里（shared），磁盘不一致：
 
 ```text
 $ phprt remove php@8.5 gd
-gd 是静态编进 PHP 的：需要重新 configure/make，并覆盖 .phprt/php-8.5.12/ 里的文件（约 3 分钟）
+gd（static）需要和 php 一起重新 configure/make（约 3 分钟），并覆盖 .phprt/php-8.5.12/ 里的文件
 建议先自行备份：
   cp -a .phprt/php-8.5.12 .phprt/php-8.5.12.bak-$(date +%F-%H%M)
 继续？[y/N]

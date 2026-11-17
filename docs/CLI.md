@@ -177,7 +177,7 @@ phprt 不展开组件之间的依赖：需要 libxml 的扩展（如 DOM/SimpleX
 | ini 与安装时记录的指纹一致、`.so` 在 | 删 ini 和 `.so`，不重编 |
 | ini 被改过 | 拒绝并列出差异；TTY 下问 `y/N`，回答 `y` 才删 |
 | ini 或 `.so` 缺失 | 拒绝并列出缺失项；`--force` 只更新方案，不改磁盘 |
-| 组件是静态编进产品的 | 提示重编代价，TTY 确认后重编；非 TTY 要 `--force` |
+| 组件要和产品一起重编（fold） | 提示重编代价，TTY 确认后重编；非 TTY 要 `--force`。PHP 静态扩展和 nginx 动态模块都属于这一类 |
 
 ```text
 $ phprt add php@8.5 gd
@@ -198,7 +198,7 @@ $ phprt remove php@8.5 swoole
 
 ```text
 $ phprt remove php@8.5 zip
-error: zip 是静态编进产品的：需要重新 configure/make，并覆盖 .phprt/php-8.5.12/ 里的文件
+error: zip（static）需要和 php 一起重新 configure/make（约 3 分钟），并覆盖 .phprt/php-8.5.12/ 里的文件
 建议先自行备份：
   cp -a .phprt/php-8.5.12 .phprt/php-8.5.12.bak-$(date +%F-%H%M)
 
@@ -497,7 +497,7 @@ xdebug           external  shared             3.5.3      available
 | add 产物缺失 | `swoole 在方案里（shared），磁盘不一致：缺少 ...` |
 | remove 产物缺失 | `swoole 的产物不全，不能直接删：...` |
 | remove ini 被改过 | `etc/conf.d/27-swoole.ini 被改过：+ ...；非交互环境用 --force 跳过检查` |
-| remove 静态组件没确认 | `zip 是静态编进产品的：...非交互环境用 --force 确认重编` |
+| remove 需要重编产品没确认 | `zip（static）需要和 php 一起重新 configure/make：...非交互环境用 --force 确认重编` |
 | 离线且缓存里没有源码包 | `离线模式，缓存里没有这个文件` |
 | 源码包下载失败 | `N 个源码包下载失败`（退出码 1，不写状态） |
 | 解压时源码包不在缓存 | `源码包不在缓存: ...`（提示先 `--downloads`） |

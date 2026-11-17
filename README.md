@@ -97,6 +97,7 @@ phprt remove php@8.5 swoole
 ```
 
 - 动态扩展：删掉 `*.ini` 和 `.so`，不重编；
+- nginx 动态模块：和 nginx 一起重编，删掉 `modules/*.so`（含 `.old`）；
 - 静态扩展：会重编 PHP，执行前会提示耗时，建议先自行备份安装树：
   ```bash
   cp -a .phprt/php-8.5.12 .phprt/php-8.5.12.bak-$(date +%F-%H%M)
@@ -168,6 +169,14 @@ phprt install nginx@1.29
 
 phprt add nginx@1.29 lua-nginx-module
 ls .phprt/nginx-1.29.8/modules/
+```
+
+nginx 动态模块和 nginx 一起构建：`add` / `remove` 会重新 configure/make（约 1 分钟），
+执行前会提示并给出备份命令；非交互环境（脚本、CI）加 `--force` 确认。
+
+```bash
+phprt add nginx@1.29 lua-nginx-module --force
+phprt remove nginx@1.29 lua-nginx-module --force
 ```
 
 nginx 不生成 `myphp` 之类的入口，直接用安装树里的二进制。

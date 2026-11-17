@@ -112,7 +112,7 @@ pub fn check_add(
 /// remove 定下来的动作：删哪些文件、要不要重编产品。
 pub struct Removal {
     pub facts: ComponentFacts,
-    /// 静态编进产品的组件：不删文件，改完方案重编。
+    /// 要和产品一起重编的组件（fold）：不单独删产物，改完方案重编。
     pub fold: bool,
     /// 要删的相对路径，只含确实存在的文件。
     pub delete: Vec<String>,
@@ -277,12 +277,31 @@ fn stamp() -> Result<String> {
 }
 
 /// 会重编产品时给用户的提示：说明代价，并给出自行备份的命令（不代做备份）。
-pub fn rebuild_warning(product: &Target, name: &str, version: &str) -> String {
+/// fold 只表示“和产品一起构建”，不等于静态链接（nginx 动态模块也是 fold）。
+pub fn rebuild_warning(product: &Target, name: &str, mode: &str, version: &str) -> String {
     let tree = format!(".phprt/{}-{version}", product.name);
     format!(
-        "{name} 是静态编进产品的：需要重新 configure/make（约 3 分钟），\
-         并覆盖 {tree}/ 里的文件\n建议先自行备份：\n  cp -a {tree} {tree}.bak-$(date +%F-%H%M)"
+        "{name}（{mode}）需要和 {} 一起重新 configure/make（约 3 分钟），\
+         并覆盖 {tree}/ 里的文件\n建议先自行备份：\n  cp -a {tree} {tree}.bak-$(date +%F-%H%M)",
+        product.name
     )
+}
+
+/// 重编产品之后，删掉已经不属于方案的旧产物（如 nginx 动态模块的 `.so`）。
+/// fold 组件本身没有源码级产物时（PHP static），这里什么也不做。
+pub fn delete_stale_artifacts(tree: &Path, artifacts: &[String]) -> Result<Vec<String>> {
+    let mut deleted = Vec::new();
+    for relative in artifacts {
+        // nginx 的 make install 会把旧模块改名成 `<名字>.old`，一起清掉。
+        for candidate in [relative.clone(), format!("{relative}.old")] {
+            let path = tree.join(&candidate);
+            if path.is_file() {
+                fs::remove_file(&path).with_context(|| format!("删不了 {}", path.display()))?;
+                deleted.push(candidate);
+            }
+        }
+    }
+    Ok(deleted)
 }
 
 /// 有没有可以问人的终端。没有就一律拒绝，不等输入。
@@ -592,6 +611,36 @@ mod tests {
         assert!(err.contains("磁盘不一致"), "{err}");
         assert!(err.contains("lib/php/extensions/x/swoole.so"), "{err}");
         check_add(&product, &swoole, "shared", &root, Some(&installed), true).unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deletes_stale_artifacts_after_rebuild() {
+        let root = std::env::temp_dir().join(format!("phprt-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("modules")).unwrap();
+        fs::write(root.join("modules/ngx_http_lua_module.so"), b"so").unwrap();
+        fs::write(root.join("modules/ngx_http_lua_module.so.old"), b"so").unwrap();
+        fs::write(root.join("modules/keep.so"), b"so").unwrap();
+
+        let deleted = delete_stale_artifacts(
+            &root,
+            &[
+                "modules/ngx_http_lua_module.so".to_owned(),
+                "modules/gone.so".to_owned(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            deleted,
+            vec![
+                "modules/ngx_http_lua_module.so",
+                "modules/ngx_http_lua_module.so.old"
+            ]
+        );
+        assert!(!root.join("modules/ngx_http_lua_module.so").exists());
+        assert!(!root.join("modules/ngx_http_lua_module.so.old").exists());
+        assert!(root.join("modules/keep.so").exists());
         let _ = fs::remove_dir_all(&root);
     }
 

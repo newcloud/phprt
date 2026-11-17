@@ -776,7 +776,7 @@ fn run() -> Result<()> {
             // 静态组件要把产品整个重编，和 remove 一样先提示代价、确认。
             let rebuild = reg.product_mode(&component, &mode)?.strategy_kind()? == Strategy::Fold;
             if rebuild && !matches!(site, marker::Site::Absent) && !force {
-                let warning = manage::rebuild_warning(&product, &name, &tree_version);
+                let warning = manage::rebuild_warning(&product, &name, &mode, &tree_version);
                 if !manage::interactive() {
                     bail!("{warning}\n\n非交互环境用 --force 确认重编");
                 }
@@ -905,11 +905,18 @@ fn run() -> Result<()> {
             };
 
             let mut rebuilt = false;
+            let mut stale_artifacts: Vec<String> = Vec::new();
             match &site {
                 marker::Site::Complete(installed) => {
                     let removal = manage::remove_plan(&reg, &component, installed, &tree, force)?;
                     if removal.fold {
-                        let warning = manage::rebuild_warning(&product, &name, &tree_version);
+                        stale_artifacts = removal.facts.artifacts.clone();
+                        let warning = manage::rebuild_warning(
+                            &product,
+                            &name,
+                            &removal.facts.mode,
+                            &tree_version,
+                        );
                         if !force {
                             if !manage::interactive() {
                                 bail!("{warning}\n\n非交互环境用 --force 确认重编");
@@ -964,6 +971,13 @@ fn run() -> Result<()> {
                             scheme: &scheme,
                         },
                     )?;
+                    let deleted = manage::delete_stale_artifacts(&tree, &stale_artifacts)?;
+                    if !deleted.is_empty() {
+                        println!("已删除旧产物 {} 个：", deleted.len());
+                        for item in &deleted {
+                            println!("  {item}");
+                        }
+                    }
                 }
             }
 

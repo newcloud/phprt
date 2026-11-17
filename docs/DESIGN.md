@@ -227,14 +227,15 @@ src/
 ├── state.rs      state.json
 ├── layout.rs     源码 / 安装路径
 ├── sources.rs    下载清单
-└── config.rs     下载配置
+└── config.rs     下载 / rpath 配置
 
 crates/
 ├── download/     下载、镜像、分片续传、进度
 ├── extract/      解压、原子目录、路径安全
 ├── build/        命令执行、签名、日志、产物检查
 ├── source/       下载清单类型
-└── ui/           进度显示
+├── ui/           进度显示
+└── rpath/        rpath 设置（oxipatch 库 / patchelf 命令双后端，见 RPATH.md）
 
 recipes/
 ├── products/<产品>/<系列>.star
@@ -289,6 +290,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
+| [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
