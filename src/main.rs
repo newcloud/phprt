@@ -35,6 +35,10 @@ use phprt_ui::Mode;
     about = "phprt v3：Starlark 写 recipe，Rust 负责求解、下载、解压和构建"
 )]
 struct Cli {
+    /// 配置文件；默认 <root>/phprt.toml，空值按默认处理
+    #[arg(short = 'c', long = "config", global = true, value_parser = path_value)]
+    config: Option<PathBuf>,
+
     /// recipe 目录；空或未指定时用 phprt.toml 的 recipes，再退回 ./recipes
     #[arg(long, global = true, value_parser = path_value)]
     recipes: Option<PathBuf>,
@@ -226,7 +230,16 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let config = config::Config::load(&cli.root.join(config::FILE_NAME))?;
+    let config_file = effective_config(&cli);
+    if cli
+        .config
+        .as_deref()
+        .is_some_and(|path| !path.as_os_str().is_empty())
+        && !config_file.is_file()
+    {
+        bail!("配置不存在: {}", config_file.display());
+    }
+    let config = config::Config::load(&config_file)?;
     match (cli.global, cli.prefix.as_deref()) {
         (true, None) => bail!("--global 需要 --prefix，例如 --prefix /usr/local/php"),
         (false, Some(_)) => bail!("--prefix 只能和 --global 一起用"),
@@ -1276,6 +1289,14 @@ fn effective_dir_opt(
     config::dir_value(key, &raw)
 }
 
+/// 配置文件路径：`-c/--config` 优先，否则用 `<root>/phprt.toml`。
+fn effective_config(cli: &Cli) -> PathBuf {
+    match &cli.config {
+        Some(path) if !path.as_os_str().is_empty() => path.clone(),
+        _ => cli.root.join(config::FILE_NAME),
+    }
+}
+
 /// 示例命令的前缀：全局模式带上 `--global --prefix`。
 fn command_prefix(cli: &Cli) -> String {
     match &cli.prefix {
@@ -1515,6 +1536,24 @@ fn plan_root(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn config_path_prefers_the_flag() {
+        let cli = Cli::parse_from(["phprt", "list"]);
+        assert_eq!(
+            effective_config(&cli),
+            PathBuf::from(".").join("phprt.toml")
+        );
+
+        let cli = Cli::parse_from(["phprt", "-c", "/tmp/x.toml", "list"]);
+        assert_eq!(effective_config(&cli), PathBuf::from("/tmp/x.toml"));
+
+        let cli = Cli::parse_from(["phprt", "-c", "", "list"]);
+        assert_eq!(
+            effective_config(&cli),
+            PathBuf::from(".").join("phprt.toml")
+        );
+    }
 
     #[test]
     fn download_dir_follows_mode_defaults() {

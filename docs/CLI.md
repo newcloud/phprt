@@ -1,12 +1,13 @@
 # 命令行
 
 ```bash
-phprt [--recipes <目录>] [--root <目录>] [--global --prefix <目录>] \
+phprt [-c <配置>] [--recipes <目录>] [--root <目录>] [--global --prefix <目录>] \
       <子命令> <产品>@<系列> [组件或目标] [选项]
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
+| `-c` / `--config` | `<root>/phprt.toml` | 配置文件；显式指定的文件不存在时报错 |
 | `--recipes` | `./recipes` | recipe 目录；`catalog.toml`、`bundles/` 也在这里。空或未指定时用 `phprt.toml` 的 `recipes`，再退回 `./recipes`；命令行优先 |
 | `--root` | `.` | 项目根目录；本地模式的工具目录默认 `<root>/.phprt` |
 | `--internal-dir` | 无 | 本地模式专用；覆盖 `local_internal_dir`，可绝对或相对 |
@@ -18,7 +19,8 @@ phprt [--recipes <目录>] [--root <目录>] [--global --prefix <目录>] \
 
 ## 项目配置
 
-`<root>/phprt.toml`，文件不存在时全部用默认值：
+默认读 `<root>/phprt.toml`；用 `-c/--config` 指定其他文件（显式指定但不存在会报错）。
+文件不存在时全部用默认值：
 
 ```toml
 # ---- 两种模式共用 ----
