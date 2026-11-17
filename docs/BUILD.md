@@ -1,7 +1,8 @@
 # 编译与安装
 
 `install` / `update` 在解压之后按构建顺序编译源码，产物安装到
-`.phprt/<产品>-<产品版本>/`（工具目录默认 `.phprt`，可由 `phprt.toml` 的 `internal_dir` 改名），
+`.phprt/<产品>-<产品版本>/`（工具目录默认 `<项目根>/.phprt`，如 `/www/blog/.phprt`；
+名字可由 `phprt.toml` 的 `internal_dir` 改，相对项目根），
 最后按产品 profile 做运行时整理和验证；PHP 还会生成
 项目入口 `myphp-<系列>`。`--downloads` 在下载阶段结束，不进入本阶段。
 

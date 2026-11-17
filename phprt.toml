@@ -4,8 +4,9 @@
 # 命令行 --recipes 优先于这里。
 recipes = ""
 
-# 项目内工具目录名：状态、安装树、下载缓存、备份都放这里。
-# 留空用 .phprt。
+# 工具目录名：状态、安装树、下载缓存、备份都放这里。
+# 相对项目根（--root）；留空用 .phprt。
+# 例如项目根是 /www/blog，默认就是 /www/blog/.phprt；写 "data" 就是 /www/blog/data。
 internal_dir = ""
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable

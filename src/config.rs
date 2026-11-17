@@ -15,7 +15,8 @@ pub struct Config {
     pub enable_github_proxy_download: String,
     #[serde(default = "default_proxy_urls")]
     pub proxy_urls: Vec<String>,
-    /// 项目内工具目录名（状态、安装树、缓存、备份）；空表示 `.phprt`。
+    /// 工具目录名（状态、安装树、缓存、备份），相对项目根；空表示 `.phprt`。
+    /// 例：项目根 `/www/blog`，空 → `/www/blog/.phprt`，`data` → `/www/blog/data`。
     #[serde(default)]
     pub internal_dir: String,
     /// recipe 目录；空表示 `./recipes`。相对路径按项目根解析。

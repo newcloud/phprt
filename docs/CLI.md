@@ -17,7 +17,8 @@ phprt [--recipes <目录>] [--root <目录>] <子命令> <产品>@<系列> [组�
 # recipe 目录；空用 ./recipes，相对路径按项目根解析。--recipes 优先。
 recipes = ""
 
-# 工具目录名；空用 .phprt，只接受单个目录名。
+# 工具目录名，相对项目根（--root）；空用 .phprt，只接受单个目录名。
+# 项目根是 /www/blog 时：空 → /www/blog/.phprt，data → /www/blog/data。
 internal_dir = ""
 
 # 下载镜像，见 DOWNLOAD.md。

@@ -33,7 +33,8 @@ phprt install php@7.4 --component swoole --offline
 
 ## 3. 缓存布局
 
-工具目录默认 `.phprt`，可用 `phprt.toml` 的 `internal_dir` 改名。
+工具目录默认 `<项目根>/.phprt`（如 `/www/blog/.phprt`），可用 `phprt.toml` 的
+`internal_dir` 改名；它相对项目根，只写目录名。
 
 ```text
 .phprt/downloads/
@@ -57,7 +58,7 @@ phprt install php@7.4 --component swoole --offline
 # recipe 目录；空用 ./recipes
 recipes = ""
 
-# 项目内工具目录名（状态、安装树、缓存、备份）；留空用 .phprt
+# 工具目录名（状态、安装树、缓存、备份），相对项目根；留空用 .phprt
 internal_dir = ""
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable
