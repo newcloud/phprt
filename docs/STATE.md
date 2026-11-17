@@ -9,7 +9,7 @@
 .phprt/<产品>-<系列>/state.json
 ```
 
-下文用 `.phprt` 表示工具目录；实际名字由 `phprt.toml` 的 `internal_dir` 决定，
+下文用 `.phprt` 表示工具目录；实际名字由 `phprt.toml` 的 `local_internal_dir` 决定，
 它相对项目根（`--root`），留空时才是 `.phprt`。例如项目根是 `/www/blog`，
 默认状态文件就是 `/www/blog/.phprt/php-8.5/state.json`。
 
@@ -209,6 +209,6 @@ artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
 - `remove` 按标记里的记录删 ini 和产物，删完把标记里的组件和方案指纹一起改掉；
   静态组件走重编，标记由构建重新写。
 - 标记不写进 state，也不参与 `list`。
-- `.phprt/backup/` 存 `add` / `remove` 改动 ini 前的备份（可用 `backup_dir` /
+- `.phprt/backup/` 存 `add` / `remove` 改动 ini 前的备份（可用 `local_backup_dir` /
   `--backup-dir` 改位置），不写 state、不写标记，
   `list` 不会把它当成安装产品。

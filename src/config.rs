@@ -10,24 +10,25 @@ pub const FILE_NAME: &str = "phprt.toml";
 
 /// 项目根下的 `phprt.toml`：recipe 目录、工具目录和下载配置。文件不存在时用内置默认值。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_switch")]
     pub enable_github_proxy_download: String,
     #[serde(default = "default_proxy_urls")]
     pub proxy_urls: Vec<String>,
-    /// 工具目录名（状态、安装树、缓存、备份），相对项目根；空表示 `.phprt`。
+    /// 本地模式的工具目录（状态、安装树、缓存、备份），相对项目根；空表示 `.phprt`。
     /// 例：项目根 `/www/blog`，空 → `/www/blog/.phprt`，`data` → `/www/blog/data`。
     #[serde(default)]
-    pub internal_dir: String,
+    pub local_internal_dir: String,
     /// recipe 目录；空表示 `./recipes`。相对路径按项目根解析。
     #[serde(default)]
     pub recipes: String,
-    /// 源码解压目录；空表示 `build`。可绝对或相对。
+    /// 本地模式的源码解压目录；空表示 `build`。可绝对或相对。
     #[serde(default)]
-    pub build_dir: String,
-    /// 组件登记文件备份目录；空表示用产品 recipe 的默认位置（internal_dir/backup）。
+    pub local_build_dir: String,
+    /// 本地模式的组件登记文件备份目录；空表示用产品 recipe 的默认位置。
     #[serde(default)]
-    pub backup_dir: String,
+    pub local_backup_dir: String,
     /// 下载目录（两种模式共用）；空时本地用 internal/downloads、全局用 ~/phprtdownloads。
     #[serde(default)]
     pub download_dir: String,
@@ -67,10 +68,10 @@ impl Default for Config {
         Self {
             enable_github_proxy_download: default_switch(),
             proxy_urls: default_proxy_urls(),
-            internal_dir: String::new(),
+            local_internal_dir: String::new(),
             recipes: String::new(),
-            build_dir: String::new(),
-            backup_dir: String::new(),
+            local_build_dir: String::new(),
+            local_backup_dir: String::new(),
             download_dir: String::new(),
             global_build_dir: String::new(),
             global_backup_dir: String::new(),
@@ -90,9 +91,9 @@ impl Config {
         let config: Self =
             toml::from_str(&text).with_context(|| format!("{} 不是合法的配置", path.display()))?;
         config.github_proxy()?;
-        config.internal_dir_name()?;
-        config.build_dir_name()?;
-        config.backup_dir_name()?;
+        config.local_internal_dir_name()?;
+        config.local_build_dir_name()?;
+        config.local_backup_dir_name()?;
         config.download_dir_name()?;
         config.global_build_dir_name()?;
         config.global_backup_dir_name()?;
@@ -109,21 +110,21 @@ impl Config {
         }
     }
 
-    /// 工具目录：空配置时是 `.phprt`；可绝对或相对（相对项目根）。
-    pub fn internal_dir_name(&self) -> Result<String> {
-        Ok(dir_value("internal_dir", &self.internal_dir)?
+    /// 本地模式的工具目录：空配置时是 `.phprt`；可绝对或相对（相对项目根）。
+    pub fn local_internal_dir_name(&self) -> Result<String> {
+        Ok(dir_value("local_internal_dir", &self.local_internal_dir)?
             .unwrap_or_else(|| crate::layout::DEFAULT_INTERNAL_DIR.to_owned()))
     }
 
-    /// 解压目录：空配置时是 `build`；可绝对或相对（相对项目根）。
-    pub fn build_dir_name(&self) -> Result<String> {
-        Ok(dir_value("build_dir", &self.build_dir)?
+    /// 本地模式的解压目录：空配置时是 `build`；可绝对或相对（相对项目根）。
+    pub fn local_build_dir_name(&self) -> Result<String> {
+        Ok(dir_value("local_build_dir", &self.local_build_dir)?
             .unwrap_or_else(|| crate::layout::DEFAULT_BUILD_DIR.to_owned()))
     }
 
-    /// 备份目录：空配置时为 None，用产品 recipe 的默认位置。
-    pub fn backup_dir_name(&self) -> Result<Option<String>> {
-        dir_value("backup_dir", &self.backup_dir)
+    /// 本地模式的备份目录：空配置时为 None，用产品 recipe 的默认位置。
+    pub fn local_backup_dir_name(&self) -> Result<Option<String>> {
+        dir_value("local_backup_dir", &self.local_backup_dir)
     }
 
     /// 下载目录（两种模式共用）；空表示按模式用默认位置。
@@ -183,36 +184,38 @@ mod tests {
     #[test]
     fn internal_dir_defaults_to_dot_phprt() {
         let config = Config::load(Path::new("/nonexistent/phprt.toml")).unwrap();
-        assert_eq!(config.internal_dir_name().unwrap(), ".phprt");
+        assert_eq!(config.local_internal_dir_name().unwrap(), ".phprt");
 
-        let config: Config = toml::from_str("internal_dir = \"\"\n").unwrap();
-        assert_eq!(config.internal_dir_name().unwrap(), ".phprt");
+        let config: Config = toml::from_str("local_internal_dir = \"\"\n").unwrap();
+        assert_eq!(config.local_internal_dir_name().unwrap(), ".phprt");
 
-        let config: Config = toml::from_str("internal_dir = \"data\"\n").unwrap();
-        assert_eq!(config.internal_dir_name().unwrap(), "data");
+        let config: Config = toml::from_str("local_internal_dir = \"data\"\n").unwrap();
+        assert_eq!(config.local_internal_dir_name().unwrap(), "data");
     }
 
     #[test]
     fn dirs_accept_paths_but_not_dot_dot() {
         // 绝对路径和带子目录的相对路径都允许。
         for ok in ["/opt/php", "data/phprt", ".phprt"] {
-            let config: Config = toml::from_str(&format!("internal_dir = '{ok}'\n")).unwrap();
-            assert_eq!(config.internal_dir_name().unwrap(), ok);
+            let config: Config = toml::from_str(&format!("local_internal_dir = '{ok}'\n")).unwrap();
+            assert_eq!(config.local_internal_dir_name().unwrap(), ok);
         }
         for bad in ["../x", "a/../../b", ".", "..", "/opt/../x"] {
-            let config: Config = toml::from_str(&format!("internal_dir = '{bad}'\n")).unwrap();
-            assert!(config.internal_dir_name().is_err(), "{bad}");
+            let config: Config =
+                toml::from_str(&format!("local_internal_dir = '{bad}'\n")).unwrap();
+            assert!(config.local_internal_dir_name().is_err(), "{bad}");
         }
 
         let config: Config =
-            toml::from_str("build_dir = '/tmp/phprt-build'\nbackup_dir = 'backups'\n").unwrap();
-        assert_eq!(config.build_dir_name().unwrap(), "/tmp/phprt-build");
+            toml::from_str("local_build_dir = '/tmp/phprt-build'\nlocal_backup_dir = 'backups'\n")
+                .unwrap();
+        assert_eq!(config.local_build_dir_name().unwrap(), "/tmp/phprt-build");
         assert_eq!(
-            config.backup_dir_name().unwrap().as_deref(),
+            config.local_backup_dir_name().unwrap().as_deref(),
             Some("backups")
         );
-        assert_eq!(Config::default().backup_dir_name().unwrap(), None);
-        assert_eq!(Config::default().build_dir_name().unwrap(), "build");
+        assert_eq!(Config::default().local_backup_dir_name().unwrap(), None);
+        assert_eq!(Config::default().local_build_dir_name().unwrap(), "build");
     }
 
     #[test]
@@ -232,6 +235,14 @@ mod tests {
         );
         assert_eq!(config.global_build_dir_name().unwrap(), "/data/build");
         assert_eq!(config.global_backup_dir_name().unwrap(), "backups");
+    }
+
+    #[test]
+    fn unknown_config_key_is_rejected() {
+        let err = toml::from_str::<Config>("internal_dir = 'x'\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field"), "{err}");
     }
 
     #[test]

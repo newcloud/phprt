@@ -34,7 +34,7 @@ phprt install php@7.4 --component swoole --offline
 ## 3. 缓存布局
 
 工具目录默认 `<项目根>/.phprt`（如 `/www/blog/.phprt`），可用 `phprt.toml` 的
-`internal_dir` 改名；它相对项目根，只写目录名。
+`local_internal_dir` 改名；它相对项目根。
 
 ```text
 .phprt/downloads/
@@ -60,14 +60,14 @@ recipes = ""
 
 # ---- 本地模式（默认）----
 # 工具目录（状态、安装树、缓存、备份）；留空用 .phprt，相对项目根
-internal_dir = ""
+local_internal_dir = ""
 # 源码解压目录；留空用 build
-build_dir = ""
-# 组件 ini 备份目录；留空用 internal_dir/backup
-backup_dir = ""
+local_build_dir = ""
+# 组件 ini 备份目录；留空用 local_internal_dir/backup
+local_backup_dir = ""
 
 # ---- 两种模式共用 ----
-# 下载缓存；空时本地用 internal_dir/downloads，全局用 ~/phprtdownloads
+# 下载缓存；空时本地用 local_internal_dir/downloads，全局用 ~/phprtdownloads
 download_dir = ""
 
 # ---- 全局模式（--global）----

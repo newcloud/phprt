@@ -2,7 +2,7 @@
 
 `install` / `update` 在解压之后按构建顺序编译源码，产物安装到
 `.phprt/<产品>-<产品版本>/`（工具目录默认 `<项目根>/.phprt`，如 `/www/blog/.phprt`；
-名字可由 `phprt.toml` 的 `internal_dir` 或 `--internal-dir` 改，可绝对或相对），
+名字可由 `phprt.toml` 的 `local_internal_dir` 或 `--internal-dir` 改，可绝对或相对），
 最后按产品 profile 做运行时整理和验证；全局模式（`--global --prefix <目录>`）直接装到 prefix，不生成项目入口。
 
 PHP 还会生成

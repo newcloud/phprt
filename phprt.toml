@@ -5,22 +5,22 @@
 recipes = ""
 
 # ---------- 本地模式（默认，不加 --global）----------
-# 下面三个都相对项目根（--root）。
+# 下面三个只在本地模式使用，都相对项目根（--root）。
 # 工具目录：状态、安装树、下载缓存、备份。
 # 留空用 .phprt；也可以写绝对路径（如 /opt/php）。
 # 例：项目根 /www/blog → 空是 /www/blog/.phprt，"data" 是 /www/blog/data。
-internal_dir = ""
+local_internal_dir = ""
 
 # 下载缓存目录：两种模式共用，命令行 --download-dir 优先。
-# 留空时：本地用 internal_dir/downloads，全局用 ~/phprtdownloads。
+# 留空时：本地用 local_internal_dir/downloads，全局用 ~/phprtdownloads。
 # 可绝对或相对（本地相对项目根，全局相对 $HOME）。
 download_dir = ""
 
 # 源码解压目录；留空用 build。
-build_dir = ""
+local_build_dir = ""
 
-# 组件 ini 的备份目录；留空用 internal_dir/backup（即 .phprt/backup）。
-backup_dir = ""
+# 组件 ini 的备份目录；留空用 local_internal_dir/backup（即 .phprt/backup）。
+local_backup_dir = ""
 
 # ---------- 全局模式（--global --prefix <安装目录>）----------
 # 下面三个只在 --global 时使用；相对路径按 $HOME 解析，也可以写绝对路径。

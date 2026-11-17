@@ -39,19 +39,19 @@ struct Cli {
     #[arg(long, global = true, value_parser = path_value)]
     recipes: Option<PathBuf>,
 
-    /// 项目根目录；工具目录默认 <root>/.phprt，名字由 phprt.toml 的 internal_dir 决定
+    /// 项目根目录；本地模式的工具目录默认 <root>/.phprt
     #[arg(long, default_value = ".", global = true)]
     root: PathBuf,
 
-    /// 工具目录（状态、安装树、缓存、备份）；覆盖 phprt.toml，可绝对或相对
+    /// 本地模式的工具目录；覆盖 local_internal_dir，可绝对或相对
     #[arg(long = "internal-dir", global = true, value_parser = path_value)]
     internal_dir: Option<PathBuf>,
 
-    /// 源码解压目录；覆盖 phprt.toml，可绝对或相对
+    /// 解压目录；覆盖 local_build_dir / global_build_dir，可绝对或相对
     #[arg(long = "build-dir", global = true, value_parser = path_value)]
     build_dir: Option<PathBuf>,
 
-    /// 组件登记文件备份目录；覆盖 phprt.toml，可绝对或相对
+    /// 备份目录；覆盖 local_backup_dir / global_backup_dir，可绝对或相对
     #[arg(long = "backup-dir", global = true, value_parser = path_value)]
     backup_dir: Option<PathBuf>,
 
@@ -232,6 +232,14 @@ fn run() -> Result<()> {
         (false, Some(_)) => bail!("--prefix 只能和 --global 一起用"),
         _ => {}
     }
+    if cli.global
+        && cli
+            .internal_dir
+            .as_deref()
+            .is_some_and(|path| !path.as_os_str().is_empty())
+    {
+        bail!("--internal-dir 只用于本地模式；全局模式用 --prefix");
+    }
     if let Some(prefix) = &cli.prefix {
         layout::set_global_prefix(prefix.clone());
     }
@@ -261,22 +269,22 @@ fn run() -> Result<()> {
     } else {
         let internal = effective_dir(
             cli.internal_dir.as_deref(),
-            &config.internal_dir_name()?,
+            &config.local_internal_dir_name()?,
             layout::DEFAULT_INTERNAL_DIR,
-            "internal_dir",
+            "local_internal_dir",
         )?;
         let build = effective_dir(
             cli.build_dir.as_deref(),
-            &config.build_dir_name()?,
+            &config.local_build_dir_name()?,
             layout::DEFAULT_BUILD_DIR,
-            "build_dir",
+            "local_build_dir",
         )?;
         layout::set_internal_dir_name(&internal);
         layout::set_build_dir_name(&build);
         if let Some(backup) = effective_dir_opt(
             cli.backup_dir.as_deref(),
-            &config.backup_dir_name()?,
-            "backup_dir",
+            &config.local_backup_dir_name()?,
+            "local_backup_dir",
         )? {
             layout::set_backup_dir_name(&backup);
         }

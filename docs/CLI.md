@@ -8,10 +8,10 @@ phprt [--recipes <目录>] [--root <目录>] [--global --prefix <目录>] \
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--recipes` | `./recipes` | recipe 目录；`catalog.toml`、`bundles/` 也在这里。空或未指定时用 `phprt.toml` 的 `recipes`，再退回 `./recipes`；命令行优先 |
-| `--root` | `.` | 项目根目录；工具目录默认 `<root>/.phprt`，名字由 `phprt.toml` 的 `internal_dir` 决定 |
-| `--internal-dir` | 无 | 覆盖 `phprt.toml` 的 `internal_dir`；可绝对或相对 |
-| `--build-dir` | 无 | 覆盖 `phprt.toml` 的 `build_dir`；可绝对或相对 |
-| `--backup-dir` | 无 | 覆盖 `phprt.toml` 的 `backup_dir`；可绝对或相对 |
+| `--root` | `.` | 项目根目录；本地模式的工具目录默认 `<root>/.phprt` |
+| `--internal-dir` | 无 | 本地模式专用；覆盖 `local_internal_dir`，可绝对或相对 |
+| `--build-dir` | 无 | 覆盖 `local_build_dir`（本地）/ `global_build_dir`（全局）；可绝对或相对 |
+| `--backup-dir` | 无 | 覆盖 `local_backup_dir`（本地）/ `global_backup_dir`（全局）；可绝对或相对 |
 | `--download-dir` | 无 | 覆盖 `phprt.toml` 的 `download_dir`；两种模式都可用 |
 | `--global` | 关 | 全局模式：产品直接装到 `--prefix`，不生成项目安装树和入口 |
 | `--prefix` | 无 | 全局模式的安装目录；`--global` 时必填，如 `/usr/local/php` |
@@ -26,16 +26,16 @@ recipes = ""
 
 # 工具目录（状态、安装树、缓存、备份）；空用 .phprt。可绝对或相对（相对项目根）。
 # 项目根是 /www/blog 时：空 → /www/blog/.phprt，data → /www/blog/data，/opt/php → /opt/php。
-internal_dir = ""
+local_internal_dir = ""
 
 # 源码解压目录；空用 build。可绝对或相对（相对项目根）。
-build_dir = ""
+local_build_dir = ""
 
-# 组件 ini 备份目录；空用产品 recipe 的默认位置（internal_dir/backup）。
-backup_dir = ""
+# 组件 ini 备份目录；空用产品 recipe 的默认位置（local_internal_dir/backup）。
+local_backup_dir = ""
 
 # 下载缓存：两种模式共用。
-# 空时本地用 internal_dir/downloads，全局用 ~/phprtdownloads。
+# 空时本地用 local_internal_dir/downloads，全局用 ~/phprtdownloads。
 download_dir = ""
 
 # ---- 全局模式（--global）----
@@ -50,9 +50,9 @@ proxy_urls = ["https://gh-proxy.com/"]
 ```
 
 优先级：命令行参数 > `phprt.toml` > 默认值。对应关系：
-`--recipes`/`recipes`、`--internal-dir`/`internal_dir`、`--build-dir`/`build_dir`、
-`--download-dir`/`download_dir`、`--backup-dir`/`backup_dir`、
-`global_build_dir`/`--build-dir`（全局模式）、`global_backup_dir`/`--backup-dir`（全局模式）。本地模式的相对路径按项目根解析；
+`--recipes`/`recipes`、`--internal-dir`/`local_internal_dir`、`--build-dir`/`local_build_dir`、
+`--download-dir`/`download_dir`、`--backup-dir`/`local_backup_dir`；
+全局模式对应 `--build-dir`/`global_build_dir`、`--backup-dir`/`global_backup_dir`。本地模式的相对路径按项目根解析；
 全局模式的相对路径按 `$HOME` 解析。
 
 ## 全局安装

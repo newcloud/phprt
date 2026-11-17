@@ -294,7 +294,7 @@ backup = backup(
 - 重名依次加 `-2`、`-3`；
 - 不写 `backup` 的产品（如 nginx）不做任何备份；
 - 用户可以用 `--no-backup-php-ext-ini` 关掉本次备份（`--force` 不隐含此效果）；
-- 备份位置由 `relative_dir` 相对工具目录给出，也可以用 `phprt.toml` 的 `backup_dir`
+- 备份位置由 `relative_dir` 相对工具目录给出，也可以用 `phprt.toml` 的 `local_backup_dir`
   或 `--backup-dir` 整体覆盖（可绝对或相对）。
 
 ## 6. 入口模板
