@@ -21,9 +21,14 @@ phprt [--recipes <目录>] [--root <目录>] [--global --prefix <目录>] \
 `<root>/phprt.toml`，文件不存在时全部用默认值：
 
 ```toml
+# ---- 两种模式共用 ----
 # recipe 目录；空用 ./recipes，相对路径按项目根解析。--recipes 优先。
 recipes = ""
 
+# 下载缓存；空时本地用 local_internal_dir/downloads，全局用 ~/phprtdownloads。
+download_dir = ""
+
+# ---- 本地模式（默认）----
 # 工具目录（状态、安装树、缓存、备份）；空用 .phprt。可绝对或相对（相对项目根）。
 # 项目根是 /www/blog 时：空 → /www/blog/.phprt，data → /www/blog/data，/opt/php → /opt/php。
 local_internal_dir = ""
@@ -33,10 +38,6 @@ local_build_dir = ""
 
 # 组件 ini 备份目录；空用产品 recipe 的默认位置（local_internal_dir/backup）。
 local_backup_dir = ""
-
-# 下载缓存：两种模式共用。
-# 空时本地用 local_internal_dir/downloads，全局用 ~/phprtdownloads。
-download_dir = ""
 
 # ---- 全局模式（--global）----
 # 只在 --global 时使用；相对 $HOME，也可以写绝对路径。
