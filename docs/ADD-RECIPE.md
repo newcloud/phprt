@@ -18,7 +18,26 @@
 
 补丁号只写在 `recipes/catalog.toml`。recipe、bundle、state 都不写补丁号。
 
-## 2. 先取真实下载地址
+## 2. 版本声明原则
+
+只声明**我们主动适配**的版本：有兼容性判断、补丁、构建参数差异的线。
+
+- 默认用最新、ABI 兼容的依赖不逐系列重复声明；不写就是沿用 bundle 的 `[deps]`
+  默认线，或约束剩下的唯一可用线。
+- 例外必须写：某个系列与某条线不兼容（如 PHP 7.4/8.0 不能用 libxml2 2.12+，
+  也不能用需要 OpenSSL 3.x 的 libcurl 8.23），写进组件或产品的约束，并注释原因。
+- 主线默认只写一处：bundle 的 `[deps]`。组件约束只写“允许/不允许”的事实，
+  不重复默认值。
+- 看到 `注意: xxx 自动使用唯一可用线` 时：说明没有默认线，只是约束恰好只剩一条。
+  要么在 bundle 里写明确默认（推荐），要么把约束收敛成只写例外。
+
+给 agent 的边界：
+
+- 不能拿“默认最新”当借口跳过已知的不兼容、构建失败或行为差异。
+- 不能为了“可配置”新增未验证的线；每条线都要有 catalog 地址并通过构建。
+- 不要把同一个默认线在每个系列里重复一遍，也不要靠约束恰好剩一条来隐式选线。
+
+## 3. 先取真实下载地址
 
 catalog 里的 `url` 必须是上游实际提供文件的地址。先查候选地址是否跳转：
 
@@ -33,7 +52,7 @@ HTTP/2 301
 location: https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz
 ```
 
-## 3. 跳转怎么判定，怎么写
+## 4. 跳转怎么判定，怎么写
 
 | 情况 | 写法 | 例子 |
 | --- | --- | --- |
@@ -63,7 +82,7 @@ location: https://github.com/openssl/openssl/releases/download/openssl-3.5.9/ope
 - 已有注释不删除。升级版本、换地址时同步更新注释内容，保留原意。
 - 注释只解释「为什么是这个地址」，不复述版本号。
 
-## 4. 填 sha256
+## 5. 填 sha256
 
 有官方校验值时写入 `sha256`。没有时先下载再计算：
 
@@ -75,7 +94,7 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 - `sha256` 用于缓存校验，也用于下载完成后的校验。
 - 没有 `sha256` 时只能按远端大小校验，见 [DOWNLOAD.md](DOWNLOAD.md) 第 7 节。
 
-## 4.1 登记旧补丁
+## 5.1 登记旧补丁
 
 需要装指定旧补丁（降级、测试）时，在 catalog 的线里加 `patches`：
 
@@ -89,7 +108,7 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 - `patches` 只放旧补丁，不能和当前补丁重复；
 - 不写 `patches` 时 `install php@8.4.13` 会报错并列出可用补丁。
 
-## 5. 新增版本线
+## 6. 新增版本线
 
 除 catalog 外，还要同步：
 
@@ -102,9 +121,9 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 - 新增产品系列：`recipes/products/<产品>/<系列>.star` +
   `recipes/bundles/<产品>/<系列>.toml` + catalog 里该产品的线
 
-## 6. 添加产品
+## 7. 添加产品
 
-### 6.1 产品 recipe
+### 7.1 产品 recipe
 
 路径是 `recipes/products/<产品>/<系列>.star`。`TARGET` 必须是 `product(...)` dict。
 
@@ -133,7 +152,7 @@ TARGET = product(
   写哪些文件、复制 CA、写组件 ini。
 - 产品自己的 `LINES[系列]` 可以约束依赖线。
 
-### 6.2 组件 recipe
+### 7.2 组件 recipe
 
 路径是 `recipes/components/<产品>/<名字>.star`：
 
@@ -172,7 +191,7 @@ TARGET = target
 - 依赖的集成参数写 `dep_configure`，key 是 `needs` 里的依赖名，或某个 feature 的
   `needs` 里的条件依赖。
 
-### 6.3 PHP 版本事实
+### 7.3 PHP 版本事实
 
 新增或适配一个 PHP 版本时，在 `recipes/products/php/<系列>.star` 写两组常量：
 
@@ -196,7 +215,7 @@ BUNDLED_DISABLE = {
 - 只列 phprt 需要控制的 bundled 组件；`--enable-filter` 这类基础参数不放进表里。
 - 未适配的 PHP 系列先写最小 `bundled` 和 `bundled_disable`，等适配时再补全。
 
-### 6.4 默认启用
+### 7.4 默认启用
 
 默认集合写在 `recipes/bundles/<产品>/<系列>.toml` 的 `[default_components]` 表：
 
@@ -227,7 +246,7 @@ libxml = {}
 - 未适配的产品系列不写 `[default_components]`，等价于空表。
 - 条件 feature 在当前产品 / 依赖线下不可用时提示并丢弃。
 
-### 6.5 PHP 8.5 当前默认
+### 7.5 PHP 8.5 当前默认
 
 ```toml
 product = "php"
@@ -299,7 +318,7 @@ sysvshm = {}
 显式选择；openssl、curl、gd 选中时自动使用各自的 `[component_presets]`。
 默认集和 preset 都只在第一次写 state 时落盘。
 
-## 7. 验收
+## 8. 验收
 
 ```bash
 cargo fmt --all

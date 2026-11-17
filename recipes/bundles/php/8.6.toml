@@ -5,3 +5,5 @@ xdebug = "3.5"
 
 [deps]
 openssl = "3.5"
+libcurl = "8.23"
+libxml2 = "2.15"
