@@ -249,7 +249,10 @@ pub fn backup_file(
     }
 
     let saved = (|| -> Result<PathBuf> {
-        let dir = crate::layout::internal_dir(root).join(&policy.relative_dir);
+        let dir = match crate::layout::backup_dir_name() {
+            Some(value) => crate::layout::resolve(root, value),
+            None => crate::layout::internal_dir(root).join(&policy.relative_dir),
+        };
         fs::create_dir_all(&dir).with_context(|| format!("建不了 {}", dir.display()))?;
         let stamp = stamp()?;
         let name = expand_backup_name(&policy.name, component, mode, &stamp);

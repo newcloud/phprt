@@ -84,7 +84,7 @@ pub fn build(
             Kind::Dep => format!("{tree}/deps/{}-{}", t.name, t.version),
             _ => tree.clone(),
         };
-        let build_dir = format!("build/{}/{}", t.name, stem);
+        let build_dir = format!("{}/{}/{}", layout::build_dir_name(), t.name, stem);
         let ctx = Ctx {
             tree: &tree,
             build: build_dir.clone(),

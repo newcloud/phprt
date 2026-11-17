@@ -521,7 +521,7 @@ fn work_dir(
     let _ = mode;
     match (target.kind, target.source.as_str(), strategy) {
         (Kind::Component, "bundled", Some(Strategy::Standalone)) => root
-            .join("build")
+            .join(crate::layout::build_dir_name())
             .join(&target.name)
             .join(format!("{}-{}", product.name, product.version)),
         _ => root.join(layout::build_dir_of(target)),

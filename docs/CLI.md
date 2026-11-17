@@ -8,6 +8,9 @@ phprt [--recipes <目录>] [--root <目录>] <子命令> <产品>@<系列> [组�
 | --- | --- | --- |
 | `--recipes` | `./recipes` | recipe 目录；`catalog.toml`、`bundles/` 也在这里。空或未指定时用 `phprt.toml` 的 `recipes`，再退回 `./recipes`；命令行优先 |
 | `--root` | `.` | 项目根目录；工具目录默认 `<root>/.phprt`，名字由 `phprt.toml` 的 `internal_dir` 决定 |
+| `--internal-dir` | 无 | 覆盖 `phprt.toml` 的 `internal_dir`；可绝对或相对 |
+| `--build-dir` | 无 | 覆盖 `phprt.toml` 的 `build_dir`；可绝对或相对 |
+| `--backup-dir` | 无 | 覆盖 `phprt.toml` 的 `backup_dir`；可绝对或相对 |
 
 ## 项目配置
 
@@ -17,16 +20,24 @@ phprt [--recipes <目录>] [--root <目录>] <子命令> <产品>@<系列> [组�
 # recipe 目录；空用 ./recipes，相对路径按项目根解析。--recipes 优先。
 recipes = ""
 
-# 工具目录名，相对项目根（--root）；空用 .phprt，只接受单个目录名。
-# 项目根是 /www/blog 时：空 → /www/blog/.phprt，data → /www/blog/data。
+# 工具目录（状态、安装树、缓存、备份）；空用 .phprt。可绝对或相对（相对项目根）。
+# 项目根是 /www/blog 时：空 → /www/blog/.phprt，data → /www/blog/data，/opt/php → /opt/php。
 internal_dir = ""
+
+# 源码解压目录；空用 build。可绝对或相对（相对项目根）。
+build_dir = ""
+
+# 组件 ini 备份目录；空用产品 recipe 的默认位置（internal_dir/backup）。
+backup_dir = ""
 
 # 下载镜像，见 DOWNLOAD.md。
 enable_github_proxy_download = "enable"
 proxy_urls = ["https://gh-proxy.com/"]
 ```
 
-优先级：`--recipes` > `phprt.toml` 的 `recipes` > `./recipes`。
+优先级：命令行参数 > `phprt.toml` > 默认值。对应关系：
+`--recipes`/`recipes`、`--internal-dir`/`internal_dir`、`--build-dir`/`build_dir`、
+`--backup-dir`/`backup_dir`。相对路径按项目根解析。
 
 ## 目标
 

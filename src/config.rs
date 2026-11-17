@@ -22,6 +22,27 @@ pub struct Config {
     /// recipe 目录；空表示 `./recipes`。相对路径按项目根解析。
     #[serde(default)]
     pub recipes: String,
+    /// 源码解压目录；空表示 `build`。可绝对或相对。
+    #[serde(default)]
+    pub build_dir: String,
+    /// 组件登记文件备份目录；空表示用产品 recipe 的默认位置（internal_dir/backup）。
+    #[serde(default)]
+    pub backup_dir: String,
+}
+
+/// 目录配置：空（或 `.`）视为没配置；去掉尾部 `/`；拒绝 `.`/`..` 段。
+pub fn dir_value(key: &str, value: &str) -> Result<Option<String>> {
+    let value = value.trim().trim_end_matches(['/', '\\']);
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value
+        .split(['/', '\\'])
+        .any(|part| part == "." || part == "..")
+    {
+        bail!("{FILE_NAME}: {key} 不能包含 . 或 .. 路径段");
+    }
+    Ok(Some(value.to_owned()))
 }
 
 fn default_switch() -> String {
@@ -39,6 +60,8 @@ impl Default for Config {
             proxy_urls: default_proxy_urls(),
             internal_dir: String::new(),
             recipes: String::new(),
+            build_dir: String::new(),
+            backup_dir: String::new(),
         }
     }
 }
@@ -56,6 +79,8 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("{} 不是合法的配置", path.display()))?;
         config.github_proxy()?;
         config.internal_dir_name()?;
+        config.build_dir_name()?;
+        config.backup_dir_name()?;
         Ok(config)
     }
 
@@ -69,16 +94,21 @@ impl Config {
         }
     }
 
-    /// 工具目录名：空配置时是 `.phprt`；只允许单个目录名。
+    /// 工具目录：空配置时是 `.phprt`；可绝对或相对（相对项目根）。
     pub fn internal_dir_name(&self) -> Result<String> {
-        let name = self.internal_dir.trim();
-        if name.is_empty() {
-            return Ok(crate::layout::DEFAULT_INTERNAL_DIR.to_owned());
-        }
-        if name == "." || name == ".." || name.contains('/') || name.contains('\\') {
-            bail!("{FILE_NAME}: internal_dir 只能是单个目录名，不能带路径分隔符");
-        }
-        Ok(name.to_owned())
+        Ok(dir_value("internal_dir", &self.internal_dir)?
+            .unwrap_or_else(|| crate::layout::DEFAULT_INTERNAL_DIR.to_owned()))
+    }
+
+    /// 解压目录：空配置时是 `build`；可绝对或相对（相对项目根）。
+    pub fn build_dir_name(&self) -> Result<String> {
+        Ok(dir_value("build_dir", &self.build_dir)?
+            .unwrap_or_else(|| crate::layout::DEFAULT_BUILD_DIR.to_owned()))
+    }
+
+    /// 备份目录：空配置时为 None，用产品 recipe 的默认位置。
+    pub fn backup_dir_name(&self) -> Result<Option<String>> {
+        dir_value("backup_dir", &self.backup_dir)
     }
 
     /// 校验开关并转换成下载器使用的设置。
@@ -131,12 +161,26 @@ mod tests {
     }
 
     #[test]
-    fn internal_dir_must_be_a_single_name() {
-        for bad in ["a/b", "/x", "../x", ".", "..", "a\\b"] {
-            // 用 TOML 的字面量字符串，反斜杠不会被当成转义。
+    fn dirs_accept_paths_but_not_dot_dot() {
+        // 绝对路径和带子目录的相对路径都允许。
+        for ok in ["/opt/php", "data/phprt", ".phprt"] {
+            let config: Config = toml::from_str(&format!("internal_dir = '{ok}'\n")).unwrap();
+            assert_eq!(config.internal_dir_name().unwrap(), ok);
+        }
+        for bad in ["../x", "a/../../b", ".", "..", "/opt/../x"] {
             let config: Config = toml::from_str(&format!("internal_dir = '{bad}'\n")).unwrap();
             assert!(config.internal_dir_name().is_err(), "{bad}");
         }
+
+        let config: Config =
+            toml::from_str("build_dir = '/tmp/phprt-build'\nbackup_dir = 'backups'\n").unwrap();
+        assert_eq!(config.build_dir_name().unwrap(), "/tmp/phprt-build");
+        assert_eq!(
+            config.backup_dir_name().unwrap().as_deref(),
+            Some("backups")
+        );
+        assert_eq!(Config::default().backup_dir_name().unwrap(), None);
+        assert_eq!(Config::default().build_dir_name().unwrap(), "build");
     }
 
     #[test]

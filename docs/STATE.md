@@ -206,5 +206,6 @@ artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
 - `remove` 按标记里的记录删 ini 和产物，删完把标记里的组件和方案指纹一起改掉；
   静态组件走重编，标记由构建重新写。
 - 标记不写进 state，也不参与 `list`。
-- `.phprt/backup/` 存 `add` / `remove` 改动 ini 前的备份，不写 state、不写标记，
+- `.phprt/backup/` 存 `add` / `remove` 改动 ini 前的备份（可用 `backup_dir` /
+  `--backup-dir` 改位置），不写 state、不写标记，
   `list` 不会把它当成安装产品。

@@ -4,10 +4,18 @@
 # 命令行 --recipes 优先于这里。
 recipes = ""
 
-# 工具目录名：状态、安装树、下载缓存、备份都放这里。
-# 相对项目根（--root）；留空用 .phprt。
-# 例如项目根是 /www/blog，默认就是 /www/blog/.phprt；写 "data" 就是 /www/blog/data。
+# 工具目录：状态、安装树、下载缓存、备份都放这里。
+# 留空用 .phprt；相对路径按项目根（--root）解析，也可以写绝对路径。
+# 例：项目根 /www/blog → 空是 /www/blog/.phprt，"data" 是 /www/blog/data，
+# "/opt/php" 就是 /opt/php。
 internal_dir = ""
+
+# 源码解压目录；空用 build。可绝对或相对（相对项目根）。
+build_dir = ""
+
+# 组件 ini 的备份目录；空用产品 recipe 的默认位置（internal_dir/backup）。
+# 可绝对或相对（相对项目根）。例：/data/php-backups
+backup_dir = ""
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable
 enable_github_proxy_download = "enable"

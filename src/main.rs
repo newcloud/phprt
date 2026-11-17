@@ -43,6 +43,18 @@ struct Cli {
     #[arg(long, default_value = ".", global = true)]
     root: PathBuf,
 
+    /// 工具目录（状态、安装树、缓存、备份）；覆盖 phprt.toml，可绝对或相对
+    #[arg(long = "internal-dir", global = true, value_parser = path_value)]
+    internal_dir: Option<PathBuf>,
+
+    /// 源码解压目录；覆盖 phprt.toml，可绝对或相对
+    #[arg(long = "build-dir", global = true, value_parser = path_value)]
+    build_dir: Option<PathBuf>,
+
+    /// 组件登记文件备份目录；覆盖 phprt.toml，可绝对或相对
+    #[arg(long = "backup-dir", global = true, value_parser = path_value)]
+    backup_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -203,7 +215,24 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let config = config::Config::load(&cli.root.join(config::FILE_NAME))?;
-    layout::set_internal_dir_name(&config.internal_dir_name()?);
+    let internal = effective_dir(
+        cli.internal_dir.as_deref(),
+        &config.internal_dir_name()?,
+        layout::DEFAULT_INTERNAL_DIR,
+        "internal_dir",
+    )?;
+    let build = effective_dir(
+        cli.build_dir.as_deref(),
+        &config.build_dir_name()?,
+        layout::DEFAULT_BUILD_DIR,
+        "build_dir",
+    )?;
+    let backup = effective_dir_opt(
+        cli.backup_dir.as_deref(),
+        &config.backup_dir_name()?,
+        "backup_dir",
+    )?;
+    layout::set_dirs(&internal, &build, backup.as_deref());
     let recipes = effective_recipes(cli.recipes.as_deref(), &cli.root, &config);
     // 只有 install 判定“已装/中断/该升级”，update 的语义就是跟到最新补丁。
     let install_cmd = matches!(&cli.cmd, Cmd::Install { .. });
@@ -1095,6 +1124,33 @@ fn path_value(value: &str) -> std::result::Result<PathBuf, String> {
     Ok(PathBuf::from(value))
 }
 
+/// `--internal-dir` / `--build-dir`：命令行优先于 phprt.toml，空值按未指定处理。
+fn effective_dir(
+    given: Option<&Path>,
+    configured: &str,
+    default: &str,
+    key: &str,
+) -> Result<String> {
+    let raw = match given {
+        Some(path) if !path.as_os_str().is_empty() => path.to_string_lossy().into_owned(),
+        _ => configured.to_owned(),
+    };
+    Ok(config::dir_value(key, &raw)?.unwrap_or_else(|| default.to_owned()))
+}
+
+/// `--backup-dir`：空表示用产品 recipe 的默认位置。
+fn effective_dir_opt(
+    given: Option<&Path>,
+    configured: &Option<String>,
+    key: &str,
+) -> Result<Option<String>> {
+    let raw = match given {
+        Some(path) if !path.as_os_str().is_empty() => path.to_string_lossy().into_owned(),
+        _ => configured.clone().unwrap_or_default(),
+    };
+    config::dir_value(key, &raw)
+}
+
 fn effective_recipes(given: Option<&Path>, root: &Path, config: &config::Config) -> PathBuf {
     if let Some(path) = given
         && !path.as_os_str().is_empty()
@@ -1308,6 +1364,31 @@ fn plan_root(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn dirs_precedence_is_cli_then_config_then_default() {
+        assert_eq!(
+            effective_dir(Some(Path::new("/x")), "cfg", "build", "build_dir").unwrap(),
+            "/x"
+        );
+        assert_eq!(
+            effective_dir(None, "cfg", "build", "build_dir").unwrap(),
+            "cfg"
+        );
+        assert_eq!(
+            effective_dir(Some(Path::new("")), "", "build", "build_dir").unwrap(),
+            "build"
+        );
+        assert!(effective_dir(Some(Path::new("../x")), "", "build", "build_dir").is_err());
+
+        assert_eq!(
+            effective_dir_opt(None, &Some("backups".into()), "backup_dir")
+                .unwrap()
+                .as_deref(),
+            Some("backups")
+        );
+        assert_eq!(effective_dir_opt(None, &None, "backup_dir").unwrap(), None);
+    }
 
     fn config_with(recipes: &str) -> config::Config {
         toml::from_str(&format!("recipes = '{recipes}'\n")).unwrap()

@@ -5,12 +5,30 @@ use crate::recipe::{Kind, Target};
 
 /// 没配置 `internal_dir` 时使用的目录名。
 pub const DEFAULT_INTERNAL_DIR: &str = ".phprt";
+/// 没配置 `build_dir` 时使用的目录名。
+pub const DEFAULT_BUILD_DIR: &str = "build";
 
 static INTERNAL_DIR: OnceLock<String> = OnceLock::new();
+static BUILD_DIR: OnceLock<String> = OnceLock::new();
+static BACKUP_DIR: OnceLock<String> = OnceLock::new();
 
-/// 由 `phprt.toml` 的 `internal_dir` 在启动时设置；重复设置忽略。
-pub fn set_internal_dir_name(name: &str) {
-    let _ = INTERNAL_DIR.set(name.to_owned());
+/// 启动时写入三个目录配置；重复设置忽略。`backup` 为 None 时用产品 recipe 的默认位置。
+pub fn set_dirs(internal: &str, build: &str, backup: Option<&str>) {
+    let _ = INTERNAL_DIR.set(internal.to_owned());
+    let _ = BUILD_DIR.set(build.to_owned());
+    if let Some(backup) = backup {
+        let _ = BACKUP_DIR.set(backup.to_owned());
+    }
+}
+
+/// 相对路径按项目根解析，绝对路径原样使用。
+pub fn resolve(root: &Path, value: &str) -> PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
 }
 
 /// 当前配置的工具目录名。
@@ -23,7 +41,20 @@ pub fn internal_dir_name() -> &'static str {
 
 /// 项目内工具数据目录（状态、安装树、缓存、备份）的根。
 pub fn internal_dir(root: &Path) -> PathBuf {
-    root.join(internal_dir_name())
+    resolve(root, internal_dir_name())
+}
+
+/// 当前配置的解压目录。
+pub fn build_dir_name() -> &'static str {
+    BUILD_DIR
+        .get()
+        .map(String::as_str)
+        .unwrap_or(DEFAULT_BUILD_DIR)
+}
+
+/// 当前配置的备份目录；None 表示用产品 recipe 的默认位置。
+pub fn backup_dir_name() -> Option<&'static str> {
+    BACKUP_DIR.get().map(String::as_str)
 }
 
 /// URL 最后一段就是缓存文件名；查询串和锚点不属于文件名。
@@ -50,9 +81,13 @@ pub fn archive_stem(name: &str) -> String {
 /// 解压目录，相对于项目根：build/<名字>/<压缩包 stem>。
 /// 产品用产品名（如 build/php/php-8.5.12），组件和依赖库用各自的名字。
 pub fn build_dir(name: &str, url: &str) -> String {
+    build_dir_with(build_dir_name(), name, url)
+}
+
+fn build_dir_with(base: &str, name: &str, url: &str) -> String {
     let archive = archive_name(url).unwrap_or_else(|| "source".to_owned());
     let stem = archive_stem(&archive);
-    format!("build/{name}/{stem}")
+    format!("{base}/{name}/{stem}")
 }
 
 pub fn build_dir_of(target: &Target) -> String {
@@ -100,6 +135,30 @@ mod tests {
         assert_eq!(archive_stem("curl-8.11.1.tar.bz2"), "curl-8.11.1");
         assert_eq!(archive_stem("curl-8.11.1.zip"), "curl-8.11.1");
         assert_eq!(archive_stem("plain"), "plain");
+    }
+
+    #[test]
+    fn resolve_keeps_absolute_paths() {
+        assert_eq!(
+            resolve(Path::new("/proj"), "build"),
+            PathBuf::from("/proj/build")
+        );
+        assert_eq!(
+            resolve(Path::new("/proj"), "/tmp/build"),
+            PathBuf::from("/tmp/build")
+        );
+    }
+
+    #[test]
+    fn build_dir_uses_the_configured_base() {
+        assert_eq!(
+            build_dir_with("/tmp/b", "php", "https://php.net/php-8.5.12.tar.xz"),
+            "/tmp/b/php/php-8.5.12"
+        );
+        assert_eq!(
+            build_dir_with("data/build", "swoole", "https://x/swoole-6.2.5.tgz"),
+            "data/build/swoole/swoole-6.2.5"
+        );
     }
 
     #[test]
