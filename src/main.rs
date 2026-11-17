@@ -55,6 +55,18 @@ struct Cli {
     #[arg(long = "backup-dir", global = true, value_parser = path_value)]
     backup_dir: Option<PathBuf>,
 
+    /// 全局模式：把产品直接装到 --prefix，不在项目里生成安装树
+    #[arg(long, global = true)]
+    global: bool,
+
+    /// 全局安装目录；只在 --global 时使用
+    #[arg(long, global = true, value_parser = path_value)]
+    prefix: Option<PathBuf>,
+
+    /// 下载缓存目录；两种模式都可用，覆盖 phprt.toml 的 download_dir
+    #[arg(long = "download-dir", global = true, value_parser = path_value)]
+    download_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -215,24 +227,68 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let config = config::Config::load(&cli.root.join(config::FILE_NAME))?;
-    let internal = effective_dir(
-        cli.internal_dir.as_deref(),
-        &config.internal_dir_name()?,
-        layout::DEFAULT_INTERNAL_DIR,
-        "internal_dir",
-    )?;
-    let build = effective_dir(
-        cli.build_dir.as_deref(),
-        &config.build_dir_name()?,
-        layout::DEFAULT_BUILD_DIR,
-        "build_dir",
-    )?;
-    let backup = effective_dir_opt(
-        cli.backup_dir.as_deref(),
-        &config.backup_dir_name()?,
-        "backup_dir",
-    )?;
-    layout::set_dirs(&internal, &build, backup.as_deref());
+    match (cli.global, cli.prefix.as_deref()) {
+        (true, None) => bail!("--global 需要 --prefix，例如 --prefix /usr/local/php"),
+        (false, Some(_)) => bail!("--prefix 只能和 --global 一起用"),
+        _ => {}
+    }
+    if let Some(prefix) = &cli.prefix {
+        layout::set_global_prefix(prefix.clone());
+    }
+    if layout::is_global() {
+        let build = effective_global_dir(
+            cli.build_dir.as_deref(),
+            &config.global_build_dir_name()?,
+            "~/phprtbuild",
+            "global_build_dir",
+        )?;
+        let backup = effective_global_dir(
+            cli.backup_dir.as_deref(),
+            &config.global_backup_dir_name()?,
+            "~/phprtbackup",
+            "global_backup_dir",
+        )?;
+        layout::set_build_dir_name(&build);
+        layout::set_backup_dir_name(&backup);
+        if let Some(dir) = effective_download_dir(
+            cli.download_dir.as_deref(),
+            config.download_dir_name()?.as_deref(),
+            &cli.root,
+            true,
+        )? {
+            layout::set_download_dir(dir);
+        }
+    } else {
+        let internal = effective_dir(
+            cli.internal_dir.as_deref(),
+            &config.internal_dir_name()?,
+            layout::DEFAULT_INTERNAL_DIR,
+            "internal_dir",
+        )?;
+        let build = effective_dir(
+            cli.build_dir.as_deref(),
+            &config.build_dir_name()?,
+            layout::DEFAULT_BUILD_DIR,
+            "build_dir",
+        )?;
+        layout::set_internal_dir_name(&internal);
+        layout::set_build_dir_name(&build);
+        if let Some(backup) = effective_dir_opt(
+            cli.backup_dir.as_deref(),
+            &config.backup_dir_name()?,
+            "backup_dir",
+        )? {
+            layout::set_backup_dir_name(&backup);
+        }
+        if let Some(dir) = effective_download_dir(
+            cli.download_dir.as_deref(),
+            config.download_dir_name()?.as_deref(),
+            &cli.root,
+            false,
+        )? {
+            layout::set_download_dir(dir);
+        }
+    }
     let recipes = effective_recipes(cli.recipes.as_deref(), &cli.root, &config);
     // 只有 install 判定“已装/中断/该升级”，update 的语义就是跟到最新补丁。
     let install_cmd = matches!(&cli.cmd, Cmd::Install { .. });
@@ -624,6 +680,20 @@ fn run() -> Result<()> {
 
             // 现场判定放在下载之前：拒绝重复安装时不碰网络、不写文件。
             // `--downloads` 只取源码，不算安装，所以不判定。
+            let tree_display = layout::display_path(
+                &cli.root,
+                &layout::tree_path(&cli.root, &product_name, &version),
+            );
+            let installed_tree = if project.installed_version.is_empty() {
+                tree_display.clone()
+            } else {
+                layout::display_path(
+                    &cli.root,
+                    &layout::tree_path(&cli.root, &product_name, &project.installed_version),
+                )
+            };
+            let command = command_prefix(&cli);
+
             let mut plan = marker::Plan::Install;
             if install_cmd && !download.downloads {
                 plan = marker::decide(
@@ -636,13 +706,15 @@ fn run() -> Result<()> {
                         site: marker::site(&cli.root, &product_name, &version),
                         scheme: &scheme.digest,
                         requested_command: &scheme.command,
+                        tree: tree_display.clone(),
+                        installed_tree,
+                        command: &command,
                     },
                     force,
                 )?;
                 if plan == marker::Plan::Continue {
                     println!(
-                        "上次安装没有收尾（缺 {}/{product_name}-{version}/{}），继续安装",
-                        layout::internal_dir_name(),
+                        "上次安装没有收尾（缺 {tree_display}/{}），继续安装",
                         marker::FILE_NAME
                     );
                 }
@@ -832,7 +904,11 @@ fn run() -> Result<()> {
             // 静态组件要把产品整个重编，和 remove 一样先提示代价、确认。
             let rebuild = reg.product_mode(&component, &mode)?.strategy_kind()? == Strategy::Fold;
             if rebuild && !matches!(site, marker::Site::Absent) && !force {
-                let warning = manage::rebuild_warning(&product, &name, &mode, &tree_version);
+                let tree_display = layout::display_path(
+                    &cli.root,
+                    &layout::tree_path(&cli.root, &product_name, &tree_version),
+                );
+                let warning = manage::rebuild_warning(&product, &name, &mode, &tree_display);
                 if !manage::interactive() {
                     bail!("{warning}\n\n非交互环境用 --force 确认重编");
                 }
@@ -951,11 +1027,15 @@ fn run() -> Result<()> {
                     let removal = manage::remove_plan(&reg, &component, installed, &tree, force)?;
                     if removal.fold {
                         stale_artifacts = removal.facts.artifacts.clone();
+                        let tree_display = layout::display_path(
+                            &cli.root,
+                            &layout::tree_path(&cli.root, &product_name, &tree_version),
+                        );
                         let warning = manage::rebuild_warning(
                             &product,
                             &name,
                             &removal.facts.mode,
-                            &tree_version,
+                            &tree_display,
                         );
                         if !force {
                             if !manage::interactive() {
@@ -1065,7 +1145,7 @@ fn fetch_sources(
     if !download.downloads {
         tools::check(reg.product_any()?, order)?;
     }
-    let cache = layout::internal_dir(root).join("downloads");
+    let cache = layout::downloads_dir(root);
     let sources = sources::collect(order, root, &cache)?;
     let options = phprt_download::Options {
         jobs: download.download_jobs,
@@ -1138,6 +1218,43 @@ fn effective_dir(
     Ok(config::dir_value(key, &raw)?.unwrap_or_else(|| default.to_owned()))
 }
 
+/// 全局模式的目录：命令行 > phprt.toml > 默认；相对路径按 `$HOME` 解析。
+fn effective_global_dir(
+    given: Option<&Path>,
+    configured: &str,
+    default: &str,
+    key: &str,
+) -> Result<String> {
+    let raw = match given {
+        Some(path) if !path.as_os_str().is_empty() => path.to_string_lossy().into_owned(),
+        _ => configured.to_owned(),
+    };
+    let value = config::dir_value(key, &raw)?.unwrap_or_else(|| default.to_owned());
+    Ok(layout::resolve_home(&value)?.display().to_string())
+}
+
+/// 下载目录：命令行 > phprt.toml > 模式默认。
+/// 本地默认 `<internal>/downloads`（返回 None，让 layout 用默认），全局默认 `~/phprtdownloads`。
+/// 相对路径：本地按项目根，全局按 `$HOME`。
+fn effective_download_dir(
+    given: Option<&Path>,
+    configured: Option<&str>,
+    root: &Path,
+    global: bool,
+) -> Result<Option<PathBuf>> {
+    let raw = match given {
+        Some(path) if !path.as_os_str().is_empty() => path.to_string_lossy().into_owned(),
+        _ => configured.unwrap_or("").to_owned(),
+    };
+    let value = config::dir_value("download_dir", &raw)?;
+    match (value, global) {
+        (Some(value), true) => Ok(Some(layout::resolve_home(&value)?)),
+        (Some(value), false) => Ok(Some(layout::resolve(root, &value))),
+        (None, true) => Ok(Some(layout::resolve_home("~/phprtdownloads")?)),
+        (None, false) => Ok(None),
+    }
+}
+
 /// `--backup-dir`：空表示用产品 recipe 的默认位置。
 fn effective_dir_opt(
     given: Option<&Path>,
@@ -1149,6 +1266,16 @@ fn effective_dir_opt(
         _ => configured.clone().unwrap_or_default(),
     };
     config::dir_value(key, &raw)
+}
+
+/// 示例命令的前缀：全局模式带上 `--global --prefix`。
+fn command_prefix(cli: &Cli) -> String {
+    match &cli.prefix {
+        Some(prefix) if cli.global => {
+            format!("phprt --global --prefix {}", prefix.display())
+        }
+        _ => "phprt".to_owned(),
+    }
 }
 
 fn effective_recipes(given: Option<&Path>, root: &Path, config: &config::Config) -> PathBuf {
@@ -1178,12 +1305,9 @@ fn single_target(target: &[String], command: &str) -> Result<String> {
     }
 }
 
-/// 打印路径时去掉项目根前缀，输出 `.phprt/...` 这种可复制的相对路径。
+/// 打印路径时优先去掉项目根前缀；全局模式保留绝对路径。
 fn relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    layout::display_path(root, path)
 }
 
 fn split_target(spec: &str) -> Result<(String, String)> {
@@ -1211,6 +1335,25 @@ fn available_products(metas: &[RecipeMeta], product: &str) -> String {
 }
 
 fn print_states(root: &Path) -> Result<()> {
+    if let Some(prefix) = layout::global_prefix() {
+        let file = prefix.join(".phprt-state.json");
+        if !file.is_file() {
+            println!(
+                "没有已安装的产品（{} 不是 phprt 安装目录）",
+                prefix.display()
+            );
+            return Ok(());
+        }
+        let state = ProjectState::load(&file)?;
+        println!("{:<14} {:<12} tree", "product", "version");
+        println!(
+            "{:<14} {:<12} {}",
+            format!("{}@{}", state.product, state.series),
+            state.installed_version,
+            prefix.display()
+        );
+        return Ok(());
+    }
     let dir = layout::internal_dir(root);
     if !dir.is_dir() {
         println!("没有已安装的产品（{} 不存在）", dir.display());
@@ -1364,6 +1507,31 @@ fn plan_root(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn download_dir_follows_mode_defaults() {
+        let root = Path::new("/proj");
+        assert_eq!(
+            effective_download_dir(None, None, root, false).unwrap(),
+            None
+        );
+        assert_eq!(
+            effective_download_dir(None, None, root, true).unwrap(),
+            Some(layout::resolve_home("~/phprtdownloads").unwrap())
+        );
+        assert_eq!(
+            effective_download_dir(Some(Path::new("/data/d")), None, root, false).unwrap(),
+            Some(PathBuf::from("/data/d"))
+        );
+        assert_eq!(
+            effective_download_dir(None, Some("d"), root, false).unwrap(),
+            Some(PathBuf::from("/proj/d"))
+        );
+        assert_eq!(
+            effective_download_dir(None, Some("/data/d"), root, true).unwrap(),
+            Some(PathBuf::from("/data/d"))
+        );
+    }
 
     #[test]
     fn dirs_precedence_is_cli_then_config_then_default() {

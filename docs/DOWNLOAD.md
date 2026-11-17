@@ -58,8 +58,22 @@ phprt install php@7.4 --component swoole --offline
 # recipe 目录；空用 ./recipes
 recipes = ""
 
-# 工具目录名（状态、安装树、缓存、备份），相对项目根；留空用 .phprt
+# ---- 本地模式（默认）----
+# 工具目录（状态、安装树、缓存、备份）；留空用 .phprt，相对项目根
 internal_dir = ""
+# 源码解压目录；留空用 build
+build_dir = ""
+# 组件 ini 备份目录；留空用 internal_dir/backup
+backup_dir = ""
+
+# ---- 两种模式共用 ----
+# 下载缓存；空时本地用 internal_dir/downloads，全局用 ~/phprtdownloads
+download_dir = ""
+
+# ---- 全局模式（--global）----
+# 留空用 ~/phprtbuild、~/phprtbackup
+global_build_dir = ""
+global_backup_dir = ""
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable
 enable_github_proxy_download = "enable"

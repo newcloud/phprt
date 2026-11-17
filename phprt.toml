@@ -4,18 +4,29 @@
 # 命令行 --recipes 优先于这里。
 recipes = ""
 
-# 工具目录：状态、安装树、下载缓存、备份都放这里。
-# 留空用 .phprt；相对路径按项目根（--root）解析，也可以写绝对路径。
-# 例：项目根 /www/blog → 空是 /www/blog/.phprt，"data" 是 /www/blog/data，
-# "/opt/php" 就是 /opt/php。
+# ---------- 本地模式（默认，不加 --global）----------
+# 下面三个都相对项目根（--root）。
+# 工具目录：状态、安装树、下载缓存、备份。
+# 留空用 .phprt；也可以写绝对路径（如 /opt/php）。
+# 例：项目根 /www/blog → 空是 /www/blog/.phprt，"data" 是 /www/blog/data。
 internal_dir = ""
 
-# 源码解压目录；空用 build。可绝对或相对（相对项目根）。
+# 下载缓存目录：两种模式共用，命令行 --download-dir 优先。
+# 留空时：本地用 internal_dir/downloads，全局用 ~/phprtdownloads。
+# 可绝对或相对（本地相对项目根，全局相对 $HOME）。
+download_dir = ""
+
+# 源码解压目录；留空用 build。
 build_dir = ""
 
-# 组件 ini 的备份目录；空用产品 recipe 的默认位置（internal_dir/backup）。
-# 可绝对或相对（相对项目根）。例：/data/php-backups
+# 组件 ini 的备份目录；留空用 internal_dir/backup（即 .phprt/backup）。
 backup_dir = ""
+
+# ---------- 全局模式（--global --prefix <安装目录>）----------
+# 下面三个只在 --global 时使用；相对路径按 $HOME 解析，也可以写绝对路径。
+# 默认分别是 ~/phprtbuild、~/phprtbackup。
+global_build_dir = ""
+global_backup_dir = ""
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable
 enable_github_proxy_download = "enable"

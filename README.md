@@ -146,7 +146,26 @@ phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,redis'
 
 列表就是完整方案；会替换当前方案，不跟默认组件合并。
 
-## 9. 只下载、离线、代理
+## 9. 装到项目外（/opt 之类）
+
+默认装在项目里；想把 PHP 装到 `/usr/local/php` 这类位置时用全局模式：
+
+```bash
+phprt --global --prefix /usr/local/php install php@8.5
+/usr/local/php/bin/php -v
+
+phprt --global --prefix /usr/local/php add php@8.5 swoole
+phprt --global --prefix /usr/local/php remove php@8.5 swoole
+```
+
+- 安装树、状态和完成标记都在 `<prefix>` 里，不生成项目入口；
+- 源码默认解压到 `~/phprtbuild`，下载缓存默认 `~/phprtdownloads`，ini 备份默认 `~/phprtbackup`；
+  下载目录用 `download_dir` / `--download-dir`，另外两个用 `global_build_dir` /
+  `global_backup_dir` 或 `--build-dir` / `--backup-dir` 改；
+- 重复安装、`--force`、add/remove 的判定和本地一致；`--force` 会把 prefix 改名成
+  `<prefix>-backup-<日期>`。
+
+## 10. 只下载、离线、代理
 
 ```bash
 phprt install php@8.5 --downloads          # 只下载源码，不解压、不写状态
@@ -157,7 +176,7 @@ phprt install php@8.5 --download-jobs 10 --download-host-jobs 2 --connections 4 
 
 下载中断后重跑同一条命令会接着下；连接被重置会自动重试。
 
-## 10. 只装 PHP 本体
+## 11. 只装 PHP 本体
 
 ```bash
 phprt install php@8.5 \
@@ -166,7 +185,7 @@ phprt install php@8.5 \
   --disable-default-component libxml
 ```
 
-## 11. nginx
+## 12. nginx
 
 ```bash
 phprt install nginx@1.29
@@ -186,7 +205,7 @@ phprt remove nginx@1.29 lua-nginx-module --force
 
 nginx 不生成 `myphp` 之类的入口，直接用安装树里的二进制。
 
-## 12. 目录
+## 13. 目录
 
 ```text
 .phprt/php-8.5.12/            安装树（目录名默认 .phprt，可配置）
@@ -198,7 +217,7 @@ build/                        解压后的源码（build_dir 可改）
 myphp-8.5                     项目入口
 ```
 
-## 13. 构建工具
+## 14. 构建工具
 
 编译前检查宿主机命令；下列是产品至少需要的：
 
@@ -214,7 +233,7 @@ error: 需要 gcc >= 9，当前 1.0.0
 error: 缺少构建工具: patchelf
 ```
 
-## 14. 可装的产品
+## 15. 可装的产品
 
 ```text
 PHP    7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6
@@ -224,7 +243,7 @@ nginx  1.29
 PHP 扩展用 `phprt list php@8.5` 查看，包含内置扩展（curl、gd、mbstring…）和 PECL 扩展
 （swoole、xdebug、redis、imagick…），以及每个扩展支持的方式（static / shared）。
 
-## 15. 更多
+## 16. 更多
 
 - [docs/CLI.md](docs/CLI.md)：完整命令、参数、错误
 - [docs/BUILD.md](docs/BUILD.md)：构建、日志、跳过规则

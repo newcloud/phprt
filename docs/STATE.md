@@ -13,6 +13,9 @@
 它相对项目根（`--root`），留空时才是 `.phprt`。例如项目根是 `/www/blog`，
 默认状态文件就是 `/www/blog/.phprt/php-8.5/state.json`。
 
+全局模式（`--global --prefix /usr/local/php`）没有项目目录：状态写在
+`<prefix>/.phprt-state.json`，完成标记是 `<prefix>/.phprt-installed`。
+
 按产品系列存放：php 8.5 → `.phprt/php-8.5/`，nginx 1.29 → `.phprt/nginx-1.29/`。
 补丁从 8.5.12 升到 8.5.13 时，方案和记录不会丢；安装树仍然是
 `.phprt/php-8.5.13/`。不同产品、不同系列的 state 互不影响。

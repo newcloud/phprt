@@ -34,13 +34,8 @@ pub fn run(
     let root = fs::canonicalize(opts.root)
         .with_context(|| format!("读不到项目根 {}", opts.root.display()))?;
     let product = reg.product_any()?;
-    let tree = format!(
-        "{}/{}-{}",
-        crate::layout::internal_dir(&root).display(),
-        product.name,
-        product.version
-    );
-    let tree_path = PathBuf::from(&tree);
+    let tree_path = crate::layout::tree_path(&root, &product.name, &product.version);
+    let tree = tree_path.display().to_string();
     let product_build = root.join(layout::build_dir_of(product));
     let jobs = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -986,7 +981,7 @@ fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
 }
 
 fn write_entry(root: &Path, product: &Target, recipes: &Path, target: &str) -> Result<()> {
-    if product.profile.entry.is_empty() {
+    if product.profile.entry.is_empty() || crate::layout::is_global() {
         return Ok(());
     }
     let template_path = recipes

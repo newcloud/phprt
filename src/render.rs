@@ -64,7 +64,11 @@ pub fn build(
     features: &BTreeMap<String, Vec<String>>,
 ) -> Result<Sim> {
     let product = reg.product_any()?;
-    let tree = format!(".phprt/{}-{}", product.name, product.version);
+    let root_path = std::path::Path::new(root);
+    let tree = layout::display_path(
+        root_path,
+        &layout::tree_path(root_path, &product.name, &product.version),
+    );
     let mut nodes = Vec::new();
 
     for t in order {

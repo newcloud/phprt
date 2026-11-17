@@ -27,6 +27,13 @@ phprt remove php@8.5 gd                     # 静态：确认后重编 PHP
 phprt scheme php@8.5                        # 打印一条 install 命令
 ```
 
+两种安装模式：
+
+- **本地（默认）**：安装树、状态、入口都在项目里（`<root>/.phprt`、`<root>/myphp-<系列>`）。
+- **全局（`--global --prefix <目录>`）**：安装树就是 prefix，状态和完成标记在 prefix 里，
+  不生成项目入口；下载、解压、备份默认在 `~/phprtdownload`、`~/phprtbuild`、`~/phprtbackup`。
+  判定逻辑相同，提示里用绝对路径并带上 `--global --prefix`。
+
 ## 2. install
 
 ### 2.1 判定矩阵

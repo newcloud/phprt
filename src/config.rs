@@ -28,6 +28,15 @@ pub struct Config {
     /// 组件登记文件备份目录；空表示用产品 recipe 的默认位置（internal_dir/backup）。
     #[serde(default)]
     pub backup_dir: String,
+    /// 下载目录（两种模式共用）；空时本地用 internal/downloads、全局用 ~/phprtdownloads。
+    #[serde(default)]
+    pub download_dir: String,
+    /// 全局模式的解压目录；空表示 `~/phprtbuild`。
+    #[serde(default)]
+    pub global_build_dir: String,
+    /// 全局模式的备份目录；空表示 `~/phprtbackup`。
+    #[serde(default)]
+    pub global_backup_dir: String,
 }
 
 /// 目录配置：空（或 `.`）视为没配置；去掉尾部 `/`；拒绝 `.`/`..` 段。
@@ -62,6 +71,9 @@ impl Default for Config {
             recipes: String::new(),
             build_dir: String::new(),
             backup_dir: String::new(),
+            download_dir: String::new(),
+            global_build_dir: String::new(),
+            global_backup_dir: String::new(),
         }
     }
 }
@@ -81,6 +93,9 @@ impl Config {
         config.internal_dir_name()?;
         config.build_dir_name()?;
         config.backup_dir_name()?;
+        config.download_dir_name()?;
+        config.global_build_dir_name()?;
+        config.global_backup_dir_name()?;
         Ok(config)
     }
 
@@ -109,6 +124,23 @@ impl Config {
     /// 备份目录：空配置时为 None，用产品 recipe 的默认位置。
     pub fn backup_dir_name(&self) -> Result<Option<String>> {
         dir_value("backup_dir", &self.backup_dir)
+    }
+
+    /// 下载目录（两种模式共用）；空表示按模式用默认位置。
+    pub fn download_dir_name(&self) -> Result<Option<String>> {
+        dir_value("download_dir", &self.download_dir)
+    }
+
+    /// 全局模式解压目录；默认 `~/phprtbuild`。
+    pub fn global_build_dir_name(&self) -> Result<String> {
+        Ok(dir_value("global_build_dir", &self.global_build_dir)?
+            .unwrap_or_else(|| "~/phprtbuild".to_owned()))
+    }
+
+    /// 全局模式备份目录；默认 `~/phprtbackup`。
+    pub fn global_backup_dir_name(&self) -> Result<String> {
+        Ok(dir_value("global_backup_dir", &self.global_backup_dir)?
+            .unwrap_or_else(|| "~/phprtbackup".to_owned()))
     }
 
     /// 校验开关并转换成下载器使用的设置。
@@ -181,6 +213,25 @@ mod tests {
         );
         assert_eq!(Config::default().backup_dir_name().unwrap(), None);
         assert_eq!(Config::default().build_dir_name().unwrap(), "build");
+    }
+
+    #[test]
+    fn global_dirs_default_to_home_names() {
+        let config = Config::default();
+        assert_eq!(config.download_dir_name().unwrap(), None);
+        assert_eq!(config.global_build_dir_name().unwrap(), "~/phprtbuild");
+        assert_eq!(config.global_backup_dir_name().unwrap(), "~/phprtbackup");
+
+        let config: Config = toml::from_str(
+            "download_dir = '/data/downloads'\nglobal_build_dir = '/data/build'\nglobal_backup_dir = 'backups'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.download_dir_name().unwrap().as_deref(),
+            Some("/data/downloads")
+        );
+        assert_eq!(config.global_build_dir_name().unwrap(), "/data/build");
+        assert_eq!(config.global_backup_dir_name().unwrap(), "backups");
     }
 
     #[test]

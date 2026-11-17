@@ -1,7 +1,8 @@
 # 命令行
 
 ```bash
-phprt [--recipes <目录>] [--root <目录>] <子命令> <产品>@<系列> [组件或目标] [选项]
+phprt [--recipes <目录>] [--root <目录>] [--global --prefix <目录>] \
+      <子命令> <产品>@<系列> [组件或目标] [选项]
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -11,6 +12,9 @@ phprt [--recipes <目录>] [--root <目录>] <子命令> <产品>@<系列> [组�
 | `--internal-dir` | 无 | 覆盖 `phprt.toml` 的 `internal_dir`；可绝对或相对 |
 | `--build-dir` | 无 | 覆盖 `phprt.toml` 的 `build_dir`；可绝对或相对 |
 | `--backup-dir` | 无 | 覆盖 `phprt.toml` 的 `backup_dir`；可绝对或相对 |
+| `--download-dir` | 无 | 覆盖 `phprt.toml` 的 `download_dir`；两种模式都可用 |
+| `--global` | 关 | 全局模式：产品直接装到 `--prefix`，不生成项目安装树和入口 |
+| `--prefix` | 无 | 全局模式的安装目录；`--global` 时必填，如 `/usr/local/php` |
 
 ## 项目配置
 
@@ -30,6 +34,16 @@ build_dir = ""
 # 组件 ini 备份目录；空用产品 recipe 的默认位置（internal_dir/backup）。
 backup_dir = ""
 
+# 下载缓存：两种模式共用。
+# 空时本地用 internal_dir/downloads，全局用 ~/phprtdownloads。
+download_dir = ""
+
+# ---- 全局模式（--global）----
+# 只在 --global 时使用；相对 $HOME，也可以写绝对路径。
+# 默认：~/phprtbuild、~/phprtbackup
+global_build_dir = ""
+global_backup_dir = ""
+
 # 下载镜像，见 DOWNLOAD.md。
 enable_github_proxy_download = "enable"
 proxy_urls = ["https://gh-proxy.com/"]
@@ -37,7 +51,34 @@ proxy_urls = ["https://gh-proxy.com/"]
 
 优先级：命令行参数 > `phprt.toml` > 默认值。对应关系：
 `--recipes`/`recipes`、`--internal-dir`/`internal_dir`、`--build-dir`/`build_dir`、
-`--backup-dir`/`backup_dir`。相对路径按项目根解析。
+`--download-dir`/`download_dir`、`--backup-dir`/`backup_dir`、
+`global_build_dir`/`--build-dir`（全局模式）、`global_backup_dir`/`--backup-dir`（全局模式）。本地模式的相对路径按项目根解析；
+全局模式的相对路径按 `$HOME` 解析。
+
+## 全局安装
+
+把产品装到项目外的目录（如 `/opt`），状态和完成标记放在 prefix 里；不生成项目入口：
+
+```bash
+phprt --global --prefix /usr/local/php install php@8.5
+/usr/local/php/bin/php -v
+
+phprt --global --prefix /usr/local/php add    php@8.5 swoole
+phprt --global --prefix /usr/local/php remove php@8.5 swoole
+phprt --global --prefix /usr/local/php list   php@8.5
+phprt --global --prefix /usr/local/php scheme php@8.5
+```
+
+| 内容 | 位置 |
+| --- | --- |
+| 安装树 | `--prefix` 指定的目录（如 `/usr/local/php`） |
+| 状态 / 完成标记 | `<prefix>/.phprt-state.json`、`<prefix>/.phprt-installed` |
+| 源码解压 | 默认 `~/phprtbuild`，`--build-dir` 或 `global_build_dir` 可改 |
+| 下载缓存 | 默认 `~/phprtdownloads`，`download_dir` 或 `--download-dir` 可改 |
+| ini 备份 | 默认 `~/phprtbackup`，`--backup-dir` 或 `global_backup_dir` 可改 |
+
+重复安装、`--force`、add/remove 的判定和本地一致；`--force` 会把 `<prefix>` 改名成
+`<prefix>-backup-<日期>`，提示里会给出实际路径。
 
 ## 目标
 

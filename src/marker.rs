@@ -80,10 +80,16 @@ pub struct InstallFacts<'a> {
     pub scheme: &'a str,
     /// 本次方案的可执行命令，配置不一致时打给用户对比。
     pub requested_command: &'a str,
+    /// 本次目标安装树的显示路径（全局模式是绝对路径）。
+    pub tree: String,
+    /// 已装版本安装树的显示路径。
+    pub installed_tree: String,
+    /// 建议命令的前缀，如 `phprt` 或 `phprt --global --prefix /usr/local/php`。
+    pub command: &'a str,
 }
 
 pub fn tree_path(root: &Path, product: &str, version: &str) -> PathBuf {
-    crate::layout::internal_dir(root).join(format!("{product}-{version}"))
+    crate::layout::tree_path(root, product, version)
 }
 
 pub fn marker_path(root: &Path, product: &str, version: &str) -> PathBuf {
@@ -308,6 +314,9 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
         site,
         scheme,
         requested_command,
+        tree,
+        installed_tree,
+        command,
     } = facts;
 
     if !installed.is_empty() && installed == target {
@@ -318,19 +327,15 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
             (_, true) => Ok(Plan::InstallAfterBackup),
             // 目录在、标记不在：上次没装完。
             (Site::Interrupted, false) => Ok(Plan::Continue),
-            (Site::Complete(tree), false) => {
-                let dir = crate::layout::internal_dir_name();
-                let mut head = format!(
-                    "{product} {target} 已安装（{dir}/{product}-{target}），编译配置与本次方案一致"
-                );
-                if tree.scheme != *scheme {
-                    head = format!(
-                        "{product} {target} 已安装（{dir}/{product}-{target}），编译配置与本次方案不一致"
-                    );
-                    if !tree.scheme_cmd.is_empty() {
+            (Site::Complete(record), false) => {
+                let mut head =
+                    format!("{product} {target} 已安装（{tree}），编译配置与本次方案一致");
+                if record.scheme != *scheme {
+                    head = format!("{product} {target} 已安装（{tree}），编译配置与本次方案不一致");
+                    if !record.scheme_cmd.is_empty() {
                         head.push_str(&format!(
                             "\n  已装方案: {}\n  本次方案: {}",
-                            tree.scheme_cmd, requested_command
+                            record.scheme_cmd, requested_command
                         ));
                     } else {
                         head.push_str(&format!(
@@ -341,8 +346,8 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
                 bail!(
                     "{head}\n  \
                      要重新安装，任选其一：\n    \
-                     phprt install {product}@{target} --force     # 已装版本改名成 {dir}/{product}-{target}-backup-<日期>，然后全新安装\n    \
-                     rm -rf {dir}/{product}-{target}             # 确认不再需要这个版本，删掉后再装"
+                     {command} install {product}@{target} --force     # 已装版本改名成 {tree}-backup-<日期>，然后全新安装\n    \
+                     rm -rf {tree}             # 确认不再需要这个版本，删掉后再装"
                 )
             }
         };
@@ -363,13 +368,12 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
         return Ok(Plan::Install);
     }
 
-    let dir = crate::layout::internal_dir_name();
     bail!(
-        "已存在旧版本 {product} {installed}（{dir}/{product}-{installed}），本次解析到 {target}\n  \
+        "已存在旧版本 {product} {installed}（{installed_tree}），本次解析到 {target}\n  \
          要装 {target}，请显式写补丁号：\n    \
-         phprt install {product}@{target}\n  \
+         {command} install {product}@{target}\n  \
          或者交给 --force：直接装 {target}，不动 {installed} 这个版本\n    \
-         phprt install {product}@{series} --force"
+         {command} install {product}@{series} --force"
     )
 }
 
@@ -382,7 +386,16 @@ pub fn backup_tree(root: &Path, product: &str, version: &str) -> Result<PathBuf>
     let parent = from
         .parent()
         .with_context(|| format!("算不出 {} 的目录", from.display()))?;
-    let base = format!("{product}-{version}-backup-{}", stamp()?);
+    let stamp = stamp()?;
+    let base = if crate::layout::is_global() {
+        let name = from
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("{product}-{version}"));
+        format!("{name}-backup-{stamp}")
+    } else {
+        format!("{product}-{version}-backup-{stamp}")
+    };
     let mut target = parent.join(&base);
     let mut index = 1;
     while target.exists() {
@@ -425,6 +438,9 @@ mod tests {
             site,
             scheme,
             requested_command: "phprt install php@8.4 'swoole=mode=shared'",
+            tree: ".phprt/php-8.4.14".into(),
+            installed_tree: ".phprt/php-8.4.14".into(),
+            command: "phprt",
         }
     }
 
@@ -505,6 +521,7 @@ mod tests {
     fn series_install_over_older_patch_asks_for_explicit_patch() {
         let mut facts = facts(Site::Absent, "abc");
         facts.installed = "8.4.12";
+        facts.installed_tree = ".phprt/php-8.4.12".into();
         facts.explicit_patch = false;
         let err = decide(&facts, false).unwrap_err().to_string();
         assert!(

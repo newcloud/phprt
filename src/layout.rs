@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use anyhow::{Result, anyhow};
+
 use crate::recipe::{Kind, Target};
 
 /// 没配置 `internal_dir` 时使用的目录名。
@@ -11,14 +13,89 @@ pub const DEFAULT_BUILD_DIR: &str = "build";
 static INTERNAL_DIR: OnceLock<String> = OnceLock::new();
 static BUILD_DIR: OnceLock<String> = OnceLock::new();
 static BACKUP_DIR: OnceLock<String> = OnceLock::new();
+static GLOBAL_PREFIX: OnceLock<PathBuf> = OnceLock::new();
+static DOWNLOAD_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-/// 启动时写入三个目录配置；重复设置忽略。`backup` 为 None 时用产品 recipe 的默认位置。
-pub fn set_dirs(internal: &str, build: &str, backup: Option<&str>) {
-    let _ = INTERNAL_DIR.set(internal.to_owned());
-    let _ = BUILD_DIR.set(build.to_owned());
-    if let Some(backup) = backup {
-        let _ = BACKUP_DIR.set(backup.to_owned());
+pub fn set_internal_dir_name(name: &str) {
+    let _ = INTERNAL_DIR.set(name.to_owned());
+}
+
+pub fn set_build_dir_name(name: &str) {
+    let _ = BUILD_DIR.set(name.to_owned());
+}
+
+pub fn set_backup_dir_name(name: &str) {
+    let _ = BACKUP_DIR.set(name.to_owned());
+}
+
+pub fn set_download_dir(dir: PathBuf) {
+    let _ = DOWNLOAD_DIR.set(dir);
+}
+
+/// `--global --prefix`：产品直接装到这个目录。
+pub fn set_global_prefix(prefix: PathBuf) {
+    let _ = GLOBAL_PREFIX.set(prefix);
+}
+
+pub fn global_prefix() -> Option<&'static Path> {
+    GLOBAL_PREFIX.get().map(PathBuf::as_path)
+}
+
+pub fn is_global() -> bool {
+    GLOBAL_PREFIX.get().is_some()
+}
+
+/// 安装树：本地模式是 `<internal>/<产品>-<版本>`，全局模式就是 prefix。
+pub fn tree_path(root: &Path, product: &str, version: &str) -> PathBuf {
+    match global_prefix() {
+        Some(prefix) => prefix.to_path_buf(),
+        None => internal_dir(root).join(format!("{product}-{version}")),
     }
+}
+
+/// 状态文件：本地在 `<internal>/<产品>-<系列>/state.json`，全局在 prefix 里。
+pub fn state_file(root: &Path, product: &str, series: &str) -> PathBuf {
+    match global_prefix() {
+        Some(prefix) => prefix.join(".phprt-state.json"),
+        None => internal_dir(root)
+            .join(format!("{product}-{series}"))
+            .join("state.json"),
+    }
+}
+
+/// 下载缓存：本地在 internal/downloads，全局用配置的目录。
+pub fn downloads_dir(root: &Path) -> PathBuf {
+    match DOWNLOAD_DIR.get() {
+        Some(dir) => dir.clone(),
+        None => internal_dir(root).join("downloads"),
+    }
+}
+
+/// 全局模式的目录：`~` 展开，相对路径按 `$HOME` 解析。
+pub fn resolve_home(value: &str) -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("读不到 HOME，无法定位全局目录"))?;
+    let value = value.trim();
+    if value == "~" {
+        return Ok(home);
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        return Ok(home.join(rest));
+    }
+    let path = Path::new(value);
+    Ok(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        home.join(path)
+    })
+}
+
+/// 输出时优先显示相对项目根的路径，全局模式的绝对路径原样显示。
+pub fn display_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string())
 }
 
 /// 相对路径按项目根解析，绝对路径原样使用。
@@ -135,6 +212,23 @@ mod tests {
         assert_eq!(archive_stem("curl-8.11.1.tar.bz2"), "curl-8.11.1");
         assert_eq!(archive_stem("curl-8.11.1.zip"), "curl-8.11.1");
         assert_eq!(archive_stem("plain"), "plain");
+    }
+
+    #[test]
+    fn home_relative_paths_expand() {
+        let home = std::env::var_os("HOME").expect("测试环境要有 HOME");
+        assert_eq!(
+            resolve_home("~/phprtbuild").unwrap(),
+            PathBuf::from(&home).join("phprtbuild")
+        );
+        assert_eq!(
+            resolve_home("data").unwrap(),
+            PathBuf::from(&home).join("data")
+        );
+        assert_eq!(
+            resolve_home("/data/build").unwrap(),
+            PathBuf::from("/data/build")
+        );
     }
 
     #[test]
