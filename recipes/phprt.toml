@@ -1,3 +1,9 @@
+# 下载和目录配置，和 catalog.toml 同级。
+
+# 项目内工具目录名：状态、安装树、下载缓存、备份都放这里。
+# 留空用 .phprt。
+internal_dir = ""
+
 # 下载配置，和 catalog.toml 同级。
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable

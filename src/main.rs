@@ -39,7 +39,7 @@ struct Cli {
     #[arg(long, default_value = "recipes", global = true)]
     recipes: PathBuf,
 
-    /// 项目根目录；状态写在 <root>/.phprt 下
+    /// 项目根目录；工具目录默认 <root>/.phprt，名字由 phprt.toml 的 internal_dir 决定
     #[arg(long, default_value = ".", global = true)]
     root: PathBuf,
 
@@ -202,6 +202,8 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    let config = config::Config::load(&cli.recipes.join(config::FILE_NAME))?;
+    layout::set_internal_dir_name(&config.internal_dir_name()?);
     // 只有 install 判定“已装/中断/该升级”，update 的语义就是跟到最新补丁。
     let install_cmd = matches!(&cli.cmd, Cmd::Install { .. });
     let force = matches!(&cli.cmd, Cmd::Install { force: true, .. });
@@ -609,7 +611,8 @@ fn run() -> Result<()> {
                 )?;
                 if plan == marker::Plan::Continue {
                     println!(
-                        "上次安装没有收尾（缺 .phprt/{product_name}-{version}/{}），继续安装",
+                        "上次安装没有收尾（缺 {}/{product_name}-{version}/{}），继续安装",
+                        layout::internal_dir_name(),
                         marker::FILE_NAME
                     );
                 }

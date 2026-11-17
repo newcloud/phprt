@@ -9,6 +9,9 @@
 .phprt/<产品>-<系列>/state.json
 ```
 
+下文用 `.phprt` 表示工具目录；实际名字由 `phprt.toml` 的 `internal_dir` 决定，
+留空时才是 `.phprt`。
+
 按产品系列存放：php 8.5 → `.phprt/php-8.5/`，nginx 1.29 → `.phprt/nginx-1.29/`。
 补丁从 8.5.12 升到 8.5.13 时，方案和记录不会丢；安装树仍然是
 `.phprt/php-8.5.13/`。不同产品、不同系列的 state 互不影响。

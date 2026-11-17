@@ -12,7 +12,8 @@ cp target/release/phprt ~/.local/bin/      # 或者直接用 ./target/release/ph
 ## 2. 在项目里使用
 
 `--recipes` 是 recipe 目录，默认是当前目录下的 `recipes`；`--root` 是项目根，默认 `.`，
-安装树和状态都写在 `<root>/.phprt/` 下。项目里没有 `recipes/` 时必须显式指定：
+安装树和状态都写在 `<root>/.phprt/` 下（目录名可在 `recipes/phprt.toml` 的 `internal_dir` 改）。
+项目里没有 `recipes/` 时必须显式指定：
 
 ```bash
 cd ~/myproject
@@ -184,7 +185,7 @@ nginx 不生成 `myphp` 之类的入口，直接用安装树里的二进制。
 ## 12. 目录
 
 ```text
-.phprt/php-8.5.12/            安装树
+.phprt/php-8.5.12/            安装树（目录名默认 .phprt，可由 phprt.toml 的 internal_dir 改）
 .phprt/php-8.5/state.json     当前方案
 .phprt/downloads/             源码缓存（跨产品共享）
 .phprt/backup/                删除前的 ini 备份

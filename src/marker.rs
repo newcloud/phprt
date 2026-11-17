@@ -319,12 +319,13 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
             // 目录在、标记不在：上次没装完。
             (Site::Interrupted, false) => Ok(Plan::Continue),
             (Site::Complete(tree), false) => {
+                let dir = crate::layout::internal_dir_name();
                 let mut head = format!(
-                    "{product} {target} 已安装（.phprt/{product}-{target}），编译配置与本次方案一致"
+                    "{product} {target} 已安装（{dir}/{product}-{target}），编译配置与本次方案一致"
                 );
                 if tree.scheme != *scheme {
                     head = format!(
-                        "{product} {target} 已安装（.phprt/{product}-{target}），编译配置与本次方案不一致"
+                        "{product} {target} 已安装（{dir}/{product}-{target}），编译配置与本次方案不一致"
                     );
                     if !tree.scheme_cmd.is_empty() {
                         head.push_str(&format!(
@@ -340,8 +341,8 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
                 bail!(
                     "{head}\n  \
                      要重新安装，任选其一：\n    \
-                     phprt install {product}@{target} --force     # 已装版本改名成 .phprt/{product}-{target}-backup-<日期>，然后全新安装\n    \
-                     rm -rf .phprt/{product}-{target}             # 确认不再需要这个版本，删掉后再装"
+                     phprt install {product}@{target} --force     # 已装版本改名成 {dir}/{product}-{target}-backup-<日期>，然后全新安装\n    \
+                     rm -rf {dir}/{product}-{target}             # 确认不再需要这个版本，删掉后再装"
                 )
             }
         };
@@ -362,8 +363,9 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
         return Ok(Plan::Install);
     }
 
+    let dir = crate::layout::internal_dir_name();
     bail!(
-        "已存在旧版本 {product} {installed}（.phprt/{product}-{installed}），本次解析到 {target}\n  \
+        "已存在旧版本 {product} {installed}（{dir}/{product}-{installed}），本次解析到 {target}\n  \
          要装 {target}，请显式写补丁号：\n    \
          phprt install {product}@{target}\n  \
          或者交给 --force：直接装 {target}，不动 {installed} 这个版本\n    \

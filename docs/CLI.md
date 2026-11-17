@@ -7,7 +7,7 @@ phprt [--recipes <目录>] [--root <目录>] <子命令> <产品>@<系列> [组�
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--recipes` | `recipes` | recipe 目录；`catalog.toml`、`bundles/` 也在这里 |
-| `--root` | `.` | 项目根目录；状态写在 `<root>/.phprt` 下 |
+| `--root` | `.` | 项目根目录；工具目录默认 `<root>/.phprt`，名字由 `phprt.toml` 的 `internal_dir` 决定 |
 
 ## 目标
 

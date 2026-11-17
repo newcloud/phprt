@@ -8,13 +8,16 @@ use serde::Deserialize;
 /// 下载配置文件，和 catalog.toml 同级放在 recipe 目录下。
 pub const FILE_NAME: &str = "phprt.toml";
 
-/// `recipes/phprt.toml`：下载行为配置。文件不存在时用内置默认值。
+/// `recipes/phprt.toml`：下载和目录配置。文件不存在时用内置默认值。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default = "default_switch")]
     pub enable_github_proxy_download: String,
     #[serde(default = "default_proxy_urls")]
     pub proxy_urls: Vec<String>,
+    /// 项目内工具目录名（状态、安装树、缓存、备份）；空表示 `.phprt`。
+    #[serde(default)]
+    pub internal_dir: String,
 }
 
 fn default_switch() -> String {
@@ -30,6 +33,7 @@ impl Default for Config {
         Self {
             enable_github_proxy_download: default_switch(),
             proxy_urls: default_proxy_urls(),
+            internal_dir: String::new(),
         }
     }
 }
@@ -43,10 +47,23 @@ impl Config {
         }
         let text =
             fs::read_to_string(path).with_context(|| format!("读不到 {}", path.display()))?;
-        let config: Self = toml::from_str(&text)
-            .with_context(|| format!("{} 不是合法的下载配置", path.display()))?;
+        let config: Self =
+            toml::from_str(&text).with_context(|| format!("{} 不是合法的配置", path.display()))?;
         config.github_proxy()?;
+        config.internal_dir_name()?;
         Ok(config)
+    }
+
+    /// 工具目录名：空配置时是 `.phprt`；只允许单个目录名。
+    pub fn internal_dir_name(&self) -> Result<String> {
+        let name = self.internal_dir.trim();
+        if name.is_empty() {
+            return Ok(crate::layout::DEFAULT_INTERNAL_DIR.to_owned());
+        }
+        if name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+            bail!("{FILE_NAME}: internal_dir 只能是单个目录名，不能带路径分隔符");
+        }
+        Ok(name.to_owned())
     }
 
     /// 校验开关并转换成下载器使用的设置。
@@ -84,6 +101,27 @@ mod tests {
         )
         .unwrap();
         assert!(!config.github_proxy().unwrap().enabled);
+    }
+
+    #[test]
+    fn internal_dir_defaults_to_dot_phprt() {
+        let config = Config::load(Path::new("/nonexistent/phprt.toml")).unwrap();
+        assert_eq!(config.internal_dir_name().unwrap(), ".phprt");
+
+        let config: Config = toml::from_str("internal_dir = \"\"\n").unwrap();
+        assert_eq!(config.internal_dir_name().unwrap(), ".phprt");
+
+        let config: Config = toml::from_str("internal_dir = \"data\"\n").unwrap();
+        assert_eq!(config.internal_dir_name().unwrap(), "data");
+    }
+
+    #[test]
+    fn internal_dir_must_be_a_single_name() {
+        for bad in ["a/b", "/x", "../x", ".", "..", "a\\b"] {
+            // 用 TOML 的字面量字符串，反斜杠不会被当成转义。
+            let config: Config = toml::from_str(&format!("internal_dir = '{bad}'\n")).unwrap();
+            assert!(config.internal_dir_name().is_err(), "{bad}");
+        }
     }
 
     #[test]

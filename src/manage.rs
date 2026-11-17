@@ -305,7 +305,11 @@ fn stamp() -> Result<String> {
 /// 会重编产品时给用户的提示：说明代价，并给出自行备份的命令（不代做备份）。
 /// fold 只表示“和产品一起构建”，不等于静态链接（nginx 动态模块也是 fold）。
 pub fn rebuild_warning(product: &Target, name: &str, mode: &str, version: &str) -> String {
-    let tree = format!(".phprt/{}-{version}", product.name);
+    let tree = format!(
+        "{}/{}-{version}",
+        crate::layout::internal_dir_name(),
+        product.name
+    );
     format!(
         "{name}（{mode}）需要和 {} 一起重新 configure/make（约 3 分钟），\
          并覆盖 {tree}/ 里的文件\n建议先自行备份：\n  cp -a {tree} {tree}.bak-$(date +%F-%H%M)",

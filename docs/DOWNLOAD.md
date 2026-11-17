@@ -33,6 +33,8 @@ phprt install php@7.4 --component swoole --offline
 
 ## 3. 缓存布局
 
+工具目录默认 `.phprt`，可用 `phprt.toml` 的 `internal_dir` 改名。
+
 ```text
 .phprt/downloads/
 ├── php-8.5.12.tar.xz
@@ -43,7 +45,7 @@ phprt install php@7.4 --component swoole --offline
 └── swoole-6.2.5.tgz
 ```
 
-- 缓存跨 PHP 系列共享；删除 `.phprt` 即清空。
+- 缓存跨 PHP 系列共享；删除工具目录（默认 `.phprt`）即清空。
 - 下载完成后才把 `.part` 改名为最终文件；中途退出不会留下“看起来完整”的包。
 - `.part.json` 记录最终 URL、ETag、Last-Modified、总长和分片数。
 
@@ -52,6 +54,9 @@ phprt install php@7.4 --component swoole --offline
 `recipes/phprt.toml` 控制 GitHub 镜像：
 
 ```toml
+# 项目内工具目录名（状态、安装树、缓存、备份）；留空用 .phprt
+internal_dir = ""
+
 # GitHub 直连失败后是否改用镜像下载：enable / disable
 enable_github_proxy_download = "enable"
 

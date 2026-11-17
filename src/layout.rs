@@ -1,11 +1,29 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::recipe::{Kind, Target};
 
+/// 没配置 `internal_dir` 时使用的目录名。
+pub const DEFAULT_INTERNAL_DIR: &str = ".phprt";
+
+static INTERNAL_DIR: OnceLock<String> = OnceLock::new();
+
+/// 由 `phprt.toml` 的 `internal_dir` 在启动时设置；重复设置忽略。
+pub fn set_internal_dir_name(name: &str) {
+    let _ = INTERNAL_DIR.set(name.to_owned());
+}
+
+/// 当前配置的工具目录名。
+pub fn internal_dir_name() -> &'static str {
+    INTERNAL_DIR
+        .get()
+        .map(String::as_str)
+        .unwrap_or(DEFAULT_INTERNAL_DIR)
+}
+
 /// 项目内工具数据目录（状态、安装树、缓存、备份）的根。
-/// 现在固定 `.phprt`；以后要改成可配置（如 phprt.toml）只改这里。
 pub fn internal_dir(root: &Path) -> PathBuf {
-    root.join(".phprt")
+    root.join(internal_dir_name())
 }
 
 /// URL 最后一段就是缓存文件名；查询串和锚点不属于文件名。
