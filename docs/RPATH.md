@@ -16,6 +16,13 @@ patchelf --set-rpath <rpath> --force-rpath <file>
 目标：默认不依赖任何外部命令，且设置结果与 `patchelf --set-rpath --force-rpath`
 在加载器可见语义上完全一致；同时保留 patchelf 命令作为可选后端，一行配置即可切换。
 
+可移动性是产品契约（v2 `docs/WHEEL-LIBS.md` + v2 AGENTS 第 4 条）：整棵树改名、
+搬到别处后不重编、不改配置仍能跑。机制是 `$ORIGIN` 相对 RPATH（按 ELF 自身位置
+算，与项目绝对路径无关）；`myphp` 入口脚本里的环境变量只承载「必须用环境变量才能
+表达的配置」（`PHPRC` / `PHP_INI_SCAN_DIR` / `SSL_CERT_FILE` / `PATH` /
+`extension_dir`），**不参与动态库查找**，v2 实测 `myphp` 里 `LD_LIBRARY_PATH` 为 0 处。
+本方案不得破坏这条分层。
+
 ## 2. 设计：新增 `crates/rpath`（包名 `phprt-rpath`）
 
 结构对标 `crates/download`：crate 只收「文件 + rpath 字符串 + 后端选择」，
@@ -76,6 +83,10 @@ rpath_backend = "oxipatch"
 | 同值重复设置 | no-op | 幂等 |
 | `$ORIGIN` 字面量 | 原样写入 | 原样写入 |
 | `readelf -d` 可见结果 | 单个 DT_RPATH=值，无 DT_RUNPATH | 同左 |
+| DT_RPATH 传递性 | 保留（php → libssl → libcrypto 三级链靠它） | 同左 |
+
+`DT_RPATH` 的传递性是 `--force-rpath` 存在的理由（v2 WHEEL-LIBS.md §4），
+`DT_RUNPATH` 没有传递性，所以两个后端都必须写 `DT_RPATH`，不得退化成 RUNPATH。
 
 两者输出不要求逐字节一致：oxipatch 在 .dynstr 整体迁移时会把废弃的旧
 rpath 槽清零，patchelf 保留残字节；加载器语义相同，字节差异不作为验收项。
@@ -133,6 +144,12 @@ cargo clippy --workspace --all-targets
   一份真实 aarch64 / armv7 ELF。
 - 比对项：`readelf -d` 的 DT_RPATH 值与无 DT_RUNPATH 残留；`ldd` 解析正常；
   可执行物能跑（`php -v`、`nginx -V`）；oxipatch 后端前后文件大小变化合理。
+- 语料覆盖三类 rpath 形态（搬移后相对位置不同）：平铺库的 `$ORIGIN`、
+  `bin/*` 的 `$ORIGIN/../lib/phprt`、扩展的 `$ORIGIN/../../../phprt`。
+- 可移动性验收（沿用 v2 WHEEL-LIBS.md §7）：`env -i ./myphp -v`（不靠任何环境
+  变量）；整棵树 `mv` 到别的目录后照跑；全树扫描不得出现绝对路径 RPATH
+  （`readelf -d | grep -E 'RPATH|RUNPATH' | grep -v '$ORIGIN'` 无输出）；
+  三级链 `php → libssl → libcrypto` 在 `env -i` 下能加载。
 
 命令级验收（AGENTS.md 第 5 节全量矩阵之外，加跑两遍）：
 
