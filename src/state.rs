@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::recipe::{ComponentSpec, Kind, Registry, Selection, Target};
 
 pub fn state_path(root: &Path, product: &str, series: &str) -> PathBuf {
-    root.join(".phprt")
+    crate::layout::internal_dir(root)
         .join(format!("{product}-{series}"))
         .join("state.json")
 }

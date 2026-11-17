@@ -156,13 +156,13 @@ gd（static）需要和 php 一起重新 configure/make（约 3 分钟），并�
 
 | 项 | 规则 |
 | --- | --- |
-| 目录 | `.phprt/backup/`，不存在则创建 |
+| 目录 | 由产品 profile 的 `backup(dir, name)` 声明；`dir` 相对工具内部目录（默认 `.phprt`），PHP 声明为 `backup` |
 | 文件名 | `<日期时间>_<组件名>.ini`，如 `20261117-003012_swoole.ini`；重名加 `-2` |
 | 范围 | 只备份 ini；不备份 `.so`、不备份已装版本 |
 | 时机 | remove 删除 ini 前；add 覆盖已有 ini 前；以后修改 php.ini 等同理 |
 | 跳过 | 内容与将要写入的一致时不备份；ini 不存在时不备份 |
-| 失败 | 备份失败则终止本次操作，并提示可用 `--no-ini-backup` |
-| 参数 | `--no-ini-backup` 跳过本次备份（`--force` 不隐含此项） |
+| 失败 | 备份失败则终止本次操作，并提示可用 `--no-backup-php-ext-ini` |
+| 参数 | `--no-backup-php-ext-ini` 跳过本次备份（`--force` 不隐含此项） |
 
 ```text
 $ phprt remove php@8.5 swoole
@@ -245,7 +245,7 @@ state 只保存两类数据，解析结果每次重算：
 - `install --force` 在“目标补丁已经装过”时，等下载和解压成功后把现有树改名
   `<产品>-<补丁>-backup-<日期>`（重名加 `-2`），再全新安装；补丁不同时不改名；
 - 不忽略下载失败、编译错误、校验失败；
-- 不替代 ini 备份（备份仍需 `--no-ini-backup` 才跳过）；
+- 不替代 ini 备份（备份仍需 `--no-backup-php-ext-ini` 才跳过）；
 - 非 TTY 下所有需要确认的操作都必须靠它放行。
 
 ## 9. 退出码
@@ -269,7 +269,7 @@ phprt add php@8.5 'gd=mode:shared'        # 只编 gd，PHP 不动
 phprt add php@8.5 'gd=mode=static'        # 提示备份已装版本，确认后重编
 phprt add php@8.5 swoole                  # pecl：默认 shared
 phprt remove php@8.5 swoole               # 备份 ini → 删 ini + .so
-phprt remove php@8.5 swoole --no-ini-backup
+phprt remove php@8.5 swoole --no-backup-php-ext-ini
 phprt remove php@8.5 gd                   # 静态：确认 + 重编
 
 phprt scheme php@8.5                      # 输出可直接执行的 install 命令
@@ -280,7 +280,7 @@ phprt install php@8.5 '…'                 # 按导出命令重建
 
 0. **前置**：构建签名不要包含调用者环境（`PATH` / `CFLAGS` / `PKG_CONFIG_PATH` 等），
    否则换 shell 或 CI 就会全量重编，“add shared 不重编 PHP”的承诺不成立。
-1. `src/main.rs`：`install` 增加版本判定与拒绝逻辑；`add` / `remove` 改为“改方案后立即构建”；新增 `scheme` 子命令；`--force` / `--no-ini-backup`。
+1. `src/main.rs`：`install` 增加版本判定与拒绝逻辑；`add` / `remove` 改为“改方案后立即构建”；新增 `scheme` 子命令；`--force` / `--no-backup-php-ext-ini`。
 2. `src/state.rs`：schema 4（`scheme` + `installed`），删除 `deps` 解析字段与 `line/version` 派生字段。
 3. `src/build.rs`：写完成标记；`remove` 删除产物与 ini（按 mode 的 `artifacts`）；静态删除走重编。
 4. ini 写入前比较内容并在需要时备份到 `.phprt/backup/`。

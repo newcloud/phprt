@@ -1,4 +1,12 @@
+use std::path::{Path, PathBuf};
+
 use crate::recipe::{Kind, Target};
+
+/// 项目内工具数据目录（状态、安装树、缓存、备份）的根。
+/// 现在固定 `.phprt`；以后要改成可配置（如 phprt.toml）只改这里。
+pub fn internal_dir(root: &Path) -> PathBuf {
+    root.join(".phprt")
+}
 
 /// URL 最后一段就是缓存文件名；查询串和锚点不属于文件名。
 pub fn archive_name(url: &str) -> Option<String> {

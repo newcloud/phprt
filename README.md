@@ -107,9 +107,9 @@ phprt remove php@8.5 swoole
   ```bash
   phprt remove php@8.5 swoole --force
   ```
-- 不需要这份 ini 备份时加 `--no-ini-backup`：
+- 不需要这份 ini 备份时加 `--no-backup-php-ext-ini`：
   ```bash
-  phprt remove php@8.5 swoole --no-ini-backup
+  phprt remove php@8.5 swoole --no-backup-php-ext-ini
   ```
 
 ## 7. 重装、升级、降级

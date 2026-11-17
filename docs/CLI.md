@@ -217,18 +217,19 @@ error: zip（static）需要和 php 一起重新 configure/make（约 3 分钟�
 
 | 项 | 规则 |
 | --- | --- |
-| 目录 | `.phprt/backup/`，不存在则创建 |
+| 目录 | 产品 profile 声明，相对工具内部目录；PHP 声明为 `backup`，即默认 `.phprt/backup/` |
 | 文件名 | `<日期时间>_<组件名>.ini`，如 `20261117-163035_swoole.ini`；重名加 `-2` |
 | 时机 | `remove` 删 ini 前；`add` 会重写 ini 前 |
 | 不备份 | ini 不存在；内容与将要写入的一致 |
-| 失败 | 终止本次操作，提示可以加 `--no-ini-backup` 跳过 |
-| 参数 | `--no-ini-backup` 跳过本次备份；`--force` 不隐含跳过 |
+| 失败 | 终止本次操作，提示可以加 `--no-backup-php-ext-ini` 跳过 |
+| 参数 | `--no-backup-php-ext-ini` 跳过本次备份；`--force` 不隐含跳过 |
 
 ```text
 $ phprt add php@8.5 xdebug --force        # 手改过 30-xdebug.ini
 已备份 ini: .phprt/backup/20261117-163053_xdebug.ini
 ```
 
+- 备份规则来自产品 profile 的 `backup(dir, name)`；没声明的产品（如 nginx）不备份。
 - 备份目录不写 state，也不是安装版本，`list` 不会把它当成安装产品；不自动清理。
 - 只备份 ini，不备份 `.so`，也不备份安装版本本身。
 

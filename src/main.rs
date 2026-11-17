@@ -93,6 +93,9 @@ enum Cmd {
         /// 已装的补丁先改名备份再全新安装；补丁不同时直接装目标补丁
         #[arg(long)]
         force: bool,
+        /// 本次不备份 PHP 扩展的 ini
+        #[arg(long = "no-backup-php-ext-ini")]
+        no_backup_php_ext_ini: bool,
     },
     /// 更新：重新从 catalog 解析该产品线的最新补丁并构建
     Update {
@@ -102,6 +105,9 @@ enum Cmd {
         components: ComponentArgs,
         #[command(flatten)]
         download: DownloadArgs,
+        /// 本次不备份 PHP 扩展的 ini
+        #[arg(long = "no-backup-php-ext-ini")]
+        no_backup_php_ext_ini: bool,
     },
     /// 把组件加入方案并立即增量构建
     Add {
@@ -117,9 +123,9 @@ enum Cmd {
         /// 跳过磁盘一致性检查
         #[arg(long)]
         force: bool,
-        /// 本次不备份 ini
-        #[arg(long)]
-        no_ini_backup: bool,
+        /// 本次不备份 PHP 扩展的 ini
+        #[arg(long = "no-backup-php-ext-ini")]
+        no_backup_php_ext_ini: bool,
     },
     /// 把组件移出方案并删掉它的产物
     Remove {
@@ -132,9 +138,9 @@ enum Cmd {
         /// 跳过磁盘一致性检查（缺文件时只更新方案）
         #[arg(long)]
         force: bool,
-        /// 本次不备份 ini
-        #[arg(long)]
-        no_ini_backup: bool,
+        /// 本次不备份 PHP 扩展的 ini
+        #[arg(long = "no-backup-php-ext-ini")]
+        no_backup_php_ext_ini: bool,
     },
     /// 对照上游选项清单，检查 recipe 是否漏掉或静默忽略了开关
     Audit {
@@ -199,6 +205,25 @@ fn run() -> Result<()> {
     // 只有 install 判定“已装/中断/该升级”，update 的语义就是跟到最新补丁。
     let install_cmd = matches!(&cli.cmd, Cmd::Install { .. });
     let force = matches!(&cli.cmd, Cmd::Install { force: true, .. });
+    let backup = !match &cli.cmd {
+        Cmd::Install {
+            no_backup_php_ext_ini,
+            ..
+        }
+        | Cmd::Update {
+            no_backup_php_ext_ini,
+            ..
+        }
+        | Cmd::Add {
+            no_backup_php_ext_ini,
+            ..
+        }
+        | Cmd::Remove {
+            no_backup_php_ext_ini,
+            ..
+        } => *no_backup_php_ext_ini,
+        _ => false,
+    };
 
     if let Cmd::List {
         target: None,
@@ -256,6 +281,7 @@ fn run() -> Result<()> {
             target,
             components,
             download,
+            ..
         } => (
             single_target(target, "install")?,
             components.clone(),
@@ -630,6 +656,7 @@ fn run() -> Result<()> {
                     recipes: &cli.recipes,
                     ui: download.ui,
                     scheme: &scheme,
+                    backup,
                 },
             )?;
 
@@ -715,11 +742,7 @@ fn run() -> Result<()> {
                 );
             }
         }
-        Cmd::Add {
-            force,
-            no_ini_backup,
-            ..
-        } => {
+        Cmd::Add { force, .. } => {
             let download = download.expect("add 一定带下载参数");
             let name = raw
                 .first()
@@ -834,18 +857,6 @@ fn run() -> Result<()> {
             if fetch_sources(&cli.root, &cli.recipes, &reg, &order, &download)? {
                 return Ok(());
             }
-            // 构建会重写这个组件的 ini：内容有变化就备份，默认静默。
-            if !no_ini_backup
-                && let Some(ini) = manage::ini_path(&product, &component, &mode)
-                && tree.join(&ini).is_file()
-            {
-                manage::backup_ini(
-                    &cli.root,
-                    &name,
-                    &tree.join(&ini),
-                    Some(&actions::ini_text(&component)),
-                )?;
-            }
             build::run(
                 &reg,
                 &order,
@@ -856,6 +867,7 @@ fn run() -> Result<()> {
                     recipes: &cli.recipes,
                     ui: download.ui,
                     scheme: &scheme,
+                    backup,
                 },
             )?;
 
@@ -869,12 +881,7 @@ fn run() -> Result<()> {
             println!("已加入 {name}（{mode}）并完成编译");
             println!("已写入 {}", state_file.display());
         }
-        Cmd::Remove {
-            name,
-            force,
-            no_ini_backup,
-            ..
-        } => {
+        Cmd::Remove { name, force, .. } => {
             let download = download.expect("remove 一定带下载参数");
             let product = reg.product_any()?.clone();
             let component = reg.component(&name)?.clone();
@@ -928,7 +935,13 @@ fn run() -> Result<()> {
                         println!("{warning}");
                         rebuilt = true;
                     } else {
-                        let deleted = manage::apply(&cli.root, &tree, &removal, !no_ini_backup)?;
+                        let deleted = manage::apply(
+                            &cli.root,
+                            &tree,
+                            &removal,
+                            product.profile.backup.as_ref(),
+                            backup,
+                        )?;
                         if deleted.is_empty() {
                             println!(
                                 "已移除 {name}（{}），磁盘上没有可删的文件",
@@ -969,6 +982,7 @@ fn run() -> Result<()> {
                             recipes: &cli.recipes,
                             ui: download.ui,
                             scheme: &scheme,
+                            backup,
                         },
                     )?;
                     let deleted = manage::delete_stale_artifacts(&tree, &stale_artifacts)?;
@@ -1018,7 +1032,7 @@ fn fetch_sources(
     if !download.downloads {
         tools::check(reg.product_any()?, order)?;
     }
-    let cache = root.join(".phprt").join("downloads");
+    let cache = layout::internal_dir(root).join("downloads");
     let sources = sources::collect(order, root, &cache)?;
     let config = config::Config::load(&recipes.join(config::FILE_NAME))?;
     let options = phprt_download::Options {
@@ -1115,7 +1129,7 @@ fn available_products(metas: &[RecipeMeta], product: &str) -> String {
 }
 
 fn print_states(root: &Path) -> Result<()> {
-    let dir = root.join(".phprt");
+    let dir = layout::internal_dir(root);
     if !dir.is_dir() {
         println!("没有已安装的产品（{} 不存在）", dir.display());
         return Ok(());

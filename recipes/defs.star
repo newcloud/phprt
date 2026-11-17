@@ -212,6 +212,11 @@ def extend_profile(
     return out
 
 
+def backup(dir, name):
+    """组件登记文件的备份规则。dir 相对项目根，name 支持 {timestamp}/{component}/{mode}。"""
+    return {"dir": dir, "name": name}
+
+
 def product_profile(
         modes = {},
         tools = [],
@@ -219,6 +224,7 @@ def product_profile(
         bundled_path = "",
         runtime = {},
         register = {},
+        backup = {},
         post_install = [],
         verify = [],
         verify_modules = "",
@@ -232,6 +238,7 @@ def product_profile(
     modes：挂载方式 -> mode(...)。
     defaults：组件来源（bundled / external）-> 默认挂载方式。
     register：挂载方式 -> 登记动作；目前只有 php-ini。
+    backup：组件登记文件的备份规则 backup(dir, name)；不写就不备份。
     post_install：安装后动作，见 ensure_dir / write_file / copy_ca_bundle /
                   write_component_ini。
     verify / verify_modules：产品启动验证；verify_modules 用来检查组件模块。
@@ -246,6 +253,7 @@ def product_profile(
         "bundled_path": bundled_path,
         "runtime": runtime,
         "register": register,
+        "backup": backup if backup else None,
         "post_install": post_install,
         "verify": verify,
         "verify_modules": verify_modules,

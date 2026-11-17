@@ -82,6 +82,10 @@ PROFILE = product_profile(
         },
     ),
     register = {"shared": "php-ini"},
+    backup = backup(
+        dir = "backup",
+        name = "{timestamp}_{component}.ini",
+    ),
     post_install = [
         ensure_dir("etc/conf.d"),
         write_file("etc/php.ini", PHP_INI, if_missing = True),
@@ -272,6 +276,24 @@ runtime（收库、rpath）
 ```
 
 `post_install` 每次安装都执行，不做签名跳过；它是幂等的文件操作，开销很小。
+
+### 5.1 登记文件备份
+
+`write_component_ini` 会重写或删除组件 ini；产品可以在 profile 里声明备份规则：
+
+```python
+backup = backup(
+    dir = "backup",                          # 相对工具内部目录（默认 .phprt）
+    name = "{timestamp}_{component}.ini",     # 必须含 {component}
+)
+```
+
+- 只会备份 `write_component_ini` 管理的登记文件，不备份 `.so` 和安装版本；
+- 文件不存在、或内容和将要写入的一致时不备份；
+- 文件名模板支持 `{timestamp}`（`YYYYMMDD-HHMMSS`）、`{component}`、`{mode}`；
+- 重名依次加 `-2`、`-3`；
+- 不写 `backup` 的产品（如 nginx）不做任何备份；
+- 用户可以用 `--no-backup-php-ext-ini` 关掉本次备份（`--force` 不隐含此效果）。
 
 ## 6. 入口模板
 

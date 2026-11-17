@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::actions;
 use crate::marker::{self, ComponentFacts, InstalledTree};
-use crate::recipe::{Registry, Strategy, Target};
+use crate::recipe::{BackupPolicy, Registry, Strategy, Target};
 
 /// add 时的编译方式：显式写了就用；没写时内置组件必须显式选，其他用产品默认。
 pub fn mode_for_add(
@@ -192,16 +192,33 @@ pub fn remove_plan(
     })
 }
 
-/// 执行删除，返回删掉的相对路径。`backup` 为真时先给 ini 存一份再删。
-pub fn apply(root: &Path, tree: &Path, removal: &Removal, backup: bool) -> Result<Vec<String>> {
+/// 执行删除，返回删掉的相对路径。`backup` 为真时按产品规则先备份 ini。
+pub fn apply(
+    root: &Path,
+    tree: &Path,
+    removal: &Removal,
+    policy: Option<&BackupPolicy>,
+    backup: bool,
+) -> Result<Vec<String>> {
     let mut deleted = Vec::new();
     for relative in &removal.delete {
         let path = tree.join(relative);
         if !path.is_file() {
             continue;
         }
-        if backup && !removal.facts.ini.is_empty() && relative == &removal.facts.ini {
-            backup_ini(root, &removal.facts.name, &path, None)?;
+        if backup
+            && let Some(policy) = policy
+            && !removal.facts.ini.is_empty()
+            && relative == &removal.facts.ini
+        {
+            backup_file(
+                root,
+                policy,
+                &removal.facts.name,
+                &removal.facts.mode,
+                &path,
+                None,
+            )?;
         }
         fs::remove_file(&path).with_context(|| format!("删不了 {}", path.display()))?;
         deleted.push(relative.clone());
@@ -209,25 +226,22 @@ pub fn apply(root: &Path, tree: &Path, removal: &Removal, backup: bool) -> Resul
     Ok(deleted)
 }
 
-/// ini 备份目录：`.phprt/backup/`。它不写 state，也不是安装树。
-pub fn backup_dir(root: &Path) -> PathBuf {
-    root.join(".phprt").join("backup")
-}
-
-/// 删除或覆盖 ini 之前存一份，文件名 `<日期时间>_<组件>.ini`，重名加 `-2`。
+/// 按产品 profile 的规则备份一个组件登记文件。
 ///
-/// 文件不存在时什么都不做；`expected` 是将要写入的内容，一致也不备份。
-/// 返回备份文件路径，没备份时为 None。备份失败直接报错，提示可以跳过。
-pub fn backup_ini(
+/// 文件不存在、或内容和将要写入的一致时都不备份；备份失败直接报错，
+/// 提示可以用 `--no-backup-php-ext-ini` 跳过。
+pub fn backup_file(
     root: &Path,
+    policy: &BackupPolicy,
     component: &str,
-    ini: &Path,
+    mode: &str,
+    source: &Path,
     expected: Option<&str>,
 ) -> Result<Option<PathBuf>> {
-    if !ini.is_file() {
+    if !source.is_file() {
         return Ok(None);
     }
-    let bytes = fs::read(ini).with_context(|| format!("读不了 {}", ini.display()))?;
+    let bytes = fs::read(source).with_context(|| format!("读不了 {}", source.display()))?;
     if let Some(expected) = expected
         && expected.as_bytes() == bytes.as_slice()
     {
@@ -235,29 +249,41 @@ pub fn backup_ini(
     }
 
     let saved = (|| -> Result<PathBuf> {
+        let dir = crate::layout::internal_dir(root).join(&policy.dir);
+        fs::create_dir_all(&dir).with_context(|| format!("建不了 {}", dir.display()))?;
         let stamp = stamp()?;
-        save_ini(root, component, &bytes, &stamp)
+        let name = expand_backup_name(&policy.name, component, mode, &stamp);
+        let path = unique_path(&dir, &name);
+        fs::write(&path, &bytes).with_context(|| format!("写不了 {}", path.display()))?;
+        Ok(path)
     })();
 
     match saved {
         Ok(path) => Ok(Some(path)),
-        Err(err) => Err(err.context("备份 ini 失败；可以加 --no-ini-backup 跳过备份")),
+        Err(err) => Err(err.context("备份 ini 失败；可以加 --no-backup-php-ext-ini 跳过备份")),
     }
 }
 
-/// 把内容写进 `.phprt/backup/<时间>_<组件>.ini`；同名依次加 `-2`、`-3`。
-fn save_ini(root: &Path, component: &str, bytes: &[u8], stamp: &str) -> Result<PathBuf> {
-    let dir = backup_dir(root);
-    fs::create_dir_all(&dir).with_context(|| format!("建不了 {}", dir.display()))?;
-    let stem = format!("{stamp}_{component}");
-    let mut path = dir.join(format!("{stem}.ini"));
+fn expand_backup_name(template: &str, component: &str, mode: &str, stamp: &str) -> String {
+    template
+        .replace("{timestamp}", stamp)
+        .replace("{component}", component)
+        .replace("{mode}", mode)
+}
+
+/// 同名文件依次加 `-2`、`-3`；序号放在扩展名前面。
+fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let mut path = dir.join(name);
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) => (stem.to_owned(), format!(".{ext}")),
+        None => (name.to_owned(), String::new()),
+    };
     let mut index = 1;
     while path.exists() {
         index += 1;
-        path = dir.join(format!("{stem}-{index}.ini"));
+        path = dir.join(format!("{stem}-{index}{ext}"));
     }
-    fs::write(&path, bytes).with_context(|| format!("写不了 {}", path.display()))?;
-    Ok(path)
+    path
 }
 
 /// 备份文件名里的日期时间，精确到秒，和文档里的 `date +%Y%m%d-%H%M%S` 一致。
@@ -644,21 +670,39 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    fn policy() -> BackupPolicy {
+        BackupPolicy {
+            dir: "backup".into(),
+            name: "{timestamp}_{component}.ini".into(),
+        }
+    }
+
     #[test]
     fn backup_name_follows_timestamp_and_component() {
-        let root = std::env::temp_dir().join(format!("phprt-backup-name-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let first = save_ini(&root, "swoole", b"a\n", "20261117-003012").unwrap();
-        assert_eq!(first, root.join(".phprt/backup/20261117-003012_swoole.ini"));
-        assert_eq!(fs::read(&first).unwrap(), b"a\n".to_vec());
-
-        // 同一秒再写一次：加 -2。
-        let second = save_ini(&root, "swoole", b"b\n", "20261117-003012").unwrap();
         assert_eq!(
-            second,
-            root.join(".phprt/backup/20261117-003012_swoole-2.ini")
+            expand_backup_name(
+                "{timestamp}_{component}.ini",
+                "swoole",
+                "shared",
+                "20261117-003012"
+            ),
+            "20261117-003012_swoole.ini"
         );
-        let _ = fs::remove_dir_all(&root);
+        assert_eq!(
+            expand_backup_name("{component}-{mode}.ini", "gd", "shared", "x"),
+            "gd-shared.ini"
+        );
+
+        // 同名依次加 -2、-3，序号在扩展名前面。
+        let dir = std::env::temp_dir().join(format!("phprt-backup-name-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(unique_path(&dir, "a.ini"), dir.join("a.ini"));
+        fs::write(dir.join("a.ini"), b"x").unwrap();
+        assert_eq!(unique_path(&dir, "a.ini"), dir.join("a-2.ini"));
+        fs::write(dir.join("a-2.ini"), b"x").unwrap();
+        assert_eq!(unique_path(&dir, "a.ini"), dir.join("a-3.ini"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -666,27 +710,52 @@ mod tests {
         let root = std::env::temp_dir().join(format!("phprt-backup-skip-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
+        let policy = policy();
 
         // 文件不存在：不备份。
         assert!(
-            backup_ini(&root, "swoole", &root.join("none.ini"), None)
-                .unwrap()
-                .is_none()
+            backup_file(
+                &root,
+                &policy,
+                "swoole",
+                "shared",
+                &root.join("none.ini"),
+                None
+            )
+            .unwrap()
+            .is_none()
         );
 
         // 内容与将要写入的一致：不备份。
         let ini = root.join("27-swoole.ini");
         fs::write(&ini, "extension=swoole.so\n").unwrap();
         assert!(
-            backup_ini(&root, "swoole", &ini, Some("extension=swoole.so\n"))
-                .unwrap()
-                .is_none()
+            backup_file(
+                &root,
+                &policy,
+                "swoole",
+                "shared",
+                &ini,
+                Some("extension=swoole.so\n")
+            )
+            .unwrap()
+            .is_none()
         );
 
-        // 内容不同：备份。
-        let saved = backup_ini(&root, "swoole", &ini, Some("extension=x.so\n"))
-            .unwrap()
-            .unwrap();
+        // 内容不同：备份到 <root>/backup/<时间>_<组件>.ini。
+        let saved = backup_file(
+            &root,
+            &policy,
+            "swoole",
+            "shared",
+            &ini,
+            Some("extension=x.so\n"),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(saved.starts_with(root.join(".phprt/backup")), "{saved:?}");
+        let name = saved.file_name().unwrap().to_string_lossy();
+        assert!(name.ends_with("_swoole.ini"), "{name}");
         assert_eq!(fs::read(&saved).unwrap(), b"extension=swoole.so\n".to_vec());
         let _ = fs::remove_dir_all(&root);
     }
@@ -696,15 +765,15 @@ mod tests {
         let root = std::env::temp_dir().join(format!("phprt-backup-fail-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        // 让 `.phprt/backup` 变成一个文件，建目录必然失败。
+        // 让备份目录变成一个文件，建目录必然失败。
         fs::create_dir_all(root.join(".phprt")).unwrap();
         fs::write(root.join(".phprt/backup"), "not a dir").unwrap();
         let ini = root.join("27-swoole.ini");
         fs::write(&ini, "x").unwrap();
-        let err = backup_ini(&root, "swoole", &ini, None)
+        let err = backup_file(&root, &policy(), "swoole", "shared", &ini, None)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("--no-ini-backup"), "{err}");
+        assert!(err.contains("--no-backup-php-ext-ini"), "{err}");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -732,10 +801,11 @@ mod tests {
                 "etc/conf.d/27-swoole.ini".into(),
             ],
         };
-        let deleted = apply(&root, &tree, &removal, true).unwrap();
+        let policy = policy();
+        let deleted = apply(&root, &tree, &removal, Some(&policy), true).unwrap();
         assert_eq!(deleted.len(), 2);
         assert!(!tree.join("etc/conf.d/27-swoole.ini").exists());
-        let saved: Vec<_> = fs::read_dir(backup_dir(&root))
+        let saved: Vec<_> = fs::read_dir(root.join(".phprt/backup"))
             .unwrap()
             .flatten()
             .map(|entry| entry.path())
@@ -743,11 +813,14 @@ mod tests {
         assert_eq!(saved.len(), 1);
         assert_eq!(fs::read(&saved[0]).unwrap(), "手改过\n".as_bytes().to_vec());
 
-        // --no-ini-backup 时不写备份。
+        // 关掉备份时不写文件。
         fs::write(tree.join("etc/conf.d/27-swoole.ini"), "x").unwrap();
-        let deleted = apply(&root, &tree, &removal, false).unwrap();
+        let deleted = apply(&root, &tree, &removal, Some(&policy), false).unwrap();
         assert_eq!(deleted, vec!["etc/conf.d/27-swoole.ini".to_owned()]);
-        let saved: Vec<_> = fs::read_dir(backup_dir(&root)).unwrap().flatten().collect();
+        let saved: Vec<_> = fs::read_dir(root.join(".phprt/backup"))
+            .unwrap()
+            .flatten()
+            .collect();
         assert_eq!(saved.len(), 1, "跳过备份时不应新增文件");
         let _ = fs::remove_dir_all(&root);
     }

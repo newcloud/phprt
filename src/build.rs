@@ -20,6 +20,8 @@ pub struct Options<'a> {
     pub ui: Mode,
     /// 方案指纹和可复制的 install 命令，写进完成标记。
     pub scheme: &'a marker::Scheme,
+    /// 是否按产品规则备份被改写的登记文件。
+    pub backup: bool,
 }
 
 pub fn run(
@@ -33,8 +35,8 @@ pub fn run(
         .with_context(|| format!("读不到项目根 {}", opts.root.display()))?;
     let product = reg.product_any()?;
     let tree = format!(
-        "{}/.phprt/{}-{}",
-        root.display(),
+        "{}/{}-{}",
+        crate::layout::internal_dir(&root).display(),
         product.name,
         product.version
     );
@@ -240,7 +242,16 @@ pub fn run(
 
     let tree = PathBuf::from(&tree);
     deploy_libs(reg, sel, features, product, order, &tree)?;
-    actions::run(reg, product, sel, &tree)?;
+    actions::run(
+        reg,
+        product,
+        sel,
+        &tree,
+        &actions::Options {
+            root: opts.root,
+            backup: opts.backup,
+        },
+    )?;
     verify(reg, product, &tree)?;
     let target = format!("{}@{}", product.name, product.series);
     write_entry(&root, product, opts.recipes, &target)?;
@@ -1009,7 +1020,7 @@ fn write_script(path: &Path, content: &str) -> Result<()> {
 
 /// 项目里是否只有当前产品的这一个系列（用来决定要不要写不带系列的入口别名）。
 fn only_series(root: &Path, product: &Target) -> bool {
-    let Ok(entries) = fs::read_dir(root.join(".phprt")) else {
+    let Ok(entries) = fs::read_dir(crate::layout::internal_dir(root)) else {
         return true;
     };
     for entry in entries.flatten() {

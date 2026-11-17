@@ -83,7 +83,7 @@ pub struct InstallFacts<'a> {
 }
 
 pub fn tree_path(root: &Path, product: &str, version: &str) -> PathBuf {
-    root.join(".phprt").join(format!("{product}-{version}"))
+    crate::layout::internal_dir(root).join(format!("{product}-{version}"))
 }
 
 pub fn marker_path(root: &Path, product: &str, version: &str) -> PathBuf {

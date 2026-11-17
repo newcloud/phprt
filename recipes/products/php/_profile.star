@@ -51,6 +51,10 @@ PROFILE = product_profile(
         },
     ),
     register = {"shared": "php-ini"},
+    backup = backup(
+        dir = "backup",
+        name = "{timestamp}_{component}.ini",
+    ),
     post_install = [
         ensure_dir("etc/conf.d"),
         write_file("etc/php.ini", PHP_INI, if_missing = True),

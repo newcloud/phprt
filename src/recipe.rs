@@ -109,6 +109,45 @@ impl Strategy {
     }
 }
 
+/// 组件登记文件的备份规则，来自产品 profile 的 `backup(dir, name)`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupPolicy {
+    /// 相对项目根的目录，如 `backup`。
+    pub dir: String,
+    /// 文件名模板，支持 `{timestamp}` / `{component}` / `{mode}`。
+    pub name: String,
+}
+
+impl BackupPolicy {
+    fn validate(&self, at: &str) -> Result<()> {
+        if self.dir.is_empty() {
+            bail!("{at}: profile.backup.dir 不能为空");
+        }
+        check_relative(&self.dir, "profile.backup.dir")?;
+        if self.name.is_empty() {
+            bail!("{at}: profile.backup.name 不能为空");
+        }
+        if self.name.contains('/') || self.name.contains('\\') {
+            bail!("{at}: profile.backup.name 不能带路径分隔符");
+        }
+        if !self.name.contains("{component}") {
+            bail!("{at}: profile.backup.name 必须包含 {{component}}");
+        }
+        let mut rest = self.name.as_str();
+        while let Some(start) = rest.find('{') {
+            let Some(end) = rest[start..].find('}').map(|i| i + start) else {
+                bail!("{at}: profile.backup.name 里的占位符没有闭合");
+            };
+            let key = &rest[start + 1..end];
+            if !matches!(key, "timestamp" | "component" | "mode") {
+                bail!("{at}: profile.backup.name 里的占位符 {{{key}}} 不支持");
+            }
+            rest = &rest[end + 1..];
+        }
+        Ok(())
+    }
+}
+
 /// 产品 profile：组件挂载协议、运行时整理、验证和入口。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Profile {
@@ -131,6 +170,9 @@ pub struct Profile {
     /// 挂载方式 -> 登记动作名；由 post_install 的 write_component_ini 消费。
     #[serde(default)]
     pub register: BTreeMap<String, String>,
+    /// 组件登记文件的备份规则；不写就不备份。
+    #[serde(default)]
+    pub backup: Option<BackupPolicy>,
     #[serde(default)]
     pub verify: Vec<String>,
     #[serde(default)]
@@ -305,6 +347,7 @@ impl Profile {
             && self.runtime.lib_dir.is_empty()
             && self.runtime.rpath.is_empty()
             && self.register.is_empty()
+            && self.backup.is_none()
             && self.tools.is_empty()
             && self.post_install.is_empty()
             && self.verify.is_empty()
@@ -684,6 +727,9 @@ impl Target {
                             self.name
                         );
                     }
+                }
+                if let Some(backup) = &self.profile.backup {
+                    backup.validate(&at.to_string())?;
                 }
                 for mode in self.profile.register.keys() {
                     if !self.profile.modes.contains_key(mode) {
@@ -2481,6 +2527,49 @@ mod tests {
         assert!(product.profile.tools.iter().any(|tool| tool.name == "perl"));
         assert_eq!(product.profile.entry, "");
         assert!(product.profile.post_install.is_empty());
+    }
+
+    #[test]
+    fn php_profile_declares_ini_backup() {
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        let backup = reg
+            .product_any()
+            .unwrap()
+            .profile
+            .backup
+            .as_ref()
+            .expect("PHP 应该声明 backup");
+        assert_eq!(backup.dir, "backup");
+        assert_eq!(backup.name, "{timestamp}_{component}.ini");
+    }
+
+    #[test]
+    fn nginx_profile_has_no_backup() {
+        let (reg, _) = load_product("nginx", "1.29", &[], &[]).unwrap();
+        assert!(reg.product_any().unwrap().profile.backup.is_none());
+    }
+
+    #[test]
+    fn backup_policy_rejects_bad_templates() {
+        let policy = |dir: &str, name: &str| BackupPolicy {
+            dir: dir.into(),
+            name: name.into(),
+        };
+        policy("backup", "{timestamp}_{component}.ini")
+            .validate("test")
+            .unwrap();
+        policy("backup/php", "{component}-{mode}.ini")
+            .validate("test")
+            .unwrap();
+        for bad in [
+            policy("", "{component}.ini"),
+            policy("../x", "{component}.ini"),
+            policy("backup", "fixed.ini"),
+            policy("backup", "{component}/x.ini"),
+            policy("backup", "{unknown}.ini"),
+        ] {
+            assert!(bad.validate("test").is_err(), "{bad:?}");
+        }
     }
 
     #[test]
