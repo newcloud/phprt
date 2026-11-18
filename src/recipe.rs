@@ -2470,7 +2470,16 @@ mod tests {
             }
         }
         let bindings = bind::resolve(
-            &catalog, &bundle, &metas, product, series, &selected, &pin_map,
+            &catalog,
+            &bundle,
+            &metas,
+            product,
+            series,
+            &selected,
+            &crate::lock::EffectivePins {
+                lines: pin_map,
+                versions: BTreeMap::new(),
+            },
         )?;
         let version = catalog.product_version_for(product, series, series)?;
         let ctx = bind::context(product, series, &version, &bindings);
@@ -2921,7 +2930,10 @@ gd = { ref = "component_presets.gd", mode = "shared" }
             "php",
             "8.5",
             &["gd".into()],
-            &pins,
+            &crate::lock::EffectivePins {
+                lines: pins,
+                versions: BTreeMap::new(),
+            },
         )
         .unwrap_err()
         .to_string();
@@ -2962,7 +2974,7 @@ gd = { ref = "component_presets.gd", mode = "shared" }
             "php",
             "8.5",
             &[],
-            &BTreeMap::new(),
+            &crate::lock::EffectivePins::default(),
         )
         .unwrap();
         let version = catalog.product_version_for("php", "8.5", "8.5").unwrap();

@@ -1,7 +1,8 @@
 # 状态文件
 
-状态文件只记录**当前构建方案和已编译产物的状态**，不锁定版本。补丁号仍然从
-`recipes/catalog.toml` 取。
+状态文件记录**当前构建方案、已编译产物的状态，以及每个节点实际使用的版本**。
+默认解析只复用版本线，补丁仍从 `recipes/catalog.toml` 取；`--lock` 时把这里的
+`version` 当作精确补丁，源码地址仍只从 catalog 取（见 [LOCK.md](LOCK.md)）。
 
 ## 1. 路径
 
@@ -67,16 +68,16 @@
 | `version` | schema 版本，固定 3；旧文件直接报错，不自动迁移 |
 | `active` | 是否已经写过方案。写过之后 `components` 就是权威列表，即使为空 |
 | `product` / `series` | 这份状态所属的产品和系列 |
-| `installed_version` | 最近一次成功安装的产品补丁版本，仅记录 |
+| `installed_version` | 最近一次成功安装的产品补丁版本；默认解析沿用它，`update` 才前进 |
 | `bindings` | 用户显式指定的版本线；bundle 解析出来的默认线不写在这里 |
 | `components.<名字>.line` | 实际使用的版本线，如 6.2；bundled 组件为空 |
-| `components.<名字>.version` | 实际补丁，如 6.2.5；只记录，不锁定 |
+| `components.<名字>.version` | 实际补丁，如 6.2.5；`--lock` 把它当作精确版本 |
 | `components.<名字>.mode` | 当前挂载方式，如 static / shared / dynamic |
 | `components.<名字>.installed` | 是否已经编译安装并通过产品启动校验 |
 | `components.<名字>.deps` | 依赖名 → 转给它的 feature |
 | `components.<名字>.features` | 组件自己的 feature |
 | `deps.<名字>.line` | 依赖实际使用的版本线 |
-| `deps.<名字>.version` | 依赖实际补丁 |
+| `deps.<名字>.version` | 依赖实际补丁；`--lock` 把它当作精确版本 |
 | `deps.<名字>.features` | 当前构建使用的 feature 并集 |
 
 `deps` 里也会记录构建期工具（如 `autoconf`）：它们参与构建顺序，但不参与链接。
@@ -115,6 +116,10 @@ allowed = catalog 里该依赖的线
 - bundle 默认线不在交集里、但交集只有一个 → 自动改用并打印提示。
 - 交集有多个或为空 → 报错并列出候选。
 
+`--lock` 在这之后再加一层：当前闭包内、且 state 有记录的节点改用 `state.*.version`。
+CLI 显式选择整体覆盖 line + version，不会留下跨线组合。只有当前闭包里的节点参与，
+已删除组件的残留不参与；详见 [LOCK.md](LOCK.md) 第 3～5 节。
+
 ## 4. 读写时机
 
 | 命令 | 读 | 写 | installed |
@@ -136,8 +141,11 @@ allowed = catalog 里该依赖的线
 变化，已有 state 也不改。如果 state 里该组件的 features 已经为空，表示用户显式清空过，
 不再重新套 preset。
 
-`update` 只在 state 记录的线内重新从 catalog 取补丁，不自动换线。catalog 删掉了
-这条线时直接报错，不静默迁移。
+`update` 保持当前方案和每条线，只为当前闭包重新取 catalog 的最新补丁，不自动换线；
+成功后新版本写进 state，成为下一次 `--lock` 的基准。catalog 删掉了这条线时直接报错，
+不静默迁移。
+
+`--lock` 只影响解析，不改 state：不把锁定的补丁写回 `line` / `version`。
 
 ## 5. feature 规则
 
@@ -189,6 +197,7 @@ seed 进 state。
 .phprt/php-8.5.12/.phprt-installed
 version=8.5.12
 scheme=a348356a…（sha256，方案指纹）
+resolution=5d1c9e47…（sha256，产品补丁 + 各节点版本）
 scheme_cmd=phprt install php@8.5 'curl=mode:static,swoole=mode:shared'（写标记时的方案）
 component=swoole mode=shared
 ini=swoole etc/conf.d/27-swoole.ini
@@ -196,6 +205,10 @@ ini_hash=swoole 7397bc9b…（sha256）
 artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
 ```
 
+- `version=` 是校验字段：和期望补丁不一致时按“没有标记”处理，不把错的树当成装完。
+- `resolution=` 是产品补丁和每个构建节点 `line` / `version` / `sha256` 的规范化哈希，
+  只用于判断“方案相同、解析出的补丁是否相同”，不参与解析；字段定义见
+  [LOCK.md](LOCK.md) 第 9 节。
 - `component` 一行一个组件；`ini` / `ini_hash` / `artifact` 用组件名开头，可重复出现。
 - 产物写的是展开后的实际路径（recipe 里的 `*` 已经展开），删组件时按它删文件。
 - `ini_hash` 是安装时 ini 的内容指纹，`remove` 用它判断文件有没有被手改。
@@ -204,8 +217,9 @@ artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
   已编译节点靠工作目录里的 `.phprt-sig` 签名一致来跳过，见 [BUILD.md](BUILD.md) 第 4 节；
   marker 不承担编译缓存。
 - `install` 用标记判断“这个补丁装过没有”：装过就拒绝重复安装，并说明本次方案与之
-  一致还是不一致，细节见 [CLI.md](CLI.md#重复安装与中断)。
-- 补丁不同时不看标记：显式写补丁号就装，只写系列则提示已存在旧版本。
+  一致、不一致，或“配置一致但解析出的版本不同”，细节见 [CLI.md](CLI.md#重复安装与中断)。
+- 默认只写系列时，产品补丁就是 `installed_version`，所以会命中上面的拒绝；
+  要换补丁用 `update` 或显式写补丁号。
 - `install --force` 在下载、解压成功后把已装的树改名 `<产品>-<补丁>-backup-<日期>`，
   再全新安装；备份目录不是安装树，`list` 不会把它当成产品。
 - `remove` 按标记里的记录删 ini 和产物，删完把标记里的组件和方案指纹一起改掉；

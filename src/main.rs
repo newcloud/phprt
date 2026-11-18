@@ -6,6 +6,7 @@ mod bundle;
 mod catalog;
 mod config;
 mod layout;
+mod lock;
 mod manage;
 mod marker;
 mod plan;
@@ -102,6 +103,9 @@ enum Cmd {
         /// 输出 JSON
         #[arg(long)]
         json: bool,
+        /// 把已有组件和依赖锁到 state 记录的实际补丁
+        #[arg(long)]
+        lock: bool,
         #[command(flatten)]
         components: ComponentArgs,
     },
@@ -109,6 +113,9 @@ enum Cmd {
     Scheme {
         /// 产品@系列，如 php@8.5
         target: String,
+        /// 导出产品补丁、实际版本线和精确补丁
+        #[arg(long)]
+        lock: bool,
     },
     /// 下载、解压、编译并安装；只接受一个产品
     Install {
@@ -124,6 +131,9 @@ enum Cmd {
         /// 本次不备份 PHP 扩展的 ini
         #[arg(long = "no-backup-php-ext-ini")]
         no_backup_php_ext_ini: bool,
+        /// 把已有组件和依赖锁到 state 记录的实际补丁
+        #[arg(long)]
+        lock: bool,
     },
     /// 更新：重新从 catalog 解析该产品线的最新补丁并构建
     Update {
@@ -154,6 +164,9 @@ enum Cmd {
         /// 本次不备份 PHP 扩展的 ini
         #[arg(long = "no-backup-php-ext-ini")]
         no_backup_php_ext_ini: bool,
+        /// 把已有组件和依赖锁到 state 记录的实际补丁
+        #[arg(long)]
+        lock: bool,
     },
     /// 把组件移出方案并删掉它的产物
     Remove {
@@ -169,6 +182,9 @@ enum Cmd {
         /// 本次不备份 PHP 扩展的 ini
         #[arg(long = "no-backup-php-ext-ini")]
         no_backup_php_ext_ini: bool,
+        /// 把已有组件和依赖锁到 state 记录的实际补丁
+        #[arg(long)]
+        lock: bool,
     },
     /// 对照上游选项清单，检查 recipe 是否漏掉或静默忽略了开关
     Audit {
@@ -357,12 +373,13 @@ fn run() -> Result<()> {
             false,
         ),
         Cmd::Graph { target } => (target.clone(), ComponentArgs::default(), None, None, false),
-        Cmd::Scheme { target } => (target.clone(), ComponentArgs::default(), None, None, false),
+        Cmd::Scheme { target, .. } => (target.clone(), ComponentArgs::default(), None, None, false),
         Cmd::Plan {
             target,
             goal,
             json,
             components,
+            ..
         } => (
             target.clone(),
             components.clone(),
@@ -449,7 +466,35 @@ fn run() -> Result<()> {
                 available_products(&metas, &product_name)
             )
         })?;
-    let version = catalog.product_version_for(&product_name, &series, &requested)?;
+    let state_file = state::state_path(&cli.root, &product_name, &series);
+    let mut project = ProjectState::load(&state_file)?;
+    project.check(&product_name, &series)?;
+
+    let update_cmd = matches!(cli.cmd, Cmd::Update { .. });
+    let lock = lock_requested(&cli.cmd);
+    if lock && scheme_list.is_some() {
+        bail!(
+            "--lock 不能和完整方案列表一起用；两个来源同时决定版本会互相覆盖。\n  \
+             换机器复现请用 phprt scheme {product_name}@{series} --lock"
+        );
+    }
+    if lock && project.installed_version.is_empty() {
+        bail!(
+            "当前没有安装完成的产品，--lock 没有可锁定的版本；\n  \
+             先 phprt install {product_name}@{series}，\
+             或用 phprt scheme {product_name}@{series} --lock 导出源项目的精确方案"
+        );
+    }
+    // 默认沿用 state 记录的产品补丁；只有 update 或显式写补丁才跟 catalog 前进。
+    let version = select_product_patch(
+        &catalog,
+        &product_name,
+        &series,
+        &requested,
+        explicit_patch,
+        &project.installed_version,
+        update_cmd,
+    )?;
 
     let bundle_path = recipes
         .join("bundles")
@@ -457,10 +502,6 @@ fn run() -> Result<()> {
         .join(format!("{series}.toml"));
     let bundle = Bundle::load(&bundle_path)?;
     bundle.check_product(&product_name)?;
-
-    let state_file = state::state_path(&cli.root, &product_name, &series);
-    let mut project = ProjectState::load(&state_file)?;
-    project.check(&product_name, &series)?;
 
     let bundled = product_meta.bundled.clone();
 
@@ -506,7 +547,7 @@ fn run() -> Result<()> {
         }
     }
 
-    let mut cli_pins = pins_from_cli(&raw, &components.dep, &metas)?;
+    let cli_pins = pins_from_cli(&catalog, &raw, &components.dep, &metas)?;
 
     // 方案列表是完整方案：直接替换，不补 bundle 默认集。
     // 这里只按名字铺开，mode / feature / dep 在 recipe 加载后由 parse_scheme 校验。
@@ -571,31 +612,33 @@ fn run() -> Result<()> {
                 bail!("component:{name} 不在构建方案里");
             }
             selected.retain(|item| item != name);
-            cli_pins.remove(name);
         }
         _ => {}
     }
 
-    let mut pins = project.bindings.clone();
-    pins.extend(cli_pins.clone());
-    let bindings = bind::resolve(
+    // 第一遍只按用户显式线和 state.bindings 取线，补丁仍取 catalog 当前。
+    // bindings 里已删除组件的残留不加进来：它不是当前方案的节点。
+    let mut prelim_lines = project.bindings.clone();
+    prelim_lines.retain(|name, _| {
+        selected.contains(name) || metas.iter().any(|m| m.kind == Kind::Dep && &m.name == name)
+    });
+    for (name, pin) in &cli_pins {
+        prelim_lines.insert(name.clone(), pin.line().to_owned());
+    }
+    let mut bindings = bind::resolve(
         &catalog,
         &bundle,
         &metas,
         &product_name,
         &series,
         &selected,
-        &pins,
+        &lock::EffectivePins {
+            lines: prelim_lines,
+            versions: BTreeMap::new(),
+        },
     )?;
-    // install 的绑定提示推迟到现场判定之后打印，拒绝时不先刷“注意”；
-    // scheme 的输出要能直接复制执行，也不要提示。
-    if !install_cmd && !matches!(cli.cmd, Cmd::Scheme { .. }) {
-        for note in &bindings.notes {
-            eprintln!("注意: {note}");
-        }
-    }
 
-    let ctx = bind::context(&product_name, &series, &version, &bindings);
+    let mut ctx = bind::context(&product_name, &series, &version, &bindings);
     let mut reg = recipe::load_targets(
         &recipes,
         &catalog,
@@ -607,9 +650,9 @@ fn run() -> Result<()> {
         &ctx,
     )?;
 
-    let default_sel = bundle::selection(&reg, &bundle, &series)?;
-    let preset_sel = bundle::presets(&reg, &bundle, &series)?;
+    let mut preset_sel = bundle::presets(&reg, &bundle, &series)?;
     if seeded_defaults {
+        let default_sel = bundle::selection(&reg, &bundle, &series)?;
         for (name, spec) in &default_sel.per_component {
             let Some(entry) = project.components.get_mut(name) else {
                 continue;
@@ -631,11 +674,68 @@ fn run() -> Result<()> {
 
     project.validate(&reg)?;
 
-    let cli_sel = match &scheme_list {
+    let mut cli_sel = match &scheme_list {
         Some(list) => recipe::parse_scheme(&reg, list)?,
         None => Selection::parse(&reg, &components.component)?,
     };
-    let product_id = reg.product_any()?.id();
+    let mut product_id = reg.product_any()?.id();
+
+    // 第二遍：算出当前方案真正会用到的节点，再和 state 求交生成 EffectivePins。
+    // 不能把整份 state 铺成 pin，否则已经被 remove 的组件和历史依赖会重新参与解析。
+    if uses_resolver(&cli.cmd) {
+        let names = scheme_names(&project, &raw, None);
+        project.apply_scheme(&mut reg, &names)?;
+        let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
+        let features = reg_features(&reg, &sel, &project);
+        let order = plan::resolve(&reg, &product_id, &sel, &features)?;
+        let desired: BTreeSet<String> = order.iter().map(|target| target.name.clone()).collect();
+        let bundled_set: BTreeSet<String> = bundled.iter().cloned().collect();
+        let pins = lock::effective_pins(&project, &desired, &bundled_set, &cli_pins, lock);
+        let changed = desired.iter().any(|name| {
+            pins.lines
+                .get(name)
+                .is_some_and(|line| bindings.lines.get(name) != Some(line))
+                || pins.versions.get(name).is_some_and(|version| {
+                    bindings.artifacts.get(name).map(|a| &a.version) != Some(version)
+                })
+        });
+        if changed {
+            bindings = bind::resolve(
+                &catalog,
+                &bundle,
+                &metas,
+                &product_name,
+                &series,
+                &selected,
+                &pins,
+            )?;
+            ctx = bind::context(&product_name, &series, &version, &bindings);
+            reg = recipe::load_targets(
+                &recipes,
+                &catalog,
+                &product_name,
+                &series,
+                &version,
+                &metas,
+                &bindings.lines,
+                &ctx,
+            )?;
+            preset_sel = bundle::presets(&reg, &bundle, &series)?;
+            cli_sel = match &scheme_list {
+                Some(list) => recipe::parse_scheme(&reg, list)?,
+                None => Selection::parse(&reg, &components.component)?,
+            };
+            product_id = reg.product_any()?.id();
+            project.validate(&reg)?;
+        }
+    }
+    // install 的绑定提示推迟到现场判定之后打印，拒绝时不先刷“注意”；
+    // scheme 的输出要能直接复制执行，也不要提示。
+    if !install_cmd && !matches!(cli.cmd, Cmd::Scheme { .. }) {
+        for note in &bindings.notes {
+            eprintln!("注意: {note}");
+        }
+    }
 
     match cli.cmd {
         Cmd::List {
@@ -690,7 +790,7 @@ fn run() -> Result<()> {
 
             let download = download.expect("install/update 一定有下载参数");
             let mut scheme_bindings = project.bindings.clone();
-            scheme_bindings.extend(cli_pins.clone());
+            scheme_bindings.extend(pin_lines(&cli_pins));
             let scheme = marker::Scheme::new(
                 &product_name,
                 &series,
@@ -714,6 +814,8 @@ fn run() -> Result<()> {
                 )
             };
             let command = command_prefix(&cli);
+            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
+            let resolution = marker::resolution_digest(&version, &order);
 
             let mut plan = marker::Plan::Install;
             if install_cmd && !download.downloads {
@@ -726,6 +828,7 @@ fn run() -> Result<()> {
                         explicit_patch,
                         site: marker::site(&cli.root, &product_name, &version),
                         scheme: &scheme.digest,
+                        resolution: &resolution,
                         requested_command: &scheme.command,
                         tree: tree_display.clone(),
                         installed_tree,
@@ -747,7 +850,6 @@ fn run() -> Result<()> {
                 }
             }
 
-            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
             let sim = render::build(
                 &reg,
                 &order,
@@ -786,7 +888,7 @@ fn run() -> Result<()> {
                 },
             )?;
 
-            project.bindings.extend(cli_pins.clone());
+            project.bindings.extend(pin_lines(&cli_pins));
             project.installed_version = version.clone();
             // install --component 只影响这次构建，不写进 state；
             // 持久化组件方案用 add / remove。
@@ -798,21 +900,50 @@ fn run() -> Result<()> {
             println!();
             println!("已写入 {}", state_file.display());
         }
-        Cmd::Scheme { .. } => {
+        Cmd::Scheme { lock: locked, .. } => {
             if !project.active {
                 bail!("当前没有构建过 {product_name} {series}");
             }
             let sel = project.as_selection();
-            println!(
-                "{}",
-                marker::scheme_command(
-                    &product_name,
-                    &series,
-                    &sel,
-                    &project.bindings,
-                    &is_dep_kind(&metas)
-                )
-            );
+            if locked {
+                if project.installed_version.is_empty() {
+                    bail!(
+                        "当前没有安装完成的产品，scheme --lock 没有可导出的补丁；\
+                         先 phprt install {product_name}@{series}"
+                    );
+                }
+                // 只导出当前闭包里的节点：已删除组件留下的历史依赖不写进命令。
+                let names = project.scheme_with(&[]);
+                project.apply_scheme(&mut reg, &names)?;
+                let features = reg_features(&reg, &sel, &project);
+                let order = plan::resolve(&reg, &product_id, &sel, &features)?;
+                let desired: BTreeSet<String> = order.iter().map(|t| t.name.clone()).collect();
+                let bundled_set: BTreeSet<String> = bundled.iter().cloned().collect();
+                let exact = lock::exact_versions(&catalog, &project, &bundled_set, &desired)?;
+                println!(
+                    "{}",
+                    marker::scheme_command_locked(
+                        &product_name,
+                        &series,
+                        &project.installed_version,
+                        &sel,
+                        &project.bindings,
+                        &exact,
+                        &is_dep_kind(&metas)
+                    )
+                );
+            } else {
+                println!(
+                    "{}",
+                    marker::scheme_command(
+                        &product_name,
+                        &series,
+                        &sel,
+                        &project.bindings,
+                        &is_dep_kind(&metas)
+                    )
+                );
+            }
         }
         Cmd::Audit { .. } => {
             let names = scheme_names(&project, &raw, None);
@@ -953,7 +1084,7 @@ fn run() -> Result<()> {
             let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             let features = reg_features(&reg, &sel, &project);
             let mut scheme_bindings = project.bindings.clone();
-            scheme_bindings.extend(cli_pins.clone());
+            scheme_bindings.extend(pin_lines(&cli_pins));
             let scheme = marker::Scheme::new(
                 &product_name,
                 &series,
@@ -965,7 +1096,7 @@ fn run() -> Result<()> {
 
             // 没有安装树时不代跑 install，只记方案。
             if matches!(site, marker::Site::Absent) {
-                project.bindings.extend(cli_pins.clone());
+                project.bindings.extend(pin_lines(&cli_pins));
                 project.sync_selection(&reg, &sel, &names)?;
                 project.set_deps(&order, &features);
                 project.save(&state_file)?;
@@ -994,7 +1125,7 @@ fn run() -> Result<()> {
                 },
             )?;
 
-            project.bindings.extend(cli_pins.clone());
+            project.bindings.extend(pin_lines(&cli_pins));
             project.installed_version = version.clone();
             project.sync_selection(&reg, &sel, &names)?;
             project.set_deps(&order, &features);
@@ -1016,7 +1147,7 @@ fn run() -> Result<()> {
             sel.per_component.remove(&name);
             let features = reg_features(&reg, &sel, &project);
             let mut scheme_bindings = project.bindings.clone();
-            scheme_bindings.extend(cli_pins.clone());
+            scheme_bindings.extend(pin_lines(&cli_pins));
             let scheme = marker::Scheme::new(
                 &product_name,
                 &series,
@@ -1112,13 +1243,18 @@ fn run() -> Result<()> {
                 }
             }
 
-            project.bindings.extend(cli_pins.clone());
+            project.bindings.extend(pin_lines(&cli_pins));
             if rebuilt {
                 project.installed_version = version.clone();
                 project.set_installed_all();
             }
             project.sync_selection(&reg, &sel, &names)?;
-            project.set_deps(&order, &features);
+            if rebuilt {
+                project.set_deps(&order, &features);
+            } else {
+                // 不重编时不要按当前 catalog 重写版本：记录的是上次真正编过的补丁。
+                project.prune_deps(&order, &features);
+            }
             project.save(&state_file)?;
 
             // 动态组件删完不用重编，标记里的组件和方案指纹跟着改。
@@ -1129,7 +1265,7 @@ fn run() -> Result<()> {
                 record.components.retain(|item| item.name != name);
                 record.scheme = scheme.digest.clone();
                 record.scheme_cmd = scheme.command.clone();
-                marker::write(&cli.root, &product_name, &record)?;
+                marker::write(&cli.root, &product_name, &tree_version, &record)?;
             }
             println!("已移除组件 {name}");
             println!("已写入 {}", state_file.display());
@@ -1399,10 +1535,11 @@ fn print_states(root: &Path) -> Result<()> {
 }
 
 fn pins_from_cli(
+    catalog: &Catalog,
     raw: &[RawComponent],
     deps: &[String],
     metas: &[RecipeMeta],
-) -> Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, lock::CliPin>> {
     let mut pins = BTreeMap::new();
     for component in raw {
         if let Some(version) = &component.version {
@@ -1427,7 +1564,10 @@ fn pins_from_cli(
                 }
                 bail!("component:{} 是内置组件，没有自己的版本线", component.name);
             }
-            pins.insert(component.name.clone(), version.clone());
+            pins.insert(
+                component.name.clone(),
+                lock::cli_pin(catalog, &component.name, version)?,
+            );
         }
     }
     for spec in deps {
@@ -1435,8 +1575,8 @@ fn pins_from_cli(
             .find(['=', ':'])
             .map(|i| (&spec[..i], &spec[i + 1..]))
             .ok_or_else(|| anyhow!("--dep {spec} 写法不合法，应为 NAME=LINE"))?;
-        let line = value.strip_prefix("version:").unwrap_or(value);
-        if name.is_empty() || line.is_empty() {
+        let value = value.strip_prefix("version:").unwrap_or(value);
+        if name.is_empty() || value.is_empty() {
             bail!("--dep {spec} 写法不合法，应为 NAME=LINE");
         }
         if !metas
@@ -1445,11 +1585,72 @@ fn pins_from_cli(
         {
             bail!("--dep {name} 不是依赖库");
         }
-        if pins.insert(name.to_owned(), line.to_owned()).is_some() {
+        if pins
+            .insert(name.to_owned(), lock::cli_pin(catalog, name, value)?)
+            .is_some()
+        {
             bail!("--dep 里重复指定了 {name}");
         }
     }
     Ok(pins)
+}
+
+/// 写回 state.bindings 时只存版本线；精确补丁属于一次解析结果，不进 bindings。
+fn pin_lines(pins: &BTreeMap<String, lock::CliPin>) -> BTreeMap<String, String> {
+    pins.iter()
+        .map(|(name, pin)| (name.clone(), pin.line().to_owned()))
+        .collect()
+}
+
+fn lock_requested(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::Plan { lock, .. }
+        | Cmd::Install { lock, .. }
+        | Cmd::Add { lock, .. }
+        | Cmd::Remove { lock, .. }
+        | Cmd::Scheme { lock, .. } => *lock,
+        _ => false,
+    }
+}
+
+/// 需要走 resolver 的命令才生成 EffectivePins；list / scheme / audit 不参与解析。
+fn uses_resolver(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::Graph { .. }
+            | Cmd::Plan { .. }
+            | Cmd::Install { .. }
+            | Cmd::Update { .. }
+            | Cmd::Add { .. }
+            | Cmd::Remove { .. }
+    )
+}
+
+/// 产品补丁：显式写补丁 > update 跟 catalog；其他情况沿用 state.installed_version。
+fn select_product_patch(
+    catalog: &Catalog,
+    product: &str,
+    series: &str,
+    requested: &str,
+    explicit_patch: bool,
+    installed: &str,
+    update: bool,
+) -> Result<String> {
+    if explicit_patch || update || installed.is_empty() {
+        return catalog.product_version_for(product, series, requested);
+    }
+    catalog
+        .product_version_for(product, series, installed)
+        .map_err(|_| {
+            let current = catalog
+                .get(product, series)
+                .map(|artifact| artifact.version.as_str())
+                .unwrap_or("无");
+            anyhow!(
+                "state 里的 {product} {installed} 不在 catalog（{series} 线当前 {current}，无旧补丁）；\
+                 用 phprt update {product}@{series} 升级，或在 catalog 里保留旧补丁"
+            )
+        })
 }
 
 fn scheme_names(
@@ -1614,10 +1815,14 @@ mod tests {
         );
     }
 
+    fn catalog() -> Catalog {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        Catalog::load(&dir.join("catalog.toml")).unwrap()
+    }
+
     fn metas() -> Vec<RecipeMeta> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
-        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
-        recipe::load_meta(&dir, &catalog).unwrap()
+        recipe::load_meta(&dir, &catalog()).unwrap()
     }
 
     fn raw(name: &str, version: &str) -> RawComponent {
@@ -1652,16 +1857,16 @@ mod tests {
 
     #[test]
     fn component_version_only_applies_to_versioned_components() {
-        let pins = pins_from_cli(&[raw("swoole", "6.0")], &[], &metas()).unwrap();
-        assert_eq!(pins["swoole"], "6.0");
+        let pins = pins_from_cli(&catalog(), &[raw("swoole", "6.0")], &[], &metas()).unwrap();
+        assert_eq!(pins["swoole"], lock::CliPin::Line("6.0".into()));
 
-        let err = pins_from_cli(&[raw("openssl", "4.0")], &[], &metas())
+        let err = pins_from_cli(&catalog(), &[raw("openssl", "4.0")], &[], &metas())
             .unwrap_err()
             .to_string();
         assert!(err.contains("内置组件"), "{err}");
         assert!(err.contains("--dep openssl"), "{err}");
 
-        let err = pins_from_cli(&[raw("curl", "8.0")], &[], &metas())
+        let err = pins_from_cli(&catalog(), &[raw("curl", "8.0")], &[], &metas())
             .unwrap_err()
             .to_string();
         assert!(err.contains("内置组件"), "{err}");
@@ -1669,14 +1874,41 @@ mod tests {
 
     #[test]
     fn dep_pin_only_accepts_dependency_recipes() {
-        let pins = pins_from_cli(&[], &["openssl=4.0".to_owned()], &metas()).unwrap();
-        assert_eq!(pins["openssl"], "4.0");
+        let pins = pins_from_cli(&catalog(), &[], &["openssl=4.0".to_owned()], &metas()).unwrap();
+        assert_eq!(pins["openssl"], lock::CliPin::Line("4.0".into()));
 
-        let err = pins_from_cli(&[], &["swoole=6.0".to_owned()], &metas())
+        let err = pins_from_cli(&catalog(), &[], &["swoole=6.0".to_owned()], &metas())
             .unwrap_err()
             .to_string();
         assert!(err.contains("不是依赖库"), "{err}");
     }
+    #[test]
+    fn product_patch_stays_on_installed_version_until_update() {
+        let catalog = catalog();
+        // 默认：已有 installed_version 就沿用它，不跟 catalog 当前补丁。
+        assert_eq!(
+            select_product_patch(&catalog, "php", "8.4", "8.4", false, "8.4.13", false).unwrap(),
+            "8.4.13"
+        );
+        // 显式补丁和 update 才前进；没有安装记录时取 catalog 当前。
+        assert_eq!(
+            select_product_patch(&catalog, "php", "8.4", "8.4.14", true, "8.4.13", false).unwrap(),
+            "8.4.14"
+        );
+        assert_eq!(
+            select_product_patch(&catalog, "php", "8.4", "8.4", false, "8.4.13", true).unwrap(),
+            "8.4.14"
+        );
+        assert_eq!(
+            select_product_patch(&catalog, "php", "8.4", "8.4", false, "", false).unwrap(),
+            "8.4.14"
+        );
+        let err = select_product_patch(&catalog, "php", "8.4", "8.4", false, "8.4.9", false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("state 里的 php 8.4.9"), "{err}");
+    }
+
     #[test]
     fn scheme_command_renders_reusable_install_line() {
         let state = ProjectState {

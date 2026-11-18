@@ -41,7 +41,7 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 | --- | --- |
 | 新增产品系列不复制依赖 recipe | 加一个系列只新增该系列自己的声明 |
 | 依赖线由约束求交决定 | 兼容关系写在 recipe，默认线写在 bundle，当前选择来自 state / CLI |
-| 补丁号只来自 catalog | recipe、bundle 不写补丁号；state 只记录装过的版本 |
+| 补丁号只来自 catalog | recipe、bundle 不写补丁号；state 记录装过的版本，`--lock` 用它精确复用（源码仍取 catalog） |
 | 产品之间不互相绑定 | 一个可执行文件 `phprt`，一份下载缓存，安装树按产品隔离 |
 | 组件挂载方式由产品定义 | PHP 的 static/shared 和 nginx 的 builtin/dynamic 走同一套模型 |
 
@@ -50,7 +50,7 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 - 不做跨产品共享安装树；每个产品一份 `.phprt/<产品>-<版本>/`。
 - 不做默认版本、当前产品、`phprt.toml` 项目清单。
 - 不做一条命令安装多个产品。
-- 不生成独立 lock 文件；补丁复用与 `--lock` 见 [LOCK.md](LOCK.md)（待实施）。
+- 不生成独立 lock 文件；补丁复用与 `--lock` 见 [LOCK.md](LOCK.md)。
 - 不做交叉编译、LTO、`--static-all`。
 
 ## 3. 四层数据
@@ -177,7 +177,7 @@ bundled 组件不单独下载，源码在产品 tarball 里。
 
 - `state.components` 是权威方案；`plan` / `install` 都从它出发。
 - 版本线记录在 state，补丁号记录实际装过的版本。
-- 已装版本是否复用、`--lock` 与 catalog 旧补丁保留见 [LOCK.md](LOCK.md)（待实施）；
+- 已装版本是否复用、`--lock` 与 catalog 旧补丁保留见 [LOCK.md](LOCK.md)；
   state 是版本来源，不新增 lock 文件。
 - 旧 schema（version 2）不读取，不自动迁移，报错要求重新安装。
 - 多产品各自一份 state；`list` 扫描 `.phprt/*/state.json` 汇总。
@@ -257,7 +257,7 @@ recipes/
 - 项目清单、当前产品、默认版本；
 - 一条命令构建多个产品；
 - 跨产品共享安装树；
-- 独立 lock 文件（精确版本复用见 [LOCK.md](LOCK.md)，待实施）；
+- 独立 lock 文件（精确版本复用见 [LOCK.md](LOCK.md)）；
 - 交叉编译、LTO、`--static-all`。
 
 ## 13. 走查：`install php@8.5 --component openssl` 为什么是 3.5.9
@@ -290,7 +290,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、feature 并集 |
 | [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |
 | [STATE.md](STATE.md) | state.json、bindings、line/version |
-| [LOCK.md](LOCK.md) | 默认版本复用、`--lock`、`scheme --lock`、catalog 旧补丁保留（待实施） |
+| [LOCK.md](LOCK.md) | 解析顺序、`--lock`、`update`、`scheme --lock`、catalog 旧补丁保留 |
 | [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |

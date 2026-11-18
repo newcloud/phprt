@@ -13,7 +13,7 @@
 | `install <产品>@<系列>` | 确保该系列当前目标版本存在（首次 / 继续中断的安装） | 否 |
 | `install <产品>@<补丁>` | 明确要这个补丁（升级 / 降级） | 否 |
 | `install <产品>@<系列> '组件列表'` | 用给定列表**定义方案**并构建（迁移 / 重建） | 替换 |
-| `update <产品>@<系列>` | 跟随 catalog 最新补丁 | 否 |
+| `update <产品>@<系列>` | 保持方案和 line，在线内跟随 catalog 最新补丁 | 否 |
 | `add <产品>@<系列> <组件 spec>` | 加组件 → 立即增量构建 | 是 |
 | `remove <产品>@<系列> <组件>` | 删组件 → 删产物 / 必要时重编 | 是 |
 | `scheme <产品>@<系列>` | 导出可复制的重建命令 | 否 |
@@ -41,7 +41,9 @@ phprt scheme php@8.5                        # 打印一条 install 命令
 | 现状 | 命令 | 行为 |
 | --- | --- | --- |
 | 没装过 | `install php@8.5` | 按 catalog 里的目标补丁安装 |
-| 已装 8.5.12、完整，catalog 解析到 8.5.13 | `install php@8.5` | **拒绝**：提示已存在旧版本，要求显式写补丁号（见 2.2） |
+| 已装 8.5.12、完整，catalog 已升到 8.5.13 | `install php@8.5` | 仍按 8.5.12 解析；已装且方案一致时**拒绝**重复安装（见 2.2） |
+| 已装 8.5.12、完整，依赖补丁已前进 | `install php@8.5` | **拒绝**：提示“编译配置一致，但解析出的版本与本次不同” |
+| 已装 8.5.12、完整 | `update php@8.5` | 解析到 8.5.13 并构建，成功后 state 记录 8.5.13 |
 | 已装 8.5.12、完整 | `install php@8.5.12` | **拒绝**：说明编译配置一致 / 不一致 |
 | 已装 8.5.12、完整 | `install php@8.5.12 --force` | 下载、解压成功后旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
 | 已装 8.5.12（无完成标记） | 任意 | 视为中断，继续安装 |
@@ -60,12 +62,11 @@ error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置与本次方案
 ```
 
 ```text
-$ phprt install php@8.5            # 已装 8.5.12
-error: 已存在旧版本 php 8.5.12（.phprt/php-8.5.12），本次解析到 8.5.13
-  要装 8.5.13，请显式写补丁号：
-    phprt install php@8.5.13
-  或者交给 --force：直接装 8.5.13，不动 8.5.12 这个版本
-    phprt install php@8.5 --force
+$ phprt install php@8.5            # 已装 8.5.12，catalog 的依赖补丁已前进
+error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置一致，但解析出的版本与本次不同
+  要重新安装，任选其一：
+    phprt install php@8.5.12 --force     # 已装版本改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
+    rm -rf .phprt/php-8.5.12             # 确认不再需要这个版本，删掉后再装
 ```
 
 方案指纹不同时说明“编译配置与本次方案不一致”，并把已装方案和本次方案两条命令都打出来。
@@ -199,7 +200,8 @@ phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,zip=dep:libzip[enc
 
 - `install <产品>@<系列> '列表'` 的列表是**完整方案**，直接替换，不与 bundle 默认集合并；
 - 列表里有 recipe 已删除的组件 → 报错并指出名字；
-- 同一份列表在别的机器上得到相同方案、当时的补丁（补丁跟随 catalog，不锁）；
+- 同一份列表在别的机器上得到相同方案；补丁跟随 catalog，要连补丁一起复制用
+  `scheme --lock`（只导出当前闭包，缺旧补丁时报错）；
 - 方案列表不能和 `--component` / `--disable-default-component` 一起用。
 
 `scheme` 只打印一条命令，不提供差异或展开开关；该系列没有 state 时直接报
@@ -216,7 +218,9 @@ state 记两类数据，解析结果每次重算（完整字段见 [STATE.md](ST
 
 - `components` 是权威方案，`plan` / `install` 都从它出发；
 - `bindings` 只保存用户显式钉的版本线，bundle 解析出的默认线不写；
-- 补丁号只记录不锁定，`deps.*` 的解析结果每次重算；
+- 版本线从 state 复用；补丁默认跟随 catalog，`--lock` 时改用 `state.*.version`
+  （只覆盖当前闭包，见 [LOCK.md](LOCK.md)）；
+- `update` 成功后才覆盖 `deps.*.version`；`remove` 不重编时只收窄 feature、删闭包外的 dep；
 - 旧 schema（version 2）不自动迁移，读到直接报错要求重新安装。
 
 ## 8. `--force` 的边界

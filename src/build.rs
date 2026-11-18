@@ -254,10 +254,11 @@ pub fn run(
     let installed = marker::InstalledTree {
         version: product.version.clone(),
         scheme: opts.scheme.digest.clone(),
+        resolution: marker::resolution_digest(&product.version, order),
         scheme_cmd: opts.scheme.command.clone(),
         components: component_facts(reg, product, sel, &tree, &component_artifacts)?,
     };
-    marker::write(&root, &product.name, &installed)?;
+    marker::write(&root, &product.name, &product.version, &installed)?;
     Ok(())
 }
 

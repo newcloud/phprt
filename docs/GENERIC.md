@@ -494,7 +494,7 @@ recipes/ext/<名字>.star     → recipes/components/php/<名字>.star
   升级时需要删除旧的 `.phprt/*/state.json` 并按新方案重新安装，或手工转换成新格式。
 - 安装树路径仍然是 `.phprt/<产品>-<版本>/`；PHP 的 `.phprt/php-8.5.12/` 正好是这套
   规则的自然结果，不是兼容别名。
-- 补丁号仍然只记录、不锁定；`update` 仍然只在线内换补丁。
+- 补丁号默认跟随 catalog，`--lock` 才复用 state 记录的实际版本；`update` 只在线内换补丁。
 - 多产品各自有 state 和安装树；**不共享安装树**，避免一个产品的 ABI 影响另一个产品。
   下载缓存可以共享。
 

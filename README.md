@@ -159,9 +159,25 @@ phprt install php@8.5 'curl=mode:static,gd=mode:shared,swoole,xdebug=mode:shared
 
 把输出里的命令拿到另一台机器（或另一个项目目录）执行，就得到同一套组件和编译方式。
 
-补丁默认按当时的 catalog 取。catalog 会保留旧补丁，所以 `phprt install php@8.5.12`
-这类显式旧补丁一直能装。要把补丁也一起复现，用 `phprt scheme php@8.5 --lock`
-导出产品补丁、实际版本线和精确补丁（待实施，方案见 [docs/LOCK.md](docs/LOCK.md)）。
+补丁默认跟随当时的 catalog。catalog 会保留旧补丁，所以 `phprt install php@8.5.12`
+这类显式旧补丁一直能装。要把补丁也一起复现：
+
+```bash
+phprt scheme php@8.5 --lock
+# phprt install php@8.5.12 '…' --dep openssl=3.5.9 --dep zlib=1.3.2
+```
+
+把输出拿到另一台机器执行即可。本机增量操作要保持已有补丁不变时加 `--lock`：
+
+```bash
+phprt plan    php@8.5 --lock
+phprt add     php@8.5 swoole --lock
+phprt remove  php@8.5 swoole --lock
+```
+
+`--lock` 只锁当前方案里、state 记录过的节点；catalog 删掉对应旧补丁时直接报错，
+不会悄悄升到新补丁。升级仍然只用 `phprt update php@8.5`。规则见
+[docs/LOCK.md](docs/LOCK.md)。
 
 反过来也可以直接给 `install` 一份完整列表（替换当前方案）：
 
@@ -287,6 +303,58 @@ PHP 8.6 系列 recipe 还在适配，目前只声明了部分内置扩展。
 
 PHP 扩展用 `phprt list php@8.5` 查看，包含内置扩展（curl、gd、mbstring…）和 PECL 扩展
 （swoole、xdebug、redis、imagick…），以及每个扩展支持的方式（static / shared）。
+
+## 目标
+
+现状：用简单方式构建复杂的软件。一条命令对 recipe 求解依赖、按声明编译 PHP（nginx 和其它产品同理），
+产物是一棵自包含的安装树。
+
+但今天已经很少有人手工做这件事了：搭环境、配参数、排依赖，基本交给 AI agent。所以真实需求不是
+「再支持一条版本线」，而是**方便地定制软件容器镜像**——从一份声明直接得到能跑的最小镜像。
+工具的形态也要跟着变：一条命令、默认值够用、输出能校验（`plan --json` 是这个方向），而不是一屏参数。
+
+理想状态：
+
+> 卧槽，我只写了一条命令，它自己把这堆破事全处理了。
+
+目标链路：
+
+```text
+Builder image
+    ↓
+phprt build
+    ↓
+artifact
+    ↓
+minimal runtime image
+```
+
+放进更大的价值链看，前四段已经成立，后两段是空的：
+
+```text
+源码
+ ↓
+Recipe
+ ↓
+依赖解析
+ ↓
+精确构建
+ ↓
+Runtime
+ ↓
+OCI Image
+```
+
+| 环节 | 现在 |
+| --- | --- |
+| Builder image | 宿主机自己备 gcc / make / patchelf，缺什么自己装 |
+| artifact | 产物就是 `.phprt/php-8.5.12/` 整棵树；搬走要连库一起拷，没有清单、没有校验 |
+| minimal runtime image | 用户手写 Dockerfile、裁库、试错缺哪个 `.so` |
+
+判据只有一条：在一台没装过工具链的机器上，一条命令产出能跑 PHP 的镜像；中间不手拷文件、
+不手写 Dockerfile、不手猜缺哪个 `.so`。
+
+当前状态离这条判据还很远。这一节写的是终点，不是现状说明，也不是已实现用法。
 
 ## 更多
 

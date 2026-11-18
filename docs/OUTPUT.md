@@ -20,7 +20,7 @@ Sim { root, tree, order: [Node] }
 | --- | --- |
 | `id` | 产品 `product:<名字>@<版本>`；组件 / 依赖 `component:<名字>` / `dep:<名字>` |
 | `kind` | `dep` / `component` / `product` |
-| `name` / `version` | 目标名和版本（补丁来自 catalog） |
+| `name` / `version` | 目标名和版本（补丁默认来自 catalog；`--lock` 时用 state 指定、源码仍来自 catalog） |
 | `line` | 选中的版本线，如 `6.2`；bundled 组件为空 |
 | `source` | 组件的来源 `bundled` / `external`；产品 / 依赖为空 |
 | `mode` | 组件挂载方式，如 `static` / `shared` / `dynamic`；其他为空 |

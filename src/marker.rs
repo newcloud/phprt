@@ -11,7 +11,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::recipe::Selection;
+use crate::recipe::{Selection, Target};
 
 pub const FILE_NAME: &str = ".phprt-installed";
 
@@ -45,6 +45,8 @@ pub struct InstalledTree {
     pub version: String,
     /// 方案指纹，用来快速判断“配置一致不一致”。
     pub scheme: String,
+    /// 本次实际解析出的版本指纹；只用于比较，不参与解析。
+    pub resolution: String,
     /// 当时那条可复制的 install 命令，用来给用户看差异。
     pub scheme_cmd: String,
     pub components: Vec<ComponentFacts>,
@@ -78,6 +80,8 @@ pub struct InstallFacts<'a> {
     pub site: Site,
     /// 当前方案指纹。
     pub scheme: &'a str,
+    /// 本次实际解析出的版本指纹。
+    pub resolution: &'a str,
     /// 本次方案的可执行命令，配置不一致时打给用户对比。
     pub requested_command: &'a str,
     /// 本次目标安装树的显示路径（全局模式是绝对路径）。
@@ -100,9 +104,13 @@ pub fn marker_path(root: &Path, product: &str, version: &str) -> PathBuf {
 /// 也不把半截的树当成装完。
 pub fn site(root: &Path, product: &str, version: &str) -> Site {
     let tree = tree_path(root, product, version);
-    if let Some(installed) = read_marker(&tree.join(FILE_NAME)) {
+    if let Some(installed) = read_marker(&tree.join(FILE_NAME))
+        && installed.version == version
+    {
         return Site::Complete(installed);
     }
+    // 标记里的补丁和期望补丁不一致（目录被改名、全局 prefix 换了补丁）
+    // 按“没有标记”处理：宁可多装一次，也不把错的树当成装完。
     if tree.is_dir() {
         Site::Interrupted
     } else {
@@ -119,6 +127,8 @@ fn read_marker(path: &Path) -> Option<InstalledTree> {
             tree.version = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("scheme=") {
             tree.scheme = value.trim().to_owned();
+        } else if let Some(value) = line.strip_prefix("resolution=") {
+            tree.resolution = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("scheme_cmd=") {
             tree.scheme_cmd = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("component=") {
@@ -154,14 +164,19 @@ fn read_marker(path: &Path) -> Option<InstalledTree> {
 }
 
 /// 最后一步调用的写标记：先写同目录临时文件再改名，进程被杀不会留下半个标记。
-pub fn write(root: &Path, product: &str, tree: &InstalledTree) -> Result<()> {
-    let path = marker_path(root, product, &tree.version);
+///
+/// 补丁号显式传入，不从内容反推路径；内容里的 `version=` 必须和它一致。
+pub fn write(root: &Path, product: &str, version: &str, tree: &InstalledTree) -> Result<()> {
+    let path = marker_path(root, product, version);
     let dir = path
         .parent()
         .with_context(|| format!("算不出 {} 的目录", path.display()))?;
     fs::create_dir_all(dir).with_context(|| format!("建不了 {}", dir.display()))?;
 
-    let mut text = format!("version={}\nscheme={}\n", tree.version, tree.scheme);
+    let mut text = format!("version={version}\nscheme={}\n", tree.scheme);
+    if !tree.resolution.is_empty() {
+        text.push_str(&format!("resolution={}\n", tree.resolution));
+    }
     if !tree.scheme_cmd.is_empty() {
         text.push_str(&format!("scheme_cmd={}\n", tree.scheme_cmd));
     }
@@ -217,6 +232,39 @@ pub fn scheme_command(
     bindings: &BTreeMap<String, String>,
     is_dep: &dyn Fn(&str) -> bool,
 ) -> String {
+    render_scheme(product, series, None, sel, bindings, None, is_dep)
+}
+
+/// `scheme --lock`：和普通 `scheme` 共用渲染，只额外写产品补丁和精确版本。
+pub fn scheme_command_locked(
+    product: &str,
+    series: &str,
+    version: &str,
+    sel: &Selection,
+    bindings: &BTreeMap<String, String>,
+    exact: &BTreeMap<String, String>,
+    is_dep: &dyn Fn(&str) -> bool,
+) -> String {
+    render_scheme(
+        product,
+        series,
+        Some(version),
+        sel,
+        bindings,
+        Some(exact),
+        is_dep,
+    )
+}
+
+fn render_scheme(
+    product: &str,
+    series: &str,
+    version: Option<&str>,
+    sel: &Selection,
+    bindings: &BTreeMap<String, String>,
+    exact: Option<&BTreeMap<String, String>>,
+    is_dep: &dyn Fn(&str) -> bool,
+) -> String {
     let mut specs = Vec::new();
     for (name, spec) in &sel.per_component {
         let mut text = name.clone();
@@ -238,9 +286,12 @@ pub fn scheme_command(
                 text.push_str(&format!(",dep:{dep}[{}]", features.join(",")));
             }
         }
-        let line = spec
-            .version
-            .clone()
+        let pinned = exact
+            .and_then(|exact| exact.get(name))
+            .filter(|_| !is_dep(name))
+            .cloned();
+        let line = pinned
+            .or_else(|| spec.version.clone())
             .or_else(|| bindings.get(name).filter(|_| !is_dep(name)).cloned());
         if let Some(line) = line {
             text.push_str(&format!(",version:{line}"));
@@ -248,15 +299,24 @@ pub fn scheme_command(
         specs.push(text);
     }
     let mut pins = String::new();
+    if let Some(exact) = exact {
+        for (name, version) in exact {
+            if is_dep(name) {
+                pins.push_str(&format!(" --dep {name}={version}"));
+            }
+        }
+    }
     for (name, line) in bindings {
-        if is_dep(name) {
+        let already_exact = exact.is_some_and(|exact| exact.contains_key(name));
+        if is_dep(name) && !already_exact {
             pins.push_str(&format!(" --dep {name}={line}"));
         }
     }
-    format!(
-        "phprt install {product}@{series} '{}'{pins}",
-        specs.join(",")
-    )
+    let target = match version {
+        Some(version) => format!("{product}@{version}"),
+        None => format!("{product}@{series}"),
+    };
+    format!("phprt install {target} '{}'{pins}", specs.join(","))
 }
 
 /// 方案指纹：只含用户输入——组件名、mode、feature、依赖转授、版本线、绑定。
@@ -297,6 +357,34 @@ pub fn file_digest(path: &Path) -> Result<String> {
     Ok(digest(&String::from_utf8_lossy(&bytes)))
 }
 
+/// 一次解析的版本指纹：产品补丁 + 每个构建节点的 line / version / sha256。
+///
+/// 结果与节点传入顺序无关：先按 `Target::id` 建 BTreeMap，再按固定字段顺序
+/// 序列化，最后算 sha256。同一组节点无论以什么顺序收集，指纹都相同。
+///
+/// 只用于比较“这次解析和上次是不是同一批补丁”，不能拿来还原版本。
+pub fn resolution_digest(product_version: &str, nodes: &[&Target]) -> String {
+    let mut canonical: BTreeMap<String, String> = BTreeMap::new();
+    for node in nodes {
+        canonical.insert(
+            node.id(),
+            format!(
+                "kind={}\nname={}\nline={}\nversion={}\nsha256={}\n",
+                node.kind.as_str(),
+                node.name,
+                node.line,
+                node.version,
+                node.sha256
+            ),
+        );
+    }
+    let mut text = format!("product={product_version}\n");
+    for (id, body) in canonical {
+        text.push_str(&format!("node={id}\n{body}"));
+    }
+    digest(&text)
+}
+
 fn digest(text: &str) -> String {
     use sha2::Digest;
     let value = sha2::Sha256::digest(text.as_bytes());
@@ -313,6 +401,7 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
         explicit_patch,
         site,
         scheme,
+        resolution,
         requested_command,
         tree,
         installed_tree,
@@ -342,6 +431,10 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
                             "\n  本次方案: {requested_command}\n  已装方案没记录，用 phprt scheme {product}@{series} 查看"
                         ));
                     }
+                } else if !record.resolution.is_empty() && record.resolution != *resolution {
+                    head = format!(
+                        "{product} {target} 已安装（{tree}），编译配置一致，但解析出的版本与本次不同"
+                    );
                 }
                 bail!(
                     "{head}\n  \
@@ -437,6 +530,7 @@ mod tests {
             explicit_patch: true,
             site,
             scheme,
+            resolution: "res",
             requested_command: "phprt install php@8.4 'swoole=mode=shared'",
             tree: ".phprt/php-8.4.14".into(),
             installed_tree: ".phprt/php-8.4.14".into(),
@@ -448,6 +542,7 @@ mod tests {
         Site::Complete(InstalledTree {
             version: "8.4.14".into(),
             scheme: scheme.to_owned(),
+            resolution: String::new(),
             scheme_cmd: "phprt install php@8.4 'gd=mode:static'".to_string(),
             components: Vec::new(),
         })
@@ -585,6 +680,63 @@ mod tests {
         assert!(err.contains("不存在"), "{err}");
     }
 
+    fn node(kind: &str, name: &str, version: &str, sha256: &str) -> Target {
+        serde_json::from_value(serde_json::json!({
+            "kind": kind,
+            "name": name,
+            "version": version,
+            "sha256": sha256,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn resolution_digest_ignores_node_order() {
+        let php = node("product", "php", "8.5.12", "aaa");
+        let openssl = node("dep", "openssl", "3.5.9", "bbb");
+        let zlib = node("dep", "zlib", "1.3.2", "ccc");
+
+        let forward = resolution_digest("8.5.12", &[&php, &openssl, &zlib]);
+        let backward = resolution_digest("8.5.12", &[&zlib, &php, &openssl]);
+        assert_eq!(forward, backward);
+
+        let newer = resolution_digest(
+            "8.5.12",
+            &[&php, &node("dep", "openssl", "3.5.10", "bbb"), &zlib],
+        );
+        assert_ne!(forward, newer);
+    }
+
+    #[test]
+    fn marker_version_must_match_the_expected_tree() {
+        let root = std::env::temp_dir().join(format!("phprt-marker-ver-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dir = tree_path(&root, "php", "8.5.13");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(FILE_NAME),
+            "version=8.5.12\nscheme=abc\nresolution=res\n",
+        )
+        .unwrap();
+        // 目录被改名或 prefix 换了补丁：标记不能证明这棵树是 8.5.13。
+        assert_eq!(site(&root, "php", "8.5.13"), Site::Interrupted);
+        assert_eq!(site(&root, "php", "8.5.12"), Site::Absent);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn same_scheme_different_resolution_is_not_consistent() {
+        let mut site = complete("abc");
+        if let Site::Complete(tree) = &mut site {
+            tree.resolution = "old".into();
+        }
+        let err = decide(&facts(site, "abc"), false).unwrap_err().to_string();
+        assert!(
+            err.contains("编译配置一致，但解析出的版本与本次不同"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn marker_roundtrip() {
         let root = std::env::temp_dir().join(format!("phprt-marker-{}", std::process::id()));
@@ -597,6 +749,7 @@ mod tests {
         let tree = InstalledTree {
             version: "8.5.12".into(),
             scheme: "abc123".into(),
+            resolution: "res123".into(),
             scheme_cmd: "phprt install php@8.5 'swoole=mode:shared'".into(),
             components: vec![ComponentFacts {
                 name: "swoole".into(),
@@ -606,7 +759,7 @@ mod tests {
                 artifacts: vec!["lib/php/extensions/x/swoole.so".into()],
             }],
         };
-        write(&root, "php", &tree).unwrap();
+        write(&root, "php", "8.5.12", &tree).unwrap();
         assert_eq!(site(&root, "php", "8.5.12"), Site::Complete(tree.clone()));
         assert_eq!(
             tree.component("swoole").map(|item| item.ini.as_str()),

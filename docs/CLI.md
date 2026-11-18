@@ -118,12 +118,12 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `list` | 扫描 `.phprt/*/state.json`，列出已安装的产品 | 否 |
 | `list <产品>@<系列> [--installed\|--pending]` | 列出该产品的组件及状态 | 否 |
 | `graph <产品>@<系列>` | 按当前方案打印依赖边，只包含本次构建闭包内的节点 | 否 |
-| `plan <产品>@<系列> [目标] [--json]` | 求解并输出构建计划 | 否 |
-| `install <产品>@<系列\|补丁> [--force] [--downloads]` | 下载、解压、编译并安装；只接受一个产品 | 默认是，`--downloads` 否 |
-| `update <产品>@<系列> [--downloads]` | 在该产品线上重新解析补丁并构建 | 默认是，`--downloads` 否 |
-| `scheme <产品>@<系列>` | 打印一条可复制执行的重建命令 | 否 |
-| `add <产品>@<系列> <组件> [--force]` | 把组件加入方案并立即增量构建 | 是 |
-| `remove <产品>@<系列> <组件> [--force]` | 移出方案并删掉产物；静态组件重编 | 是 |
+| `plan <产品>@<系列> [目标] [--json] [--lock]` | 求解并输出构建计划 | 否 |
+| `install <产品>@<系列\|补丁> [--force] [--lock] [--downloads]` | 下载、解压、编译并安装；只接受一个产品 | 默认是，`--downloads` 否 |
+| `update <产品>@<系列> [--downloads]` | 保持方案和版本线，在该产品线上重新解析补丁并构建 | 默认是，`--downloads` 否 |
+| `scheme <产品>@<系列> [--lock]` | 打印一条可复制执行的重建命令；`--lock` 附精确补丁 | 否 |
+| `add <产品>@<系列> <组件> [--force] [--lock]` | 把组件加入方案并立即增量构建 | 是 |
+| `remove <产品>@<系列> <组件> [--force] [--lock]` | 移出方案并删掉产物；静态组件重编 | 是 |
 | `audit <产品>@<系列> [--json]` | 对照上游选项清单检查 recipe 的处置 | 否 |
 
 `install` / `update` / `plan` 另外支持：
@@ -135,6 +135,10 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `--disable-default-component <NAME>` | 禁用该产品系列的默认组件；可重复 |
 
 持久化组件方案用 `add` / `remove`；`install --component` 只影响这一次构建。
+
+`install` / `plan` / `add` / `remove` 还支持 `--lock`：按 state 记录的实际补丁解析当前方案，
+只锁当前闭包里的节点，不写状态。CLI 显式选择会整体覆盖版本线 + 补丁；`update` 不接受
+`--lock`，它就是升级入口。语义见 [LOCK.md](LOCK.md)。
 
 ## 组件
 
@@ -319,12 +323,13 @@ $ phprt add php@8.5 xdebug --force        # 手改过 30-xdebug.ini
 | 没装过 | 任意 | 正常安装 |
 | 本次补丁已装、方案指纹一致 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案一致”，退出 1 |
 | 本次补丁已装、方案指纹不同 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案不一致”，退出 1 |
+| 本次补丁已装、方案一致但解析出的版本不同 | `install 产品@补丁` | 拒绝：说明“编译配置一致，但解析出的版本与本次不同”，退出 1 |
 | 本次补丁已装 | `install 产品@补丁 --force` | 等下载、解压都成功后，旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
 | 本次补丁的树在、缺完成标记 | 任意 | 当成中断，打印提示后继续 |
 | state 说装过、本次补丁的树不存在 | 任意 | 直接装（树被删过，没有要保护的东西） |
-| 已装别的补丁、命令只写系列 | `install 产品@系列` | 拒绝：提示已存在旧版本，要求显式写补丁号 |
-| 已装别的补丁 | `install 产品@系列 --force` | 直接装本次解析到的补丁，不动已装的旧版本 |
-| 已装别的补丁、显式写补丁号 | `install 产品@补丁` | 正常升级 / 降级 |
+| 已装 8.5.12、catalog 已升到 8.5.13 | `install php@8.5` | 仍按 8.5.12 解析；命中上面的“已装”拒绝 |
+| 已装 8.5.12、catalog 已升到 8.5.13 | `update php@8.5` | 解析到 8.5.13，构建新树，成功后写 state |
+| 已装 8.5.12 | `install php@8.5.13` | 显式补丁：正常升级 / 降级 |
 | `--downloads` | 任意 | 不判定，只取源码 |
 
 ```text
@@ -336,12 +341,11 @@ error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案
 ```
 
 ```text
-$ phprt install php@8.4            # 已装 8.4.12
-error: 已存在旧版本 php 8.4.12（.phprt/php-8.4.12），本次解析到 8.4.14
-  要装 8.4.14，请显式写补丁号：
-    phprt install php@8.4.14
-  或者交给 --force：直接装 8.4.14，不动 8.4.12 这个版本
-    phprt install php@8.4 --force
+$ phprt install php@8.4            # 已装 8.4.12，catalog 的依赖补丁已前进
+error: php 8.4.12 已安装（.phprt/php-8.4.12），编译配置一致，但解析出的版本与本次不同
+  要重新安装，任选其一：
+    phprt install php@8.4.12 --force     # 已装版本改名成 .phprt/php-8.4.12-backup-<日期>，然后全新安装
+    rm -rf .phprt/php-8.4.12             # 确认不再需要这个版本，删掉后再装
 ```
 
 | 参数 | 说明 |
@@ -382,7 +386,8 @@ phprt install php@8.5 'curl=mode:static,dep:libcurl[ssl],gd=mode:static,feature:
 - 完整组件列表（含当时生效的默认组件）；
 - 每个组件的 `mode`、自己的 `feature`、依赖转授、用户钉的版本线；
 - 用户用 `--dep` 钉的依赖线，写成命令行上的 `--dep NAME=LINE`；
-- **不含**补丁号、解析出的依赖线交集、feature 并集、configure 参数。
+- **不含**补丁号、解析出的依赖线交集、feature 并集、configure 参数；要连补丁一起复制用
+  `scheme --lock`。
 
 导入就是 `install` 的第二个位置参数：
 
@@ -394,10 +399,27 @@ phprt install php@8.5 'curl=mode:static,swoole=mode:shared,xdebug=mode:shared'
 - 列表里的组件在 recipe 里找不到 → 报错并指出名字（`未知组件 component:xxx`）。
 - `scheme` 只导出已保存的方案：该系列没有构建过时直接报错
   （`当前没有构建过 php 8.2`），不会凭空展示默认集。
-- 同一份列表在别的机器上得到相同方案；补丁跟随 catalog，不锁。
+- 同一份列表在别的机器上得到相同方案；补丁跟随 catalog。
 - 方案列表不能和 `--component` / `--disable-default-component` 一起用。
 - 空列表 `''` 表示一个组件都不选。
 - 粘贴执行后如果和已装树一致，会按「重复安装与中断」拒绝并说明配置一致。
+
+### scheme --lock
+
+```bash
+phprt scheme php@8.5 --lock
+```
+
+```text
+phprt install php@8.5.12 'curl=mode:static,dep:libcurl[ssl],swoole=mode:shared,version:6.2.5' --dep libcurl=8.23.0 --dep openssl=3.5.9
+```
+
+- 目标写成 `产品@补丁`；
+- 有自己版本线的外部组件写 `version:<补丁>`，bundled 组件不写；
+- 依赖库写 `--dep NAME=<补丁>`；
+- 只导出当前闭包里的节点，已删除组件的历史依赖不写进命令；
+- 导出的补丁必须仍在 catalog 的 `patches` 里，缺失直接报错，不改用当前补丁；
+- 该系列没有安装完成的产品时直接报错。
 
 ## 下载与解压
 

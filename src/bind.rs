@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 
 use crate::bundle::Bundle;
 use crate::catalog::{Artifact, Catalog};
+use crate::lock::EffectivePins;
 use crate::recipe::{Kind, RecipeMeta};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,10 +40,10 @@ pub fn resolve(
     product: &str,
     series: &str,
     selected_components: &[String],
-    pins: &BTreeMap<String, String>,
+    pins: &EffectivePins,
 ) -> Result<Bindings> {
     // 1. 显式指定的线必须存在。
-    for (name, line) in pins {
+    for (name, line) in &pins.lines {
         let lines = catalog
             .lines(name)
             .ok_or_else(|| anyhow::anyhow!("「{name}」没有可选版本（catalog 里没有这个组件）"))?;
@@ -122,7 +123,7 @@ pub fn resolve(
         .filter(|name| !product_names.contains(name.as_str()))
     {
         let lines = catalog.lines(name).expect("catalog 刚刚校验过");
-        let choice = if let Some(line) = pins.get(name) {
+        let choice = if let Some(line) = pins.lines.get(name) {
             Some(Choice {
                 line: line.clone(),
                 source: Source::Pinned,
@@ -392,14 +393,45 @@ pub fn resolve(
         ..Bindings::default()
     };
     for (name, choice) in choices {
-        let artifact = catalog
-            .get(&name, &choice.line)
-            .expect("第 2 步刚刚校验过")
-            .clone();
+        // `--lock` 给了精确补丁就用它；找不到直接报错，不回落当前补丁。
+        let artifact = match pins.versions.get(&name) {
+            Some(version) => catalog
+                .artifact_for(&name, &choice.line, version)
+                .ok_or_else(|| {
+                    locked_patch_missing(&name, &choice.line, version, catalog, product, series)
+                })?,
+            None => catalog
+                .get(&name, &choice.line)
+                .expect("第 2 步刚刚校验过")
+                .clone(),
+        };
         bindings.lines.insert(name.clone(), choice.line);
         bindings.artifacts.insert(name, artifact);
     }
     Ok(bindings)
+}
+
+fn locked_patch_missing(
+    name: &str,
+    line: &str,
+    version: &str,
+    catalog: &Catalog,
+    product: &str,
+    series: &str,
+) -> anyhow::Error {
+    let current = catalog.get(name, line);
+    let current_version = current
+        .map(|artifact| artifact.version.as_str())
+        .unwrap_or("无");
+    let mut available = vec![current_version.to_owned()];
+    if let Some(current) = current {
+        available.extend(current.patches.iter().map(|patch| patch.version.clone()));
+    }
+    anyhow::anyhow!(
+        "lock 里的 {name} {version} 不在 catalog（线 {line} 当前 {current_version}，\
+         可用：{}）；用 phprt update {product}@{series} 升级，或在 catalog 里保留旧补丁",
+        available.join(", ")
+    )
 }
 
 /// 生成注入给 recipe 的公共 ctx；每个 recipe 还会再补一个 self。
@@ -508,7 +540,7 @@ mod tests {
             "php",
             "8.5",
             &[],
-            &BTreeMap::new(),
+            &EffectivePins::default(),
         )
         .unwrap_err()
         .to_string();
@@ -528,7 +560,7 @@ mod tests {
             "php",
             "8.5",
             &[],
-            &BTreeMap::new(),
+            &EffectivePins::default(),
         )
         .unwrap_err()
         .to_string();
@@ -547,7 +579,7 @@ mod tests {
             "php",
             "7.4",
             &[],
-            &BTreeMap::new(),
+            &EffectivePins::default(),
         )
         .expect("7.4 加载成功，只是不绑定 protobuf");
         assert!(!bindings.lines.contains_key("protobuf"));
@@ -559,7 +591,7 @@ mod tests {
             "php",
             "7.4",
             &["protobuf".to_owned()],
-            &BTreeMap::new(),
+            &EffectivePins::default(),
         )
         .unwrap_err()
         .to_string();

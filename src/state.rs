@@ -20,7 +20,7 @@ pub struct ComponentState {
     /// 选中的版本线，如 6.2；bundled 组件为空。
     #[serde(default)]
     pub line: String,
-    /// 实际解析到的补丁，如 6.2.5；只记录，不锁定。
+    /// 实际解析到的补丁，如 6.2.5；`--lock` 把它当作精确版本。
     #[serde(default)]
     pub version: String,
     /// 挂载方式，如 static / shared / dynamic。
@@ -48,7 +48,8 @@ pub struct DepState {
 
 /// `.phprt/<产品>-<系列>/state.json`：当前构建方案和已编译产物的状态。
 ///
-/// 这里只记录状态，不锁定版本；dep 的版本仍然按系列取最新。
+/// 解析时它是 `--lock` 的版本来源：line 默认复用，`--lock` 再复用 version；
+/// 真正的源码地址仍然只从 catalog 取。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectState {
     #[serde(default = "state_version")]
@@ -410,7 +411,7 @@ impl ProjectState {
         out
     }
 
-    /// 用本次闭包重建 deps 状态；版本只记录，不参与锁定。
+    /// 用本次闭包重建 deps 状态；重编成功后才能覆盖 line / version。
     pub fn set_deps(&mut self, order: &[&Target], features: &BTreeMap<String, Vec<String>>) {
         self.deps = order
             .iter()
@@ -426,6 +427,21 @@ impl ProjectState {
                 )
             })
             .collect();
+    }
+
+    /// 不重编的 remove：保留已记录的 line / version，只收窄 feature、删掉闭包外的 dep。
+    ///
+    /// 当前 catalog 解析出来的版本没有真正编译过，不能覆盖 state。
+    pub fn prune_deps(&mut self, order: &[&Target], features: &BTreeMap<String, Vec<String>>) {
+        let needed: BTreeSet<&str> = order
+            .iter()
+            .filter(|t| t.kind == Kind::Dep)
+            .map(|t| t.name.as_str())
+            .collect();
+        self.deps.retain(|name, _| needed.contains(name.as_str()));
+        for (name, dep) in self.deps.iter_mut() {
+            dep.features = features.get(name).cloned().unwrap_or_default();
+        }
     }
 
     pub fn component_status(&self, name: &str) -> &'static str {
@@ -672,6 +688,41 @@ mod tests {
             sel.features_of(reg.component("curl").unwrap()),
             Some(&BTreeSet::new())
         );
+    }
+
+    #[test]
+    fn prune_deps_keeps_versions_and_drops_deps_outside_the_closure() {
+        let reg = registry();
+        let mut state = ProjectState::default();
+        state.deps.insert(
+            "libcurl".into(),
+            DepState {
+                line: "8.23".into(),
+                version: "8.23.0".into(),
+                features: vec!["ssl".into(), "nghttp2".into()],
+            },
+        );
+        // 已删除组件留下的历史依赖，这次闭包里没有。
+        state.deps.insert(
+            "openssl".into(),
+            DepState {
+                line: "3.5".into(),
+                version: "3.5.9".into(),
+                features: vec![],
+            },
+        );
+
+        let order = vec![reg.get("dep:libcurl").unwrap()];
+        state.prune_deps(
+            &order,
+            &BTreeMap::from([("libcurl".to_string(), vec!["ssl".to_string()])]),
+        );
+
+        assert!(!state.deps.contains_key("openssl"));
+        // 版本是上次真正编译过的，不按当前 catalog 重算。
+        assert_eq!(state.deps["libcurl"].line, "8.23");
+        assert_eq!(state.deps["libcurl"].version, "8.23.0");
+        assert_eq!(state.deps["libcurl"].features, vec!["ssl"]);
     }
 
     #[test]

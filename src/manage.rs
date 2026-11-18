@@ -598,6 +598,7 @@ mod tests {
         let installed = InstalledTree {
             version: "8.5.12".into(),
             scheme: "s".into(),
+            resolution: String::new(),
             scheme_cmd: String::new(),
             components: Vec::new(),
         };
@@ -627,6 +628,7 @@ mod tests {
         let installed = InstalledTree {
             version: "8.5.12".into(),
             scheme: "s".into(),
+            resolution: String::new(),
             scheme_cmd: String::new(),
             components: vec![ComponentFacts {
                 name: "swoole".into(),
