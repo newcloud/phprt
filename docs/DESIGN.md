@@ -295,6 +295,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |
+| [IMAGE.md](IMAGE.md) | 容器化构建（toolchain 线、执行后端）、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）（待实施，代码未实现） |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
