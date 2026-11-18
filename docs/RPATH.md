@@ -1,6 +1,6 @@
 # RPATH 设置：oxipatch / patchelf 双后端
 
-本文是待实施的方案。实施后 BUILD.md、PRODUCT.md 等按第 8 节的清单同步更新；
+本文是待实施的方案。实施后 BUILD.md、PRODUCT.md 等按第 9 节的清单同步更新；
 文档与代码冲突时以代码实际行为为准。
 
 ## 1. 背景
@@ -97,9 +97,21 @@ oxipatch 是 2026 年 10 月首发的 0.1.0 新库（单作者、CI 只覆盖 x8
 patchelf 是多年生产验证的工具。保留双后端 = 风险对冲：默认用 oxipatch
 （零外部依赖、免进程启动），发现任何边界行为问题时，用户改一行
 `rpath_backend = "patchelf"` 即可回退，不需要改代码或重编 phprt。
-两个后端靠第 9 节的差分测试保证语义一致。
+两个后端靠第 10 节的差分测试保证语义一致。
 
-## 6. patchelf 后端的前置检查
+## 6. 备选方案 C：自带 patchelf 源码自编（GreatSQL 式，未采纳）
+
+GreatSQL 的做法：下载固定版本 patchelf 源码包，在编译环境里自己
+`configure && make && make install`，不依赖系统包。对我们而言这能把
+「patchelf 后端」从「要求宿主机已安装」升级为「phprt 自带构建」，但要新
+建第一条「宿主机工具源码构建」管线（现有 tools / host_tools 模型只管检查
+宿主机命令，不管构建），还要接 downloads/ 缓存、sha256 校验、多架构编译。
+当前双后端已覆盖风险（oxipatch 默认 + 系统 patchelf 可选回退），方案 C 只
+在「oxipatch 出现修不好的边界问题且宿主机不允许装 patchelf」时才有价值，
+属于投机性管线，不建；真需要时它是同一个 `set_rpath` 接口下的第三个
+backend，无需重设计。
+
+## 7. patchelf 后端的前置检查
 
 选 `patchelf` 时不再把它放进产品 profile 的 `tools` 清单；改为
 `build::run()` 开始时（与 tools 检查同属「下载源码之前」的失败快）
@@ -109,14 +121,14 @@ patchelf 是多年生产验证的工具。保留双后端 = 风险对冲：默�
 error: rpath_backend = "patchelf" 需要系统安装 patchelf（Fedora: sudo dnf install patchelf）
 ```
 
-## 7. ARM 兼容
+## 8. ARM 兼容
 
 phprtv3 当前只有 x86_64 产物，但后端选择不得把 ARM 排除在外：
 oxipatch 的数据模型按 class / endian 泛化（显式支持 32/64 位、LE/BE，
 测试套件含 elf32 大端 fixture），rpath 操作本身与 e_machine 无关；
-patchelf 命令后端天然随系统工具走。两条后端在 ARM 上都需实测验证（见第 9 节）。
+patchelf 命令后端天然随系统工具走。两条后端在 ARM 上都需实测验证（见第 10 节）。
 
-## 8. 实施时的改动清单
+## 9. 实施时的改动清单
 
 | 文件 | 改动 |
 | --- | --- |
@@ -129,7 +141,7 @@ patchelf 命令后端天然随系统工具走。两条后端在 ARM 上都需实
 | `<项目根>/phprt.toml` | 加第 3 节的注释键 |
 | 文档 | BUILD.md §6 第 2 条与 §7 的 dnf 行；README 工具表与报错示例；CLI.md:317；PRODUCT.md 的 tools 示例与固定名单表述；CONTRACT.md:449「patchelf 输入」措辞；DESIGN.md crates 列表与 config.rs 一行 |
 
-## 9. 验收
+## 10. 验收
 
 ```bash
 cargo fmt --all
@@ -163,13 +175,13 @@ readelf -d .phprt/php-8.5.12/bin/php | grep -E 'RPATH|RUNPATH'
 # phprt.toml: rpath_backend = "patchelf"
 cargo run -- install php@8.5 --force
 
-# patchelf 后端但命令未安装 → 报第 6 节的 dnf 提示
+# patchelf 后端但命令未安装 → 报第 7 节的 dnf 提示
 ```
 
-## 10. 风险与回退
+## 11. 风险与回退
 
 - oxipatch 太新：默认后端就是它，靠差分测试兜底；出问题改配置一行回退，
   不需要发版。
 - ARM 未经上游 CI 验证：差分语料必须含真实 ARM ELF，通过前不算改完。
 - 构建签名不受影响：`runtime` 节点的输入（`lib_dir` / `rpath` 值）没变，
-  只是执行工具换了；CONTRACT.md 相关措辞按第 8 节同步。
+  只是执行工具换了；CONTRACT.md 相关措辞按第 9 节同步。

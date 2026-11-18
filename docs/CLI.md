@@ -258,7 +258,7 @@ phprt 不展开组件之间的依赖：需要 libxml 的扩展（如 DOM/SimpleX
 $ phprt add php@8.5 gd
 error: gd 是内置组件，add 时必须显式选择编译方式：
   phprt add php@8.5 'gd=mode:static'   # 编进产品，需要重编
-  phprt add php@8.5 'gd=mode=shared'   # 编成动态扩展，不重编产品
+  phprt add php@8.5 'gd=mode:shared'   # 编成动态扩展，不重编产品
 ```
 
 ```text

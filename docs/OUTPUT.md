@@ -63,6 +63,21 @@ Sim { root, tree, order: [Node] }
 
 ## 3. 文本格式
 
+先打印三行头部和构建顺序，再逐节点输出：
+
+```text
+phprt plan
+  root   /home/z/project
+  tree   .phprt/php-8.5.12
+
+build order
+   1. dep:openssl               3.5.9
+   2. component:curl            (bundled static)
+  ...
+  25. product:php@8.5.12
+  27. component:xdebug          (external shared, line 3.5)
+```
+
 每个节点一段：
 
 ```text
@@ -226,17 +241,48 @@ xdebug           external  shared             3.5.3      available
 源码已下载到 ./.phprt/downloads（未解压）
 ```
 
-`add` / `remove` 不打印计划，只输出：
+`add` / `remove` 不打印计划，只输出结果行。
+
+`add`（该版本已装过，编译完成后）：
 
 ```text
-已加入组件 swoole（待安装）
+已加入 xdebug（shared）并完成编译
 已写入 ./.phprt/php-8.5/state.json
 ```
 
+`add`（该版本还没装过，只记方案）：
+
 ```text
+已加入 swoole（shared）；这个版本还没装过，先 phprt install php@8.5
+已写入 ./.phprt/php-8.5/state.json
+```
+
+`add` 重复加、产物齐全：
+
+```text
+swoole 已在方案里（shared），产物齐全
+```
+
+`remove`（动态组件，先备份 ini）：
+
+```text
+已备份 ini: .phprt/backup/20261117-163035_swoole.ini
+已移除 swoole（shared），删掉 2 个文件：
+  lib/php/extensions/no-debug-non-zts-20250925/swoole.so
+  etc/conf.d/27-swoole.ini
 已移除组件 swoole
 已写入 ./.phprt/php-8.5/state.json
 ```
+
+`remove`（磁盘上已经没有可删的文件）：
+
+```text
+已移除 swoole（shared），磁盘上没有可删的文件
+已移除组件 swoole
+已写入 ./.phprt/php-8.5/state.json
+```
+
+`add` / `remove` 静态组件会先打印重编代价并确认，确认后重编，编译输出同 `install`。
 
 文件格式见 [STATE.md](STATE.md)。
 

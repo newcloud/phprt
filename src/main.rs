@@ -933,7 +933,8 @@ fn run() -> Result<()> {
                 if !manage::interactive() {
                     bail!("{warning}\n\n非交互环境用 --force 确认重编");
                 }
-                if !manage::confirm(&warning)? {
+                println!("{warning}");
+                if !manage::confirm("继续？")? {
                     bail!("已取消；确认重编就再跑一次并回答 y，或用 --force");
                 }
             }
@@ -961,14 +962,6 @@ fn run() -> Result<()> {
                 &is_dep_kind(&metas),
             );
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
-            let sim = render::build(
-                &reg,
-                &order,
-                &cli.root.display().to_string(),
-                &sel,
-                &features,
-            )?;
-            print!("{}", render::to_text(&sim));
 
             // 没有安装树时不代跑 install，只记方案。
             if matches!(site, marker::Site::Absent) {
@@ -1062,11 +1055,11 @@ fn run() -> Result<()> {
                             if !manage::interactive() {
                                 bail!("{warning}\n\n非交互环境用 --force 确认重编");
                             }
-                            if !manage::confirm(&warning)? {
+                            println!("{warning}");
+                            if !manage::confirm("继续？")? {
                                 bail!("已取消；确认重编就再跑一次并回答 y，或用 --force");
                             }
                         }
-                        println!("{warning}");
                         rebuilt = true;
                     } else {
                         let deleted = manage::apply(
@@ -1096,35 +1089,25 @@ fn run() -> Result<()> {
                 _ => println!("这个版本没有装完，只更新方案"),
             }
 
-            if rebuilt {
-                let sim = render::build(
+            if rebuilt && !fetch_sources(&cli.root, &reg, &order, &download, &config)? {
+                build::run(
                     &reg,
                     &order,
-                    &cli.root.display().to_string(),
                     &sel,
                     &features,
+                    &build::Options {
+                        root: &cli.root,
+                        recipes: &recipes,
+                        ui: download.ui,
+                        scheme: &scheme,
+                        backup,
+                    },
                 )?;
-                print!("{}", render::to_text(&sim));
-                if !fetch_sources(&cli.root, &reg, &order, &download, &config)? {
-                    build::run(
-                        &reg,
-                        &order,
-                        &sel,
-                        &features,
-                        &build::Options {
-                            root: &cli.root,
-                            recipes: &recipes,
-                            ui: download.ui,
-                            scheme: &scheme,
-                            backup,
-                        },
-                    )?;
-                    let deleted = manage::delete_stale_artifacts(&tree, &stale_artifacts)?;
-                    if !deleted.is_empty() {
-                        println!("已删除旧产物 {} 个：", deleted.len());
-                        for item in &deleted {
-                            println!("  {item}");
-                        }
+                let deleted = manage::delete_stale_artifacts(&tree, &stale_artifacts)?;
+                if !deleted.is_empty() {
+                    println!("已删除旧产物 {} 个：", deleted.len());
+                    for item in &deleted {
+                        println!("  {item}");
                     }
                 }
             }

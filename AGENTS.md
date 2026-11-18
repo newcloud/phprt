@@ -24,6 +24,7 @@
 | 选线、依赖线交集、依赖边、子功能传播 | `docs/SOLVER.md` |
 | 文本/JSON 输出、路径、字段 | `docs/OUTPUT.md` |
 | state.json、bindings、line/version | `docs/STATE.md` |
+| 默认版本复用、`--lock`、`scheme --lock`、catalog 旧补丁保留 | `docs/LOCK.md` |
 | 下载、缓存、镜像、分片续传、进度 UI | `docs/DOWNLOAD.md` |
 | 解压顺序、目录、格式、跳过与安全 | `docs/EXTRACT.md` |
 | 构建顺序、环境、签名跳过、日志、rpath、ini、入口 | `docs/BUILD.md` |
@@ -57,9 +58,14 @@
   - 不能为了“可配置”新增未验证的线（每条线都要有 catalog 地址并通过构建）；
   - 不要把同一个默认线在每个系列里重复一遍，也不要靠约束恰好剩一条来隐式选线；
     看到 `自动使用唯一可用线` 时，要么在 bundle 写明确默认，要么把约束收敛成只写例外。
-- 补丁号只写在 `recipes/catalog.toml`；recipe、bundle、state 都不锁补丁。
+- 补丁号只写在 `recipes/catalog.toml`；recipe、bundle 不写补丁号。state 只记录实际装过的
+  `line` / `version`，不复制 `url` / `sha256`；解析时 `--lock` 从 state 取版本、从 catalog
+  取源码，详见 `docs/LOCK.md`。
 - bundle 顶层只写有独立版本线的组件；依赖库默认线写 `[deps]`。bundled 组件没有版本线，不能写顶层。
 - catalog 上的注释不删除。改地址、改版本时同步更新注释内容，保留原意。
+- catalog 默认保留旧补丁：升级某条线的 `version` / `url` / `sha256` 时，把原来的三个值
+  一起移进 `patches`，不删除。产品、组件、依赖库的所有线都适用；显式安装旧补丁、`--lock`、
+  `scheme --lock` 都只从这里取源码，缺失时报错而不是改用当前补丁。
 - 填 catalog 前先按 `docs/ADD-RECIPE.md` 判断下载地址是否跳转：跨站点跳转写跳转后的
   最终地址并注释说明；同一发布方的临时签名跳转写稳定发布地址。
 - dep recipe 不写产品关系；产品与库版本的对应写在消费组件或产品里。

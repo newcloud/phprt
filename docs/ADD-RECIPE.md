@@ -16,7 +16,8 @@
 | 默认启用的组件集合 | `recipes/bundles/<产品>/<系列>.toml` 的 `default_components` |
 | 新产品 | `recipes/catalog.toml` + `recipes/products/<产品>/_profile.star` + `recipes/products/<产品>/<系列>.star` + `recipes/bundles/<产品>/<系列>.toml` |
 
-补丁号只写在 `recipes/catalog.toml`。recipe、bundle、state 都不写补丁号。
+补丁号只写在 `recipes/catalog.toml`。recipe、bundle 不写补丁号；state 只记录实际装过的
+`line` / `version`，作为 `--lock` 的版本来源，源码仍从 catalog 取（见 [LOCK.md](LOCK.md)）。
 
 ## 2. 版本声明原则
 
@@ -108,19 +109,25 @@ sha256sum /tmp/opencode/openssl-3.5.9.tar.gz
 - `sha256` 用于缓存校验，也用于下载完成后的校验。
 - 没有 `sha256` 时只能按远端大小校验，见 [DOWNLOAD.md](DOWNLOAD.md) 第 7 节。
 
-## 5.1 登记旧补丁
+## 5.1 保留旧补丁
 
-需要装指定旧补丁（降级、测试）时，在 catalog 的线里加 `patches`：
+升级某条线的补丁时，把原来的 `version` / `url` / `sha256` 一起移进 `patches`，再写新补丁。
+这是默认维护规则，适用于产品、组件和依赖库的所有线：
 
 ```toml
-"8.4" = { version = "8.4.14", url = ".../php-8.4.14.tar.gz", patches = [
-    { version = "8.4.13", url = ".../php-8.4.13.tar.gz" },
+"8.4" = { version = "8.4.14", url = ".../php-8.4.14.tar.gz", sha256 = "...", patches = [
+    { version = "8.4.13", url = ".../php-8.4.13.tar.gz", sha256 = "..." },
 ] }
 ```
 
-- `version` / `url` / `sha256` 仍是当前最新补丁；
+- `version` / `url` / `sha256` 永远是当前最新补丁；
+- 旧补丁默认不删除，按升级顺序追加；
 - `patches` 只放旧补丁，不能和当前补丁重复；
-- 不写 `patches` 时 `install php@8.4.13` 会报错并列出可用补丁。
+- `patches` 里的 `url` / `sha256` 必须是该旧补丁的真实值，不能只写版本号；
+- 旧补丁是显式安装旧补丁、`--lock`、`scheme --lock` 的唯一源码来源；缺了就报错，
+  不会改用当前补丁（见 [LOCK.md](LOCK.md)）。
+
+少了旧补丁时 `install php@8.4.13` 报错并列出可用补丁。
 
 ## 6. 新增版本线
 

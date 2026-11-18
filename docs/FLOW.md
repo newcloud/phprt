@@ -31,7 +31,7 @@ phprt scheme php@8.5                        # 打印一条 install 命令
 
 - **本地（默认）**：安装树、状态、入口都在项目里（`<root>/.phprt`、`<root>/myphp-<系列>`）。
 - **全局（`--global --prefix <目录>`）**：安装树就是 prefix，状态和完成标记在 prefix 里，
-  不生成项目入口；下载、解压、备份默认在 `~/phprtdownload`、`~/phprtbuild`、`~/phprtbackup`。
+  不生成项目入口；下载、解压、备份默认在 `~/phprtdownloads`、`~/phprtbuild`、`~/phprtbackup`。
   判定逻辑相同，提示里用绝对路径并带上 `--global --prefix`。
 
 ## 2. install
@@ -46,7 +46,7 @@ phprt scheme php@8.5                        # 打印一条 install 命令
 | 已装 8.5.12、完整 | `install php@8.5.12 --force` | 下载、解压成功后旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
 | 已装 8.5.12（无完成标记） | 任意 | 视为中断，继续安装 |
 | 已装 8.5.12、完整 | `install php@8.5.13` | 升级：构建新树 → 成功后才写 state |
-| 已装 8.5.13 | `install php@8.5.12` | 降级：旧树完整就切回，否则重建 |
+| 已装 8.5.13 | `install php@8.5.12` | 降级：重新走流水线，签名一致的节点跳过编译 |
 | state 说装过、目标补丁的树不存在 | 任意 | 直接装（树被删过，没有要保护的东西） |
 
 ### 2.2 拒绝重复安装
@@ -85,7 +85,7 @@ catalog 里的补丁号只代表“本次解析到的目标”，文案里不出
 | 有 | 无 | 8.5.12 | 上次失败/中断，可继续 |
 | 有 | 无 | 空 | 首次安装没收尾 |
 | 无 | 无 | 8.5.12 | 树被删过，直接装 |
-| 有 | 有 | 其他版本 | 旧版本残留，可切回或清理 |
+| 有 | 有 | 其他版本 | 旧版本残留；重新 `install` 旧补丁可切回（签名一致跳过编译），或手工清理 |
 
 ## 3. add
 
@@ -150,7 +150,7 @@ $ phprt remove php@8.5 gd
 gd（static）需要和 php 一起重新 configure/make（约 3 分钟），并覆盖 .phprt/php-8.5.12/ 里的文件
 建议先自行备份：
   cp -a .phprt/php-8.5.12 .phprt/php-8.5.12.bak-$(date +%F-%H%M)
-继续？[y/N]
+继续？ [y/N]
 ```
 
 - 只提示，不代做备份，不提供 `--backup`；
@@ -173,6 +173,7 @@ gd（static）需要和 php 一起重新 configure/make（约 3 分钟），并�
 
 ```text
 $ phprt remove php@8.5 swoole
+已备份 ini: .phprt/backup/20261117-163035_swoole.ini
 已移除 swoole（shared），删掉 2 个文件：
   lib/php/extensions/no-debug-non-zts-20250925/swoole.so
   etc/conf.d/27-swoole.ini
@@ -206,45 +207,17 @@ phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,zip=dep:libzip[enc
 
 ## 7. state 模型
 
-state 只保存两类数据，解析结果每次重算：
+state 记两类数据，解析结果每次重算（完整字段见 [STATE.md](STATE.md#2-格式)）：
 
 ```text
-方案（输入，可手改，需校验）  components + 每项的 mode/features/deps/版本线 + bindings
-安装事实（工具写）            installed.version + 每项的 mode/artifacts/ini/ini_hash
+方案（输入，可手改）  components + 每项的 line / mode / deps / features，以及 bindings
+安装事实（工具写）    installed_version + 每个组件的 installed 标记
 ```
 
-草案：
-
-```json
-{
-  "version": 4,
-  "product": "php",
-  "series": "8.5",
-  "scheme": {
-    "components": {
-      "gd":     { "mode": "static", "features": ["jpeg"], "deps": { "jpeg": ["simd"] } },
-      "swoole": { "mode": "shared" }
-    },
-    "bindings": { "openssl": "3.5" }
-  },
-  "installed": {
-    "version": "8.5.12",
-    "components": {
-      "swoole": {
-        "mode": "shared",
-        "artifacts": ["lib/php/extensions/…/swoole.so"],
-        "ini": "etc/conf.d/27-swoole.ini",
-        "ini_hash": "sha256:…"
-      }
-    }
-  }
-}
-```
-
-- 不保存 `deps.*` 的解析结果、组件补丁号、configure 参数；
-- 手改只允许改 `scheme`，加载时校验组件名 / mode / feature / dep；
-- `add` / `remove` 一律从 `scheme` 重新求解，不把 state 里的派生值当输入；
-- schema 升级时旧字段直接丢弃，不迁移。
+- `components` 是权威方案，`plan` / `install` 都从它出发；
+- `bindings` 只保存用户显式钉的版本线，bundle 解析出的默认线不写；
+- 补丁号只记录不锁定，`deps.*` 的解析结果每次重算；
+- 旧 schema（version 2）不自动迁移，读到直接报错要求重新安装。
 
 ## 8. `--force` 的边界
 
@@ -273,7 +246,7 @@ phprt install php@8.5                     # catalog 更新后：拒绝并提示 
 
 phprt add php@8.5 gd                      # 拒绝：内置扩展必须写 mode
 phprt add php@8.5 'gd=mode:shared'        # 只编 gd，PHP 不动
-phprt add php@8.5 'gd=mode=static'        # 提示备份已装版本，确认后重编
+phprt add php@8.5 'gd=mode:static'        # 提示备份已装版本，确认后重编
 phprt add php@8.5 swoole                  # pecl：默认 shared
 phprt remove php@8.5 swoole               # 备份 ini → 删 ini + .so
 phprt remove php@8.5 swoole --no-backup-php-ext-ini
@@ -282,14 +255,3 @@ phprt remove php@8.5 gd                   # 静态：确认 + 重编
 phprt scheme php@8.5                      # 输出可直接执行的 install 命令
 phprt install php@8.5 '…'                 # 按导出命令重建
 ```
-
-## 11. 落地清单
-
-0. **前置**：构建签名不要包含调用者环境（`PATH` / `CFLAGS` / `PKG_CONFIG_PATH` 等），
-   否则换 shell 或 CI 就会全量重编，“add shared 不重编 PHP”的承诺不成立。
-1. `src/main.rs`：`install` 增加版本判定与拒绝逻辑；`add` / `remove` 改为“改方案后立即构建”；新增 `scheme` 子命令；`--force` / `--no-backup-php-ext-ini`。
-2. `src/state.rs`：schema 4（`scheme` + `installed`），删除 `deps` 解析字段与 `line/version` 派生字段。
-3. `src/build.rs`：写完成标记；`remove` 删除产物与 ini（按 mode 的 `artifacts`）；静态删除走重编。
-4. ini 写入前比较内容并在需要时备份到 `.phprt/backup/`。
-5. 交互：TTY 确认、非 TTY 拒绝；`--force` 放行。
-6. 文档：实现后并入 CLI.md / STATE.md / BUILD.md，删除本文件；`AGENTS.md` 验收补第 10 节用例。

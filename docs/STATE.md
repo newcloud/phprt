@@ -200,7 +200,9 @@ artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
 - 产物写的是展开后的实际路径（recipe 里的 `*` 已经展开），删组件时按它删文件。
 - `ini_hash` 是安装时 ini 的内容指纹，`remove` 用它判断文件有没有被手改。
 - state 记录的是**方案**，并按系列存放；标记记录的是**这一棵安装树**，按补丁存放。
-- `state.installed_version` 指向当前生效的补丁；切回旧补丁时，旧树的标记还在就不用重编。
+- `state.installed_version` 指向当前生效的补丁。切回旧补丁仍会走一遍安装流水线，
+  已编译节点靠工作目录里的 `.phprt-sig` 签名一致来跳过，见 [BUILD.md](BUILD.md) 第 4 节；
+  marker 不承担编译缓存。
 - `install` 用标记判断“这个补丁装过没有”：装过就拒绝重复安装，并说明本次方案与之
   一致还是不一致，细节见 [CLI.md](CLI.md#重复安装与中断)。
 - 补丁不同时不看标记：显式写补丁号就装，只写系列则提示已存在旧版本。

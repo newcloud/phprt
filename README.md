@@ -102,6 +102,7 @@ phprt add php@8.5 redis
 - `dep:名字[feature,...]`：打开组件对依赖的集成，并把 feature 转给依赖；
 - `feature:[...]`：组件自己的编译开关；`feature:[]` 表示全部关闭；
 - 加多个扩展就执行多条 `add`。
+- 该系列还没装过时，`add` 只记方案、不代跑 `install`（会提示先 `phprt install php@8.5`）。
 
 如果方案里有、磁盘上缺文件（比如 ini 被删了），`add` 会提示并拒绝；确认要重新编译时加
 `--force`：
@@ -157,7 +158,10 @@ phprt install php@8.5 'curl=mode:static,gd=mode:shared,swoole,xdebug=mode:shared
 ```
 
 把输出里的命令拿到另一台机器（或另一个项目目录）执行，就得到同一套组件和编译方式。
-补丁号按当时的 catalog 取，不锁死。
+
+补丁默认按当时的 catalog 取。catalog 会保留旧补丁，所以 `phprt install php@8.5.12`
+这类显式旧补丁一直能装。要把补丁也一起复现，用 `phprt scheme php@8.5 --lock`
+导出产品补丁、实际版本线和精确补丁（待实施，方案见 [docs/LOCK.md](docs/LOCK.md)）。
 
 反过来也可以直接给 `install` 一份完整列表（替换当前方案）：
 
@@ -278,6 +282,8 @@ error: 缺少构建工具: patchelf
 PHP    7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6
 nginx  1.29
 ```
+
+PHP 8.6 系列 recipe 还在适配，目前只声明了部分内置扩展。
 
 PHP 扩展用 `phprt list php@8.5` 查看，包含内置扩展（curl、gd、mbstring…）和 PECL 扩展
 （swoole、xdebug、redis、imagick…），以及每个扩展支持的方式（static / shared）。

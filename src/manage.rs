@@ -262,7 +262,10 @@ pub fn backup_file(
     })();
 
     match saved {
-        Ok(path) => Ok(Some(path)),
+        Ok(path) => {
+            println!("已备份 ini: {}", path.display());
+            Ok(Some(path))
+        }
         Err(err) => Err(err.context("备份 ini 失败；可以加 --no-backup-php-ext-ini 跳过备份")),
     }
 }
