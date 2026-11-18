@@ -40,6 +40,27 @@ impl Fixture {
         .unwrap();
     }
 
+    fn read_state(&self) -> Value {
+        let text = fs::read_to_string(self.root.join(".phprt/php-8.5/state.json")).unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    /// 模拟 catalog 删掉 libmemcached 的旧线 1.1：线改名为 1.2，bundle 同步。
+    fn retire_libmemcached_line(&self) {
+        let text = fs::read_to_string(self.catalog()).unwrap();
+        let text = replace_line(
+            &text,
+            "\"1.1\" = {",
+            "\"1.2\" = { version = \"1.1.4\", url = \"https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz\", sha256 = \"c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a\" }",
+        );
+        fs::write(self.catalog(), text).unwrap();
+
+        let bundle = self.recipes().join("bundles/php/8.5.toml");
+        let text = fs::read_to_string(&bundle).unwrap();
+        let text = replace_line(&text, "libmemcached = ", "libmemcached = \"1.2\"");
+        fs::write(bundle, text).unwrap();
+    }
+
     fn remove_state(&self) {
         let _ = fs::remove_dir_all(self.root.join(".phprt/php-8.5"));
     }
@@ -199,6 +220,25 @@ fn full_state() -> Value {
         &[("openssl", "3.5", "3.5.9"), ("zlib", "1.3", "1.3.2")],
         "8.5.12",
     )
+}
+
+/// 装了 memcached，并在 bindings 里显式钉了它的依赖 libmemcached。
+fn memcached_state() -> Value {
+    let mut st = state(
+        &[],
+        &[("libmemcached", "1.1", "1.1.4"), ("zlib", "1.3", "1.3.2")],
+        "8.5.12",
+    );
+    st["components"]["memcached"] = serde_json::json!({
+        "line": "3.4",
+        "version": "3.4.0",
+        "mode": "shared",
+        "installed": true,
+        "deps": {},
+        "features": []
+    });
+    st["bindings"] = serde_json::json!({ "libmemcached": "1.1" });
+    st
 }
 
 #[test]
@@ -402,4 +442,121 @@ fn no_state_means_no_lock_source() {
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--lock 没有可锁定的版本"), "{err}");
+}
+
+#[test]
+fn remove_prunes_bindings_outside_the_closure() {
+    let f = Fixture::new("prune-bindings");
+    f.write_state(memcached_state());
+
+    let out = f.run(&["remove", "php@8.5", "memcached"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let saved = f.read_state();
+    assert!(saved["bindings"].as_object().unwrap().is_empty(), "{saved}");
+    assert!(
+        !saved["deps"]
+            .as_object()
+            .unwrap()
+            .contains_key("libmemcached"),
+        "{saved}"
+    );
+}
+
+#[test]
+fn stale_binding_does_not_block_later_commands() {
+    let f = Fixture::new("stale-later");
+    f.write_state(memcached_state());
+
+    let out = f.run(&["remove", "php@8.5", "memcached"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // remove 之后 catalog 再删旧线：后续命令不该再碰到这条 binding。
+    f.retire_libmemcached_line();
+
+    let out = f.run(&["plan", "php@8.5", "--json"]);
+    assert!(
+        out.status.success(),
+        "plan: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = f.run(&["add", "php@8.5", "xdebug"]);
+    assert!(
+        out.status.success(),
+        "add: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = f.run(&["remove", "php@8.5", "xdebug"]);
+    assert!(
+        out.status.success(),
+        "remove: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // update 会进入下载阶段（离线空缓存会失败），这里只验证 resolver
+    // 没有被 stale binding 挡住。
+    let out = f.run(&["update", "php@8.5", "--downloads", "--offline"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("libmemcached"), "{err}");
+}
+
+#[test]
+fn scheme_lock_skips_bindings_outside_the_closure() {
+    let f = Fixture::new("scheme-stale-binding");
+    let mut st = full_state();
+    st["bindings"] = serde_json::json!({ "libmemcached": "1.1" });
+    f.write_state(st);
+
+    let out = f.run(&["scheme", "php@8.5", "--lock"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let line = String::from_utf8_lossy(&out.stdout);
+    assert!(!line.contains("libmemcached"), "{line}");
+    assert!(line.contains("--dep openssl=3.5.9"), "{line}");
+    assert!(line.contains("--dep zlib=1.3.2"), "{line}");
+}
+
+#[test]
+fn missing_stale_line_does_not_block_remove() {
+    let f = Fixture::new("stale-blocks-remove");
+    f.write_state(memcached_state());
+    // catalog 已经删掉旧线，binding 还留在 state 里：remove 自己不能被它挡住。
+    f.retire_libmemcached_line();
+
+    let out = f.run(&["remove", "php@8.5", "memcached"]);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let saved = f.read_state();
+    assert!(
+        !saved["bindings"]
+            .as_object()
+            .unwrap()
+            .contains_key("libmemcached"),
+        "{saved}"
+    );
+    assert!(
+        !saved["deps"]
+            .as_object()
+            .unwrap()
+            .contains_key("libmemcached"),
+        "{saved}"
+    );
 }

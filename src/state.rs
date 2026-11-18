@@ -444,6 +444,14 @@ impl ProjectState {
         }
     }
 
+    /// 按最终闭包收窄显式线。
+    ///
+    /// 只在已经算出 `order` 的路径上调用（目前是 `remove`），避免在这里猜
+    /// 哪些名字会被当前方案使用；闭包外的 binding 没有语义意义。
+    pub fn prune_bindings(&mut self, desired: &BTreeSet<String>) {
+        self.bindings.retain(|name, _| desired.contains(name));
+    }
+
     pub fn component_status(&self, name: &str) -> &'static str {
         match self.components.get(name) {
             Some(c) if c.installed => "installed",
@@ -723,6 +731,25 @@ mod tests {
         assert_eq!(state.deps["libcurl"].line, "8.23");
         assert_eq!(state.deps["libcurl"].version, "8.23.0");
         assert_eq!(state.deps["libcurl"].features, vec!["ssl"]);
+    }
+
+    #[test]
+    fn prune_bindings_keeps_only_the_current_closure() {
+        let mut state = ProjectState::default();
+        state.bindings.insert("openssl".into(), "3.5".into());
+        state.bindings.insert("libmemcached".into(), "1.1".into());
+        state.bindings.insert("swoole".into(), "6.2".into());
+
+        state.prune_bindings(&BTreeSet::from([
+            "php".to_owned(),
+            "openssl".to_owned(),
+            "swoole".to_owned(),
+        ]));
+
+        assert_eq!(state.bindings.len(), 2);
+        assert_eq!(state.bindings["openssl"], "3.5");
+        assert_eq!(state.bindings["swoole"], "6.2");
+        assert!(!state.bindings.contains_key("libmemcached"));
     }
 
     #[test]

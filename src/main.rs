@@ -618,9 +618,14 @@ fn run() -> Result<()> {
 
     // 第一遍只按用户显式线和 state.bindings 取线，补丁仍取 catalog 当前。
     // bindings 里已删除组件的残留不加进来：它不是当前方案的节点。
+    // catalog 里已经没有的 line 也不在这里报错：它可能只是已删除组件留下的
+    // stale binding。真正的 pin 在第二遍按当前闭包生成，闭包内的失效线仍会报错。
     let mut prelim_lines = project.bindings.clone();
-    prelim_lines.retain(|name, _| {
-        selected.contains(name) || metas.iter().any(|m| m.kind == Kind::Dep && &m.name == name)
+    prelim_lines.retain(|name, line| {
+        (selected.contains(name) || metas.iter().any(|m| m.kind == Kind::Dep && &m.name == name))
+            && catalog
+                .lines(name)
+                .is_some_and(|lines| lines.contains_key(line))
     });
     for (name, pin) in &cli_pins {
         prelim_lines.insert(name.clone(), pin.line().to_owned());
@@ -920,6 +925,13 @@ fn run() -> Result<()> {
                 let desired: BTreeSet<String> = order.iter().map(|t| t.name.clone()).collect();
                 let bundled_set: BTreeSet<String> = bundled.iter().cloned().collect();
                 let exact = lock::exact_versions(&catalog, &project, &bundled_set, &desired)?;
+                // 旧 state 或手工写入的闭包外 binding 不导出：命令里只保留当前节点。
+                let bindings: BTreeMap<String, String> = project
+                    .bindings
+                    .iter()
+                    .filter(|(name, _)| desired.contains(*name))
+                    .map(|(name, line)| (name.clone(), line.clone()))
+                    .collect();
                 println!(
                     "{}",
                     marker::scheme_command_locked(
@@ -927,7 +939,7 @@ fn run() -> Result<()> {
                         &series,
                         &project.installed_version,
                         &sel,
-                        &project.bindings,
+                        &bindings,
                         &exact,
                         &is_dep_kind(&metas)
                     )
@@ -1146,16 +1158,19 @@ fn run() -> Result<()> {
             let mut sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
             sel.per_component.remove(&name);
             let features = reg_features(&reg, &sel, &project);
-            let mut scheme_bindings = project.bindings.clone();
-            scheme_bindings.extend(pin_lines(&cli_pins));
+            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
+            // remove 已经得到最终闭包：闭包外的显式线不再有语义意义。
+            // 必须在生成 Scheme 之前收窄，marker 里的指纹/命令才和 state 一致。
+            project.bindings.extend(pin_lines(&cli_pins));
+            let desired: BTreeSet<String> = order.iter().map(|t| t.name.clone()).collect();
+            project.prune_bindings(&desired);
             let scheme = marker::Scheme::new(
                 &product_name,
                 &series,
                 &sel,
-                &scheme_bindings,
+                &project.bindings,
                 &is_dep_kind(&metas),
             );
-            let order = plan::resolve(&reg, &product_id, &sel, &features)?;
 
             let tree_version = project.installed_version.clone();
             let tree = marker::tree_path(&cli.root, &product_name, &tree_version);
@@ -1243,7 +1258,6 @@ fn run() -> Result<()> {
                 }
             }
 
-            project.bindings.extend(pin_lines(&cli_pins));
             if rebuilt {
                 project.installed_version = version.clone();
                 project.set_installed_all();

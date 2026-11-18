@@ -124,13 +124,29 @@ phprt plan php@8.5 --lock
 
 闭包要用“选好的版本线”才能算，pin 又要用闭包才能生成，所以解析分两遍：
 
-1. 第一遍只用 `state.bindings` 和 CLI 显式线取线，补丁仍取 catalog 当前，加载 recipe，
-   算出当前 `Selection`、feature 和构建顺序 `order`；`order` 里的名字就是 desired 闭包。
-2. 用闭包和 state 求交生成 `Effective Pins`。pin 和第一遍结果有任何差异时，重新
+1. 第一遍按 CLI 显式线、`state.bindings`、bundle 默认线等确定 line，补丁仍取 catalog
+   当前，加载 recipe，算出当前 `Selection`、feature 和构建顺序 `order`；`order` 里的
+   名字就是 desired 闭包。catalog 里已经找不到的 line 在这一遍不报错，只是不参与取线。
+2. 用闭包和 state 求交生成 `Effective Pins`。这一遍会把 `state.components[].line` /
+   `state.deps[].line` 也纳入 pins，所以**第二遍本身可能发生 line 变化**（例如 bundle
+   默认线升级过，或依赖线当初是自动选出来的）。pin 和第一遍结果有任何差异时，重新
    `bind::resolve` + 重新加载 targets，再重算 `Selection` / `preset` / 产品目标。
 
-两遍之后不再迭代：版本线变了通常只会让约束更紧，不会改变依赖闭包本身；需要更多轮
-的情况见第 13 节。
+两遍之后不再迭代。当前两遍足够的关键不变量是：
+
+```text
+version 不参与 dependency closure
+```
+
+`pins.versions` 只影响最终选中的 artifact（version / url / sha256）和构建元数据，
+不改变 `needs` / `features` / `tools`，因此不会改变闭包。闭包只由产品、系列、方案
+组件集、mode、feature / deps 和 line 决定。
+
+Recipe 契约：`target(ctx)` **不能根据 `self["version"]` /
+`ctx["deps"][*]["version"]` 改变 `needs` / `features` / `tools`**，也不能通过其他字段
+间接改变闭包。当前 recipe 里 version 只用于选择 artifact 和写构建元数据。违反这条
+契约时，第二遍重载后的闭包可能和生成 pins 时用的闭包不同，`--lock` 就不再保证覆盖
+最终闭包；当前不会自动再迭代一轮。
 
 ## 4. 默认行为
 
@@ -323,7 +339,7 @@ phprt install php@8.5.12 \
 | mode / feature / dep 转授 | 和普通 `scheme` 一样 |
 
 - 只导出当前闭包里的节点：已删除组件留在 `state.deps` / `state.bindings` 的历史记录
-  不写进命令；
+  不写进命令；`bindings` 在渲染前按闭包过滤；
 - 要求 state 有 `installed_version`，否则报错；
 - 每个旧补丁都必须能在 catalog 里找到；找不到时直接报错，不生成一条执行会失败的假 lock。
 
@@ -380,7 +396,7 @@ php / openssl / zlib  与  zlib / openssl / php
 | `src/lock.rs` | `EffectivePins`、`CliPin`、`cli_pin`、`effective_pins`、`exact_versions` |
 | `src/bind.rs` | `resolve(..., pins: &EffectivePins)`；精确补丁从 `catalog.artifact_for` 取，缺失即报错 |
 | `src/main.rs` | `pins_from_cli`、`pin_lines`、`lock_requested`、`uses_resolver`、`select_product_patch`；两遍解析 |
-| `src/state.rs` | `prune_deps`：不重编的 remove 保留版本、只收窄闭包 |
+| `src/state.rs` | `prune_deps`：不重编的 remove 保留版本、只收窄闭包；`prune_bindings`：remove 后按最终闭包收窄显式线 |
 | `src/marker.rs` | `resolution` 字段、`resolution_digest`、`version=` 校验、统一 `render_scheme` |
 | `src/build.rs` | 写标记时计算 `resolution` 并显式传产品补丁 |
 
@@ -430,6 +446,8 @@ versions: 名字 -> 精确补丁    （只在 --lock 时填）
 ```text
 读 state → 组件先从方案删掉，再解析（它和它的独占依赖不在 desired 里，不产生 pin）
   → 检查 ini / 产物
+  → 两种路径都按最终闭包收窄 state.bindings（prune_bindings）；
+    生成 scheme 指纹 / 命令时用的就是收窄后的 bindings
   → 不重编：删 ini / .so，state 保留 deps 的 line/version，
     只收窄 feature、删闭包外的 dep（prune_deps）
   → 要重编：走完整流水线，按本次解析结果覆盖 deps
@@ -502,6 +520,10 @@ scheme_cmd=...
 | 10 | `product_patch_without_state_pin_reports_a_catalog_error` | 默认模式删掉 8.5.12 时报 `state 里的 php 8.5.12`，不回落 8.5.13 |
 | 11 | `scheme_lock_exports_product_and_exact_patches` | 输出 `phprt install php@8.5.12`、`--dep openssl=3.5.9`、`--dep zlib=1.3.2`；不含 8.5.13 和 `version:8.5.12` |
 | 12 | `scheme_lock_refuses_a_patch_missing_from_catalog` | 旧补丁缺失时报错，不生成命令 |
+| 13 | `remove_prunes_bindings_outside_the_closure` | remove 后 state.bindings 只剩闭包内节点，libmemcached 被清掉 |
+| 14 | `stale_binding_does_not_block_later_commands` | remove 收窄后再删旧 catalog 线，plan / add / remove / update 的 resolver 不再被 stale binding 挡住 |
+| 15 | `scheme_lock_skips_bindings_outside_the_closure` | 手写进 state 的闭包外 binding 不出现在 `scheme --lock` 命令里 |
+| 16 | `missing_stale_line_does_not_block_remove` | catalog 删掉旧线后，stale binding 不阻断执行 remove 本身 |
 
 `update` 本身要编译，e2e 不跑它；第 9 条用“update 之后的 state”验证基准传递，
 `select_product_patch` 的单测覆盖 update 选 catalog 当前补丁。
@@ -528,7 +550,8 @@ scheme_cmd=...
 
 `src/state.rs`：
 
-- `prune_deps` 保留 line / version，只删闭包外的 dep、收窄 feature。
+- `prune_deps` 保留 line / version，只删闭包外的 dep、收窄 feature；
+- `prune_bindings` 只保留最终闭包里的名字。
 
 ### 11.3 手工验收
 
@@ -553,6 +576,8 @@ cargo run -- scheme php@8.5 --lock
 - `--lock` 只锁“当前闭包 ∩ state”里已有的补丁；新节点仍取 catalog 当前。
 - CLI 对一个名字的新选择整体替换 line + version，禁止跨线组合。
 - `update` 保持 Scheme 和 line，只在线内前进补丁；成功结果成为下次 `--lock` 基准。
+- `remove` 算出最终闭包后按闭包收窄 `state.bindings`；闭包外的显式线没有语义意义。
+- 第一遍不因 `state.bindings` 里 catalog 已缺失的 line 报错；闭包内的失效线在第二遍报错。
 - `version:` / `--dep` 复用现有语法，值可以是线或具体补丁。
 - `install` 也支持 `--lock`，保证和 `plan` / `add` / `remove` 一致。
 - 完整方案列表和 `--lock` 冲突。
@@ -564,10 +589,11 @@ cargo run -- scheme php@8.5 --lock
 
 ## 13. 仍存在的边界
 
-- 两遍解析不迭代到不动点。若某个新 pin 改变了依赖闭包本身（目前只有换线才会发生，
-  而换线来自 CLI，两遍里已经带上），第二遍之后不再重算；需要时可再加一轮直到稳定。
+- 两遍解析不迭代到不动点。`version` 不参与闭包（见第 3.2 节的 Recipe 契约），所以当前
+  两遍足够；如果以后有 recipe 按 version 改变 `needs` / `features` / `tools`，第二遍
+  之后需要再算一轮，当前实现不会自动做，也不能保证 `--lock` 覆盖最终闭包。
 - `--lock` 只锁版本，不锁构建参数、feature 并集、宿主机工具版本。
-- `state.bindings` 不会在 `remove` 时主动删除，只在解析时按当前闭包过滤；手工清理仍
-  需要编辑 state。
+- `remove` 会按最终闭包收窄 `state.bindings`；更早版本留下或手工写入的闭包外 binding
+  仍可能留在 state 里，解析时会被闭包过滤，但没有 `remove` 就不会自动清掉。
 - 一个系列多棵安装树时，`state.installed_version` 决定“哪棵树是当前基准”；
   其余树的 marker 只用于该树自己的重复安装判定。
