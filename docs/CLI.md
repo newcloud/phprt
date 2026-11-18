@@ -419,6 +419,10 @@ phprt install php@8.5.12 'curl=mode:static,dep:libcurl[ssl],swoole=mode:shared,v
 - 依赖库写 `--dep NAME=<补丁>`；
 - 只导出当前闭包里的节点，已删除组件的历史依赖不写进命令；
 - 导出的补丁必须仍在 catalog 的 `patches` 里，缺失直接报错，不改用当前补丁；
+- state 里没有 `version` 记录的闭包节点，用本次解析实际选中的 artifact version 补齐，
+  不允许整条 pin 漏掉；
+- `scheme --lock` 会走完整两遍解析；state 里的线不在 catalog 时，报 `bind::resolve`
+  的错；
 - 该系列没有安装完成的产品时直接报错。
 
 ## 下载与解压

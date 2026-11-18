@@ -2,6 +2,7 @@
 //!
 //! 夹具是临时项目根 + 复制一份 recipes，改 catalog 模拟“catalog 升级但保留旧补丁”。
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -63,6 +64,32 @@ impl Fixture {
 
     fn remove_state(&self) {
         let _ = fs::remove_dir_all(self.root.join(".phprt/php-8.5"));
+    }
+
+    /// 加一条按 line 改变 needs 的 swoole 线：6.3 的 `LINES` 里没有 openssl，
+    /// 因此它的 `needs` 只有 libcurl。用来验证两遍解析之间的闭包校验。
+    fn add_openssl_free_swoole_line(&self) {
+        let catalog = self.catalog();
+        let text = fs::read_to_string(&catalog).unwrap();
+        let old = "\"6.2\" = { version = \"6.2.5\", url = \"https://pecl.php.net/get/swoole-6.2.5.tgz\", sha256 = \"edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c\" }";
+        assert!(text.contains(old), "catalog 的 swoole 6.2 行变了");
+        let text = text.replace(
+            old,
+            &format!(
+                "{old}\n\"6.3\" = {{ version = \"6.3.0\", url = \"https://example.com/swoole-6.3.0.tgz\" }}"
+            ),
+        );
+        fs::write(&catalog, text).unwrap();
+
+        let recipe = self.recipes().join("components/php/swoole.star");
+        let text = fs::read_to_string(&recipe).unwrap();
+        let old = "    \"6.2\": {\"product\": [\"8.4\", \"8.5\", \"8.6\"], \"openssl\": [\"1.1.1\", \"3.0\", \"3.5\", \"4.0\"]},";
+        assert!(text.contains(old), "swoole.star 的 6.2 行变了");
+        let text = text.replace(
+            old,
+            &format!("{old}\n    \"6.3\": {{\"product\": [\"8.4\", \"8.5\", \"8.6\"]}},"),
+        );
+        fs::write(&recipe, text).unwrap();
     }
 
     /// 把三条线升级到新补丁；`old` 控制是否保留旧补丁。
@@ -559,4 +586,238 @@ fn missing_stale_line_does_not_block_remove() {
             .contains_key("libmemcached"),
         "{saved}"
     );
+}
+
+/// `plan` / `install --downloads` 共用的文本输出解析：只取和复现有关的字段。
+#[derive(Debug, PartialEq, Eq)]
+struct PlanNode {
+    version: String,
+    line: String,
+    mode: String,
+    needs: Vec<String>,
+    features: Vec<String>,
+    deps: Vec<String>,
+}
+
+/// 从 `render::to_text` 的输出里取出节点集合与每个节点的输入。
+///
+/// `build order` 段给组件的 mode；后面的 `[i/N]` 段给 version / line /
+/// needs / features / dep。所有列表都排序，避免只比较顺序。
+fn plan_nodes(text: &str) -> BTreeMap<String, PlanNode> {
+    let mut modes: BTreeMap<String, String> = BTreeMap::new();
+    let mut nodes: BTreeMap<String, PlanNode> = BTreeMap::new();
+    let mut in_order = false;
+    let mut current: Option<String> = None;
+
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed == "build order" {
+            in_order = true;
+            continue;
+        }
+        if in_order {
+            if trimmed.is_empty() {
+                in_order = false;
+                continue;
+            }
+            let Some((index, rest)) = trimmed.split_once(". ") else {
+                continue;
+            };
+            if index.parse::<usize>().is_err() {
+                continue;
+            }
+            let id = rest.split_whitespace().next().unwrap().to_owned();
+            let tail = rest[id.len()..].trim();
+            let mode = if tail.starts_with('(') {
+                let inner = tail.trim_start_matches('(').trim_end_matches(')');
+                inner
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .to_owned()
+            } else {
+                String::new()
+            };
+            modes.insert(id, mode);
+            continue;
+        }
+
+        if trimmed.starts_with('[') && trimmed.contains("] ") {
+            let rest = &trimmed[1..];
+            let (index, tail) = rest.split_once("] ").unwrap();
+            if !index.contains('/') {
+                continue;
+            }
+            let id = tail.split_whitespace().next().unwrap().to_owned();
+            let version = tail[id.len()..].trim().to_owned();
+            let mode = modes.get(&id).cloned().unwrap_or_default();
+            current = Some(id.clone());
+            nodes.insert(
+                id,
+                PlanNode {
+                    version,
+                    line: String::new(),
+                    mode,
+                    needs: Vec::new(),
+                    features: Vec::new(),
+                    deps: Vec::new(),
+                },
+            );
+            continue;
+        }
+
+        let Some(id) = current.clone() else { continue };
+        let Some((key, value)) = trimmed.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let value = value.trim();
+        let node = nodes.get_mut(&id).unwrap();
+        match key {
+            "line" => node.line = value.to_owned(),
+            "needs" => node.needs = sorted_list(value),
+            "features" => node.features = sorted_list(value),
+            "dep" => node.deps.push(value.to_owned()),
+            _ => {}
+        }
+    }
+
+    for node in nodes.values_mut() {
+        node.deps.sort();
+    }
+    nodes
+}
+
+fn sorted_list(value: &str) -> Vec<String> {
+    let mut items: Vec<String> = value.split(", ").map(str::to_owned).collect();
+    items.sort();
+    items
+}
+
+/// 把导出的 `phprt install ...` 命令行拆成参数。
+fn command_args(line: &str) -> Vec<String> {
+    line.split_whitespace()
+        .skip(1)
+        .map(|item| item.trim_matches('\'').to_owned())
+        .collect()
+}
+
+/// `scheme --lock` 导出的命令要能在干净 root 里复现同一份解析结果。
+#[test]
+fn scheme_lock_round_trips_the_resolved_graph() {
+    let source = Fixture::new("roundtrip-src");
+    // 完整方案 + 依赖；故意不给 zlib 记 version，并留一条闭包外的历史依赖。
+    let mut st = state(
+        &[
+            ("openssl", "static"),
+            ("curl", "static"),
+            ("libxml", "static"),
+            ("zlib", "static"),
+        ],
+        &[
+            ("openssl", "3.5", "3.5.9"),
+            ("libcurl", "8.23", "8.23.0"),
+            ("libxml2", "2.15", "2.15.4"),
+            ("autoconf", "2.72", "2.72"),
+            ("libmemcached", "1.1", "1.1.4"),
+        ],
+        "8.5.12",
+    );
+    st["components"]["swoole"] = serde_json::json!({
+        "line": "6.2",
+        "version": "6.2.5",
+        "mode": "shared",
+        "installed": true,
+        "deps": {},
+        "features": []
+    });
+    st["components"]["curl"]["deps"] = serde_json::json!({ "libcurl": ["ssl"] });
+    st["components"]["openssl"]["features"] = serde_json::json!(["argon2"]);
+    st["bindings"] = serde_json::json!({ "libmemcached": "1.1" });
+    source.write_state(st);
+
+    let out = source.run(&["plan", "php@8.5"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let before = plan_nodes(&String::from_utf8_lossy(&out.stdout));
+    assert!(!before.contains_key("dep:libmemcached"), "{before:#?}");
+
+    let out = source.run(&["scheme", "php@8.5", "--lock"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cmd = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    // state 没有 zlib 的 version 记录：用本次解析选中的 artifact 补齐。
+    assert!(cmd.contains("--dep zlib=1.3.2"), "{cmd}");
+    assert!(!cmd.contains("libmemcached"), "{cmd}");
+
+    let target = Fixture::new("roundtrip-dst");
+    let mut args = command_args(&cmd);
+    args.push("--downloads".into());
+    args.push("--offline".into());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = target.run(&refs);
+    // 离线空缓存会在下载阶段失败；解析结果在失败之前就打印好了。
+    let text = String::from_utf8_lossy(&out.stdout);
+    let after = plan_nodes(&text);
+    assert!(!after.is_empty(), "新 root 没有打印计划：{text}");
+
+    assert!(before.contains_key("product:php@8.5.12"), "{before:#?}");
+    assert_eq!(
+        before.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>()
+    );
+    for (id, node) in &before {
+        assert_eq!(node, &after[id], "{id}");
+    }
+}
+
+/// 第二遍换线改变 needs 时，闭包校验必须拦住 `--lock`，普通命令只警告。
+#[test]
+fn second_pass_line_change_is_checked() {
+    let f = Fixture::new("closure-change");
+    f.add_openssl_free_swoole_line();
+    let mut st = state(
+        &[],
+        &[
+            ("openssl", "3.5", "3.5.9"),
+            ("libcurl", "8.23", "8.23.0"),
+            ("autoconf", "2.72", "2.72"),
+        ],
+        "8.5.12",
+    );
+    st["components"]["swoole"] = serde_json::json!({
+        "line": "6.3",
+        "version": "6.3.0",
+        "mode": "shared",
+        "installed": true,
+        "deps": {},
+        "features": []
+    });
+    f.write_state(st);
+
+    // 第一遍按 bundle 的 6.2 算闭包（含 openssl），第二遍换成 state 的 6.3（不含）。
+    let out = f.run(&["plan", "php@8.5"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("依赖闭包变了"), "{err}");
+    assert!(err.contains("dep:openssl"), "{err}");
+
+    let out = f.run(&["plan", "php@8.5", "--lock"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("依赖闭包变了"), "{err}");
+    assert!(err.contains("dep:openssl"), "{err}");
+    assert!(err.contains("--lock"), "{err}");
 }

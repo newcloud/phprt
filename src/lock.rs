@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 
+use crate::bind::Bindings;
 use crate::catalog::Catalog;
 use crate::state::ProjectState;
 
@@ -134,38 +135,59 @@ pub fn effective_pins(
     pins
 }
 
-/// `scheme --lock` 导出用的精确补丁表：外部组件和依赖库都取 state 里的实际版本。
+/// `scheme --lock` 导出用的精确补丁表。
 ///
-/// bundled 组件的 `version` 是产品补丁，不是它自己的源码版本，跳过；
-/// `desired` 是当前闭包，已删除组件留下的历史依赖不导出；
-/// 每个旧补丁必须仍能在 catalog 里找到，否则不生成一条执行会失败的 lock。
+/// 版本来源按优先级取：state 记录的实际版本 > 本次解析选中的 artifact。
+///
+/// - bundled 组件的 `version` 是产品补丁，不是它自己的源码版本，跳过；
+///   同名的依赖库（如 dep openssl）仍有独立版本，照常导出；
+/// - `desired` 是当前闭包，已删除组件留下的历史依赖不导出；
+/// - state 里记录的旧补丁必须仍能在 catalog 里找到，否则直接报错，不静默回落；
+/// - 闭包内没有 state 记录的节点用 `resolved` 补齐，不能整条 pin 都漏掉。
 pub fn exact_versions(
     catalog: &Catalog,
     state: &ProjectState,
+    product: &str,
     bundled: &BTreeSet<String>,
+    is_dep: &dyn Fn(&str) -> bool,
     desired: &BTreeSet<String>,
+    resolved: &Bindings,
 ) -> Result<BTreeMap<String, String>> {
-    let mut exact: BTreeMap<String, String> = BTreeMap::new();
-    let mut lines: BTreeMap<String, String> = BTreeMap::new();
+    // 只有“有独立源码版本”的节点才需要 pin（line, version）。
+    let locked = |name: &str| name != product && (!bundled.contains(name) || is_dep(name));
+
+    let mut picked: BTreeMap<String, (String, String)> = BTreeMap::new();
     for (name, component) in &state.components {
         if bundled.contains(name) || component.version.is_empty() || !desired.contains(name) {
             continue;
         }
-        lines.insert(name.clone(), component.line.clone());
-        exact.insert(name.clone(), component.version.clone());
+        picked.insert(
+            name.clone(),
+            (component.line.clone(), component.version.clone()),
+        );
     }
     for (name, dep) in &state.deps {
-        if dep.version.is_empty() || !desired.contains(name) {
+        if dep.version.is_empty() || !desired.contains(name) || !locked(name) {
             continue;
         }
-        lines.insert(name.clone(), dep.line.clone());
-        exact.insert(name.clone(), dep.version.clone());
+        picked.insert(name.clone(), (dep.line.clone(), dep.version.clone()));
     }
-    for (name, version) in &exact {
-        let line = lines.get(name).cloned().unwrap_or_default();
-        if line.is_empty() || catalog.artifact_for(name, &line, version).is_none() {
+    for name in desired {
+        if picked.contains_key(name) || !locked(name) {
+            continue;
+        }
+        let Some(artifact) = resolved.artifacts.get(name) else {
+            bail!("闭包里的 {name} 没有解析出 artifact，无法生成可复现的 lock");
+        };
+        let line = resolved.lines.get(name).cloned().unwrap_or_default();
+        picked.insert(name.clone(), (line, artifact.version.clone()));
+    }
+
+    let mut exact: BTreeMap<String, String> = BTreeMap::new();
+    for (name, (line, version)) in picked {
+        if line.is_empty() || catalog.artifact_for(&name, &line, &version).is_none() {
             let current = catalog
-                .get(name, &line)
+                .get(&name, &line)
                 .map(|artifact| artifact.version.as_str())
                 .unwrap_or("无");
             bail!(
@@ -175,6 +197,7 @@ pub fn exact_versions(
                 state.series
             );
         }
+        exact.insert(name, version);
     }
     Ok(exact)
 }
@@ -378,27 +401,64 @@ mod tests {
                 ..Default::default()
             },
         );
+        let bundled = names(&["openssl"]);
+        let is_dep = |name: &str| name == "openssl" || name == "zlib";
+        let resolved = Bindings::default();
         let exact = exact_versions(
             &catalog,
             &state,
-            &names(&["openssl"]),
+            "php",
+            &bundled,
+            &is_dep,
             &names(&["php", "swoole", "openssl"]),
+            &resolved,
         )
         .unwrap();
         assert_eq!(exact["swoole"], "6.2.5");
         assert_eq!(exact["openssl"], "3.5.9");
+        assert!(!exact.contains_key("php"));
         assert!(!exact.contains_key("libxml2"));
 
         // 真把它算进闭包时才报错，而且不改成 catalog 的当前补丁。
         let err = exact_versions(
             &catalog,
             &state,
-            &names(&["openssl"]),
+            "php",
+            &bundled,
+            &is_dep,
             &names(&["php", "swoole", "openssl", "libxml2"]),
+            &resolved,
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains("libxml2 2.15.0"), "{err}");
+    }
+
+    #[test]
+    fn exact_versions_fill_nodes_without_state_record() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        let mut state = state();
+        // state 没有 zlib 的版本记录：不能因此整条 pin 都漏掉。
+        state.deps.remove("zlib");
+        let mut resolved = Bindings::default();
+        let artifact = catalog.get("zlib", "1.3").unwrap().clone();
+        resolved.lines.insert("zlib".into(), "1.3".into());
+        resolved.artifacts.insert("zlib".into(), artifact.clone());
+
+        let exact = exact_versions(
+            &catalog,
+            &state,
+            "php",
+            &names(&["openssl"]),
+            &|name: &str| name == "openssl" || name == "zlib",
+            &names(&["php", "swoole", "openssl", "zlib"]),
+            &resolved,
+        )
+        .unwrap();
+        assert_eq!(exact["zlib"], artifact.version.as_str());
+        // bundled 组件本身没有源码版本，同名的依赖库才有。
+        assert!(!exact.contains_key("php"));
     }
 
     #[test]

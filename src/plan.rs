@@ -120,6 +120,44 @@ pub fn resolve<'a>(
     Ok(out)
 }
 
+/// 计划里一个节点的输入快照；只用于校验，不参与求解。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeInputs {
+    /// 组件的挂载方式；非组件为空。
+    pub mode: String,
+    /// `children()` 的结果，排序后。needs、feature 带进来的依赖、
+    /// standalone 组件的 tools、产品里 fold 组件都已经算在里面。
+    pub children: Vec<String>,
+}
+
+/// 记录 `order` 里每个节点的求解输入。
+///
+/// 两遍解析之间换线时，用它判断“节点集合没变、但 plan 输入变了”的情况；
+/// 调用方只做比较，不能用它反推新的 pins。
+pub fn inputs(
+    reg: &Registry,
+    sel: &Selection,
+    features: &BTreeMap<String, Vec<String>>,
+    order: &[&Target],
+) -> Result<BTreeMap<String, NodeInputs>> {
+    let mut out = BTreeMap::new();
+    for target in order {
+        let mut children = children(reg, target, sel, features)?;
+        children.sort();
+        out.insert(
+            target.id(),
+            NodeInputs {
+                mode: match target.kind {
+                    Kind::Component => sel.mode_of(target),
+                    _ => String::new(),
+                },
+                children,
+            },
+        );
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -705,6 +705,9 @@ fn run() -> Result<()> {
                 })
         });
         if changed {
+            // 第二遍换线可能改变 recipe 求值结果，从而改变依赖闭包。这里只记录
+            // 第一遍的求解输入，第二遍结束后再算一次做比较；不再重新生成 pins。
+            let inputs_before = plan::inputs(&reg, &sel, &features, &order)?;
             bindings = bind::resolve(
                 &catalog,
                 &bundle,
@@ -732,6 +735,13 @@ fn run() -> Result<()> {
             };
             product_id = reg.product_any()?.id();
             project.validate(&reg)?;
+            // 重新加载的 reg 不带方案里的组件列表，检查前先按方案挂回去。
+            project.apply_scheme(&mut reg, &names)?;
+            let sel_after = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
+            let features_after = reg_features(&reg, &sel_after, &project);
+            let order_after = plan::resolve(&reg, &product_id, &sel_after, &features_after)?;
+            let inputs_after = plan::inputs(&reg, &sel_after, &features_after, &order_after)?;
+            check_closure_change(&inputs_before, &inputs_after, lock)?;
         }
     }
     // install 的绑定提示推迟到现场判定之后打印，拒绝时不先刷“注意”；
@@ -924,9 +934,20 @@ fn run() -> Result<()> {
                 let order = plan::resolve(&reg, &product_id, &sel, &features)?;
                 let desired: BTreeSet<String> = order.iter().map(|t| t.name.clone()).collect();
                 let bundled_set: BTreeSet<String> = bundled.iter().cloned().collect();
-                let exact = lock::exact_versions(&catalog, &project, &bundled_set, &desired)?;
+                let is_dep = is_dep_kind(&metas);
+                // 版本来源：state 记录优先；state 没记录的闭包节点用本次解析的
+                // artifact 补齐（bindings 已经过两遍解析，反映 state 里的线）。
+                let exact = lock::exact_versions(
+                    &catalog,
+                    &project,
+                    &product_name,
+                    &bundled_set,
+                    &is_dep,
+                    &desired,
+                    &bindings,
+                )?;
                 // 旧 state 或手工写入的闭包外 binding 不导出：命令里只保留当前节点。
-                let bindings: BTreeMap<String, String> = project
+                let scheme_lines: BTreeMap<String, String> = project
                     .bindings
                     .iter()
                     .filter(|(name, _)| desired.contains(*name))
@@ -939,9 +960,9 @@ fn run() -> Result<()> {
                         &series,
                         &project.installed_version,
                         &sel,
-                        &bindings,
+                        &scheme_lines,
                         &exact,
-                        &is_dep_kind(&metas)
+                        &is_dep
                     )
                 );
             } else {
@@ -1629,15 +1650,76 @@ fn lock_requested(cmd: &Cmd) -> bool {
 
 /// 需要走 resolver 的命令才生成 EffectivePins；list / scheme / audit 不参与解析。
 fn uses_resolver(cmd: &Cmd) -> bool {
-    matches!(
-        cmd,
-        Cmd::Graph { .. }
-            | Cmd::Plan { .. }
-            | Cmd::Install { .. }
-            | Cmd::Update { .. }
-            | Cmd::Add { .. }
-            | Cmd::Remove { .. }
-    )
+    match cmd {
+        // 普通 scheme 只导出已保存的方案，不解析；--lock 要先走两遍解析，
+        // 才能拿到方案实际选中的 artifact，用来补齐 state 没记录的版本。
+        Cmd::Scheme { lock, .. } => *lock,
+        _ => matches!(
+            cmd,
+            Cmd::Graph { .. }
+                | Cmd::Plan { .. }
+                | Cmd::Install { .. }
+                | Cmd::Update { .. }
+                | Cmd::Add { .. }
+                | Cmd::Remove { .. }
+        ),
+    }
+}
+
+/// 两遍解析之间的闭包校验：第二遍会把 `state` 里的线纳入 pins，可能换线，
+/// 而 recipe 契约要求换线不改变 needs / features / tools。
+///
+/// 这里只比较结果，不重新 bind、不重新生成 pins。`--lock` 必须闭包一致，
+/// 否则锁住的不是最终闭包；普通操作只给出警告。
+fn check_closure_change(
+    before: &BTreeMap<String, plan::NodeInputs>,
+    after: &BTreeMap<String, plan::NodeInputs>,
+    lock: bool,
+) -> Result<()> {
+    let added: Vec<&str> = after
+        .keys()
+        .filter(|id| !before.contains_key(*id))
+        .map(String::as_str)
+        .collect();
+    let removed: Vec<&str> = before
+        .keys()
+        .filter(|id| !after.contains_key(*id))
+        .map(String::as_str)
+        .collect();
+    if !added.is_empty() || !removed.is_empty() {
+        let detail = format!(
+            "第二遍换线后依赖闭包变了：新增 [{}]，消失 [{}]",
+            added.join(", "),
+            removed.join(", ")
+        );
+        if lock {
+            bail!(
+                "{detail}\n  \
+                 --lock 依赖“换线不改变 needs / features / tools”这条 recipe 契约；\
+                 闭包变了就无法保证锁住的是最终闭包。去掉 --lock 重试，或修正 recipe"
+            );
+        }
+        eprintln!(
+            "注意: {detail}\n  \
+             这违反了“recipe 不能按 version / 线改变 needs / features / tools”的契约；\
+             本次按第二遍结果继续，不做第三遍解析。"
+        );
+        return Ok(());
+    }
+
+    let changed: Vec<&str> = before
+        .iter()
+        .filter(|(id, old)| after.get(*id).is_some_and(|new| new != *old))
+        .map(|(id, _)| id.as_str())
+        .collect();
+    if !changed.is_empty() {
+        eprintln!(
+            "注意: 第二遍换线后节点集合没变，但这些节点的 plan 输入变了：[{}]\n  \
+             当前只校验依赖闭包，不保证 configure、顺序等字段完全等价。",
+            changed.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// 产品补丁：显式写补丁 > update 跟 catalog；其他情况沿用 state.installed_version。
