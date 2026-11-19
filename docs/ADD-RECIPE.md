@@ -208,7 +208,9 @@ TARGET = target
 - 工具不能声明 `needs`，只能声明 `tools`（工具依赖工具）。
 - 编译器（`gcc` / `g++` / `gxx` / `cc` / `c++`）不能做成 Tool recipe，也不能写进
   `tools`；它们只属于产品 `toolchain`。
-- catalog 里保留旧版本；需要精确复现时 `--lock` 从 `state.tools` 取 built 版本。
+- catalog 里保留旧版本：一条线就是一个可选版本；节点可以用 `max` 收窄到旧版，
+  同一次构建允许同名工具多版本并存。需要精确复现时 `--lock` 从 `state.tools` 取
+  built 版本。
 - 解析规则、签名和 `--downloads` 行为见 [TOOLS.md](TOOLS.md) 第 3 节。
 
 #### 编译器档位 toolchain

@@ -716,6 +716,56 @@ mod resolve_tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    fn dep_node(name: &str, tools: Vec<ToolSpec>) -> Target {
+        Target {
+            kind: Kind::Dep,
+            name: name.to_owned(),
+            version: "1".to_owned(),
+            url: format!("https://example.com/{name}.tar.gz"),
+            tools,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_same_tool_can_resolve_to_different_versions_per_node() {
+        let root = temp_root("multi");
+        let reg = registry(vec![
+            tool_node("phprt-demo-tool-xyz", "2.71"),
+            tool_node("phprt-demo-tool-xyz", "2.72"),
+        ]);
+        let product = product(vec![]);
+        let mut older = spec("2.68");
+        older.max = "2.71".to_owned();
+        let old_node = dep_node("old", vec![older]);
+        let new_node = dep_node("new", vec![spec("2.70")]);
+        let sel = Selection::default();
+        let order = [&product, &old_node, &new_node];
+        let out = resolve(
+            &order,
+            &Options {
+                reg: &reg,
+                product: &product,
+                sel: &sel,
+                build_root: &root,
+                locked: BTreeMap::new(),
+                lock: false,
+                lenient: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.tools_of(&old_node.id())[0].version, "2.71");
+        assert_eq!(out.tools_of(&new_node.id())[0].version, "2.72");
+        assert_eq!(
+            out.tool_ids,
+            vec![
+                "tool:phprt-demo-tool-xyz@2.71",
+                "tool:phprt-demo-tool-xyz@2.72"
+            ]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn missing_tool_names_the_reason() {
         let root = temp_root("missing");
