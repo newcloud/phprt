@@ -540,7 +540,7 @@ toolchain = TOOLCHAIN,
 
 - 容器化构建、镜像 catalog、OCI 镜像；
 - 下载或编译 gcc；
-- cmake / nasm / patchelf 的源码 recipe（本次只把机制做出来，autoconf 是第一个真实用户）；
+- cmake / nasm 的源码 recipe（autoconf、patchelf 已有 `recipes/tools/` 下的真实用户）；
 - 节点级 CFLAGS 档位；节点级 gcc 约束只做断言，不带 flags；
 - 由 Rust 自动推导兼容 flags。
 

@@ -324,7 +324,24 @@ pub fn run(
     }
 
     let tree = PathBuf::from(&tree);
-    deploy_libs(reg, sel, features, product, order, &tree)?;
+    // rpath 用本产品解析到的 patchelf：宿主满足就用宿主，否则用 build/tools 里
+    // 刚构建的那一版，避免“检查通过但实际没用到它”。
+    let patchelf = opts
+        .tools
+        .tools_of(&product.id())
+        .iter()
+        .find(|tool| tool.name == "patchelf")
+        .and_then(|tool| tool.prefix.as_ref())
+        .map(|prefix| prefix.join("bin/patchelf"));
+    deploy_libs(
+        reg,
+        sel,
+        features,
+        product,
+        order,
+        &tree,
+        patchelf.as_deref(),
+    )?;
     actions::run(
         reg,
         product,
@@ -999,6 +1016,7 @@ fn deploy_libs(
     product: &Target,
     order: &[&Target],
     tree: &Path,
+    patchelf: Option<&Path>,
 ) -> Result<()> {
     let lib_dir = &product.profile.runtime.lib_dir;
     if lib_dir.is_empty() {
@@ -1054,7 +1072,7 @@ fn deploy_libs(
         if fs::symlink_metadata(&path)?.file_type().is_symlink() {
             continue;
         }
-        patchelf_rpath(&path, "$ORIGIN")?;
+        patchelf_rpath(&path, "$ORIGIN", patchelf)?;
     }
 
     for (pattern, rpath) in &product.profile.runtime.rpath {
@@ -1062,7 +1080,7 @@ fn deploy_libs(
             if !is_elf(&path) {
                 continue;
             }
-            patchelf_rpath(&path, rpath)?;
+            patchelf_rpath(&path, rpath, patchelf)?;
         }
     }
     Ok(())
@@ -1133,14 +1151,15 @@ fn glob_match(pattern: &str, name: &str) -> bool {
     }
 }
 
-fn patchelf_rpath(path: &Path, rpath: &str) -> Result<()> {
-    let status = Command::new("patchelf")
+fn patchelf_rpath(path: &Path, rpath: &str, patchelf: Option<&Path>) -> Result<()> {
+    let program = patchelf.unwrap_or_else(|| Path::new("patchelf"));
+    let status = Command::new(program)
         .arg("--set-rpath")
         .arg(rpath)
         .arg("--force-rpath")
         .arg(path)
         .status()
-        .with_context(|| format!("跑不起来 patchelf（{}）", path.display()))?;
+        .with_context(|| format!("跑不起来 {}（{}）", program.display(), path.display()))?;
     if !status.success() {
         bail!("patchelf 设置 rpath 失败: {}", path.display());
     }
@@ -1694,6 +1713,7 @@ mod tests {
             reg.get("product:php@8.5.12").unwrap(),
             &order,
             &tree,
+            None,
         )
         .unwrap();
 

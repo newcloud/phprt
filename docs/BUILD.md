@@ -138,7 +138,9 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
 
 1. `runtime.lib_dir` 非空时，把运行时依赖（`needs` / 已启用 feature 的 `needs` 闭包，
    不含 `tools`）的 `lib/*.so*`（含软链）复制到 `{tree}/<runtime.lib_dir>`。
-2. 用 `patchelf --force-rpath` 按 `runtime.rpath` 设置安装树内的 rpath：
+2. 用 `patchelf --force-rpath` 按 `runtime.rpath` 设置安装树内的 rpath。patchelf 也是
+   构建期工具：本产品解析到 built 版本时用 `build/tools/patchelf-<版本>/bin/patchelf`，
+   宿主满足时用宿主 PATH 里的 `patchelf`：
    - PHP：`bin/*` → `$ORIGIN/../lib/phprt`；
      `lib/php/extensions/*/*.so` → `$ORIGIN/../../../phprt`。
    - nginx：`sbin/nginx` / `modules/*.so` → `$ORIGIN/../lib/phprt`。

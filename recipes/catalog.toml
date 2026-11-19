@@ -84,6 +84,10 @@
 [autoconf]
 "2.72" = { version = "2.72", url = "https://ftp.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz", sha256 = "ba885c1319578d6c94d46e9b0dceb4014caafe2490e437a0dbca3f270a223f5a" }
 
+# 构建期工具：设置 ELF 的 rpath。GitHub Releases 的源码包（含 configure）。
+[patchelf]
+"0.19" = { version = "0.19.3", url = "https://github.com/NixOS/patchelf/releases/download/0.19.3/patchelf-0.19.3.tar.gz", sha256 = "fac76a3c0b730e8d53ea1d10cd6015322d78c9900af91736f2cca51d5837b612" }
+
 [nghttp2]
 "1.64" = { version = "1.64.0", url = "https://github.com/nghttp2/nghttp2/releases/download/v1.64.0/nghttp2-1.64.0.tar.gz" }
 
