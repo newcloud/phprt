@@ -173,7 +173,8 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
 `build/tools`，最后从 catalog 取满足区间的最高版本构建。同名工具允许多版本并存，
 按 `(name, version)` 去重。工具节点不继承产品 profile 的 `tools`，否则无法跨产品共享。
 
-gcc / g++ 不在这里：它们是 toolchain，只探测、不下载，见 [TOOLS.md](TOOLS.md) §4。
+gcc / g++ 不在这里：它们是 toolchain，只探测、不下载；`tools` 里写编译器名会在
+加载时报错，见 [TOOLS.md](TOOLS.md) §4。
 
 libaom 的 configure 也接受 yasm，但 phprt 只检查 nasm（yasm 已停止维护）。
 

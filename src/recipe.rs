@@ -415,10 +415,22 @@ pub(crate) fn check_relative(path: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+/// 编译器归 toolchain，永远不会从 Tool catalog 下载或构建。
+pub(crate) fn is_compiler_name(name: &str) -> bool {
+    matches!(name, "gcc" | "g++" | "gxx" | "cc" | "c++")
+}
+
 fn validate_tools(tools: &[ToolSpec], at: &str) -> Result<()> {
     for tool in tools {
         if tool.name.is_empty() {
             bail!("{at}: tools 里有空名字");
+        }
+        if is_compiler_name(&tool.name) {
+            bail!(
+                "{at}: tools 里不能写编译器 {}；编译器属于 toolchain，由产品 recipe 的 \
+                 toolchain(...) 声明，只探测当前环境、不下载不安装",
+                tool.name
+            );
         }
         for (field, value) in [("min", &tool.min), ("max", &tool.max)] {
             if value.is_empty() {
@@ -931,6 +943,12 @@ impl Target {
                 }
             }
             Kind::Tool => {
+                if is_compiler_name(&self.name) {
+                    bail!(
+                        "{at}: 不允许 tool:{}；编译器属于 toolchain，不能从 Tool catalog 构建",
+                        self.name
+                    );
+                }
                 if self.version.is_empty() {
                     bail!("{at}: tool:{} 缺少 version", self.name);
                 }
@@ -3560,6 +3578,20 @@ TARGET = target
         );
         assert!(catalog.find_product_series("php", "8.9").is_err());
     }
+    #[test]
+    fn compilers_are_toolchain_not_tools() {
+        for name in ["gcc", "g++", "gxx", "cc", "c++"] {
+            let tools = vec![ToolSpec {
+                name: name.to_owned(),
+                min: "9".to_owned(),
+                max: String::new(),
+                probe: vec!["--version".to_owned()],
+            }];
+            let err = validate_tools(&tools, "fixture").unwrap_err().to_string();
+            assert!(err.contains("toolchain"), "{err}");
+        }
+    }
+
     #[test]
     fn preparse_scheme_reads_many_components_and_version_lines() {
         let raw = preparse_scheme(

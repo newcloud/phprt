@@ -559,7 +559,9 @@ TARGETS = {
 3. component 的 `product`、`source`、`modes`、默认 mode；external 必须有 version/url；
    component 不允许产品字段。
 4. `needs` 指向的 `dep:*` 存在。
-5. `tools` 每项名字非空；工具在解析阶段按 catalog 选择版本，不要求 registry 里已有同名目标。
+5. `tools` 每项名字非空，且不能是编译器（`gcc` / `g++` / `gxx` / `cc` / `c++`）；
+   编译器只属于产品 `toolchain`。工具在解析阶段按 catalog 选择版本，不要求 registry
+   里已有同名目标。`recipes/tools/` 也不允许编译器名。
 6. `features.*.needs` 指向的 `dep:*` 存在。
 7. `dep_configure` 的 key 在 `needs` 或某个 feature 的 `needs` 里；component 的
    `features.*.requires.dep` 的 key 也在 `needs` 里。`requires.commands` 每项非空；

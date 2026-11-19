@@ -254,7 +254,8 @@ profile 的基线（否则工具会被绑回某个产品的依赖树，无法跨
 
 ## 4.3 编译器版本与 toolchain
 
-gcc / g++ 不写在 `tools` 里，也不从 Tool catalog 解析；产品在系列 recipe 里声明
+gcc / g++ 不写在 `tools` 里（写了会在加载时报错），也不从 Tool catalog 解析；
+它们是宿主提供的编译环境，只做版本适配，不满足就停止。产品在系列 recipe 里声明
 编译器区间和兼容参数档位。完整机制见 [TOOLS.md](TOOLS.md) 第 4 节。
 
 产品在系列 recipe 里声明编译器区间和兼容参数档位：

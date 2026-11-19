@@ -170,7 +170,8 @@ tools = [tool("nasm", min = "2.13"), "cmake"]
 ```
 
 - gcc / g++ 不写在这里，由产品的 `toolchain(...)` 声明；它们也永远不会从
-  Tool catalog 解析，避免出现“下载 gcc”的第二条路径。
+  Tool catalog 解析，避免出现“下载 gcc”的第二条路径。加载时校验：`tools` 里出现
+  `gcc` / `g++` / `gxx` / `cc` / `c++` 直接报错；`recipes/tools/` 也不允许这些名字。
 - `tool(name, min = "", max = "", probe = ["--version"])`：`max` 是可选上界，
   语义与 `toolchain_range` 一致（按写出的段数比较）；不写表示不限制。
 
@@ -300,8 +301,9 @@ recipe 的 `env` 里。
   时报错，不静默回退。
 - `plan` 增加 `tools` 段，文本输出增加“构建工具”一节；同名多版本分别列出。
   `plan` 不因工具缺失而失败，只显示将用 host / 将构建 / 无法解析。
-- `--downloads` 把本次闭包里声明、且 catalog 有源码的工具全部加入下载（含多版本）；
-  它保持“不检查、不构建”的语义，方便离线预取。真正 `install` 仍然 host-first。
+- `--downloads` 把本次解析到、需要构建的工具源码加入下载（含同名多版本）；宿主满足
+  的工具不需要源码。它保持“不检查、不构建”的语义，方便离线预取。真正 `install`
+  仍然 host-first。
 - `audit` 显示实际使用的工具 provider 和版本。
 
 ---
@@ -310,7 +312,7 @@ recipe 的 `env` 里。
 
 ### 4.1 为什么单独一层
 
-gcc / g++ 不是 Tool：
+gcc / g++ 不是 Tool：它们是**宿主机提供的编译环境**，只做版本适配，不下载、不构建。
 
 - 不能像 patchelf 一样下载一个可执行文件替换；
 - 它们决定 ABI、C 标准默认值；
@@ -330,6 +332,18 @@ glibc / ld / binutils **不声明**：它们跟随 gcc 所在的系统或镜像�
 - 为未来镜像 catalog 提供同一份 `ToolchainFacts`，作为镜像筛选条件。
 
 Toolchain 不提供可执行文件，不进 PATH，不参与安装。
+
+两者的边界：
+
+| | Tool | Toolchain |
+| --- | --- | --- |
+| 宿主缺失 / 版本不满足 | 从 catalog 取源码构建到 `build/tools/` 使用 | **停止**，报环境不满足 |
+| 来源 | 宿主或 catalog 源码 | 只有当前主机（将来可能是镜像） |
+| 作用 | 单个节点的构建命令 | 整次构建的编译器版本与 CFLAGS |
+| 是否可下载 | 是 | 否 |
+
+判断标准：能被 `./configure` / `make` 执行的辅助程序是 Tool；决定编译器、ABI 和
+C 标准默认值的是 Toolchain。
 
 ### 4.2 声明
 
