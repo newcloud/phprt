@@ -187,7 +187,7 @@ pub fn label(kind: Kind) -> &'static str {
         Kind::Product => "product",
         Kind::Dep => "deps",
         Kind::Component => "component",
-        Kind::Tool => "tools",
+        Kind::Tool => "tool",
     }
 }
 

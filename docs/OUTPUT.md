@@ -263,6 +263,8 @@ xdebug           external  shared             3.5.3      available
 - 同一节点从 `configure` 换到 `make`、`install` 时只换动词，秒表不回零。
 - 还没轮到的节点显示 `⠸ 等待`，不转圈，免得看起来在跑。
 - 已完成的节点显示 `✓ 已构建`，从进度框移出，固定成一行。
+- 标签跟节点类型走：`[deps]` / `[component]` / `[product]` / `[tool]`；工具节点的
+  下载、解压、编译都显示 `[tool]`，不是 `[deps]`。
 - `--ui plain` 时逐行输出：
 
 ```text
