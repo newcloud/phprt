@@ -85,7 +85,7 @@ bundle 默认值 / 重新解析工具：
 | `targets` | 产品构建目标：target 名 → 配置名 → 值；空/缺失表示沿用 bundle 的 `[targets] default` |
 | `components.<名字>.line` | 实际使用的版本线，如 6.2；bundled 组件为空 |
 | `components.<名字>.version` | 实际补丁，如 6.2.5；`--lock` 把它当作精确版本 |
-| `components.<名字>.mode` | 当前挂载方式，如 static / shared / dynamic |
+| `components.<名字>.mode` | 当前挂载方式，如 static / shared / dynamic；没显式选时写解析后的默认值 |
 | `components.<名字>.installed` | 是否已经编译安装并通过产品启动校验 |
 | `components.<名字>.deps` | 依赖名 → 转给它的 feature |
 | `components.<名字>.features` | 组件自己的 feature |
@@ -241,6 +241,8 @@ artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
   marker 不承担编译缓存。
 - `install` 用标记判断“这个补丁装过没有”：装过就拒绝重复安装，并说明本次方案与之
   一致、不一致，或“配置一致但解析出的版本不同”，细节见 [CLI.md](CLI.md#重复安装与中断)。
+  方案指纹和 `scheme_cmd` 都按解析后的 `mode` / `feature` 渲染，没显式选的组件也带上
+  默认值，所以首装后立刻重跑同一条 `install` 会判定为一致。
 - 默认只写系列时，产品补丁就是 `installed_version`，所以会命中上面的拒绝；
   要换补丁用 `update` 或显式写补丁号。
 - `install --force` 在下载、解压成功后把已装的树改名 `<产品>-<补丁>-backup-<日期>`，

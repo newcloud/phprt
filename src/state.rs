@@ -263,7 +263,7 @@ impl ProjectState {
     ) -> Result<Selection> {
         let mut out = Selection::default();
         for name in names {
-            reg.component(name)?;
+            let component = reg.component(name)?;
             let mut spec = cli.per_component.get(name).cloned().unwrap_or_default();
             if let Some(state) = self.components.get(name) {
                 if spec.mode.is_none() && !state.mode.is_empty() {
@@ -301,6 +301,15 @@ impl ProjectState {
                         }
                     }
                 }
+            }
+            // 没写 mode / feature 的组件在这里补上解析后的值：state 保存的是
+            // 解析结果，标记里的方案命令和指纹也必须按同一份结果渲染，否则首装后
+            // 重跑同一条 install 会算出不同的方案，被误判成“编译配置不一致”。
+            if spec.mode.is_none() && !component.default_mode.is_empty() {
+                spec.mode = Some(component.default_mode.clone());
+            }
+            if spec.features.is_none() {
+                spec.features = Some(BTreeSet::new());
             }
             out.per_component.insert(name.clone(), spec);
         }
@@ -713,6 +722,34 @@ mod tests {
         assert_eq!(names, vec!["curl", "swoole"]);
         assert_eq!(sel.features(&reg)["libcurl"], vec!["nghttp2"]);
         assert_eq!(sel.mode_of(reg.component("swoole").unwrap()), "shared");
+    }
+
+    #[test]
+    fn first_install_scheme_survives_state_sync() {
+        let reg = registry();
+        let names = vec!["curl".to_owned(), "swoole".to_owned()];
+        let empty = Selection::default();
+        let targets = TargetSelection::new();
+        let digest =
+            |sel: &Selection| crate::marker::scheme_digest(sel, &BTreeMap::new(), &targets);
+
+        // 首次安装：默认组件从 bundle 铺开，mode 没有显式写。
+        let first = ProjectState::default()
+            .effective_selection(&reg, &empty, &empty, &names)
+            .unwrap();
+        assert_eq!(first.per_component["curl"].mode.as_deref(), Some("static"));
+        assert_eq!(
+            first.per_component["swoole"].mode.as_deref(),
+            Some("shared")
+        );
+
+        // 装完 sync_selection 把解析后的 mode 写进 state；再算一次方案指纹必须不变。
+        let mut state = ProjectState::default();
+        state.sync_selection(&reg, &first, &names).unwrap();
+        let again = state
+            .effective_selection(&reg, &empty, &empty, &names)
+            .unwrap();
+        assert_eq!(digest(&first), digest(&again));
     }
 
     #[test]
