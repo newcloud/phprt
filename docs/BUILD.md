@@ -262,4 +262,4 @@ ldd .phprt/php-8.5.12/bin/php | grep libssl
 ## 9. 不在范围
 
 LTO、`--static-all`、lock 文件、多产品共享安装树、增量链接优化。
-其他 PHP 系列的 recipe 使用同一套流程，目前只在 8.0 ~ 8.5 上验收（8.6 未适配）。
+其他 PHP 系列的 recipe 使用同一套流程，目前只在 8.0 ~ 8.6 上验收。

@@ -332,7 +332,7 @@ PHP    7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.6
 nginx  1.29
 ```
 
-PHP 8.6 系列 recipe 还在适配，目前只声明了部分内置扩展。
+PHP 8.6 目前用 8.6.0RC3 构建（catalog 的 8.6 线）。
 
 PHP 扩展用 `phprt list php@8.5` 查看，包含内置扩展（curl、gd、mbstring…）和 PECL 扩展
 （swoole、xdebug、redis、imagick…），以及每个扩展支持的方式（static / shared）。

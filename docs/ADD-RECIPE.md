@@ -432,6 +432,68 @@ sysvshm = {}
 显式选择；openssl、curl、gd 选中时自动使用各自的 `[component_presets]`。
 默认集和 preset 都只在第一次写 state 时落盘。
 
+### 7.6 PHP 8.6 当前默认
+
+PHP 8.6 还没有正式版，catalog 的 8.6 线指向 `php-8.6.0RC3`；正式版发布后追加
+`8.6.0` 并指向 `www.php.net`。
+
+```toml
+product = "php"
+
+[deps]
+openssl = "3.5"
+libcurl = "8.23"
+libxml2 = "2.15"
+zlib = "1.3"
+libpng = "1.6"
+jpeg = "3.1"
+webp = "1.6"
+aom = "3.12"
+avif = "1.3"
+freetype = "2.13"
+sqlite = "3.54"
+libzip = "1.12"
+libsodium = "1.0"
+oniguruma = "6.9"
+
+[component_presets]
+openssl = { features = ["argon2"] }
+curl = { deps = { libcurl = ["ssl"] } }
+gd = { features = ["jpeg", "webp", "freetype"] }
+zip = { deps = { libzip = ["encryption"] } }
+sqlite3 = { deps = { sqlite = ["column_metadata"] } }
+pdo_sqlite = { deps = { sqlite = ["column_metadata"] } }
+
+[default_components]
+openssl = { ref = "component_presets.openssl" }
+curl = { ref = "component_presets.curl" }
+libxml = {}
+zlib = {}
+sqlite3 = { ref = "component_presets.sqlite3" }
+pdo_sqlite = { ref = "component_presets.pdo_sqlite" }
+mysqli = {}
+pdo_mysql = {}
+mbstring = {}
+zip = { ref = "component_presets.zip" }
+sodium = {}
+gettext = {}
+pcntl = {}
+sockets = {}
+shmop = {}
+sysvmsg = {}
+sysvsem = {}
+sysvshm = {}
+```
+
+和 8.5 的差别：
+
+- 没有 PECL 扩展的默认线。PHP 8.6 删除了 `XtOffsetOf`、`INI_INT`、`zval_dtor` 等
+  Zend API，swoole 6.2.5、xdebug 3.5.3 和 8.5 默认线上的 11 个 PECL 扩展（redis、
+  apcu、igbinary、msgpack、protobuf、yaml、memcached、imagick、ssh2、amqp、rdkafka）
+  的现有版本线都编不过，`LINES` 里也不写 `8.6`；等上游发支持 8.6 的版本再加回。
+- gd 在 8.6 多了 `tiff` / `heif` / `imagequant` / `uhdr` 四个 feature，都不在预设里，
+  需要显式打开。
+
 ## 8. 新增 recipe 的防错清单
 
 loading 时会直接拒绝下列写法，不会静默忽略：

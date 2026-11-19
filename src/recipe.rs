@@ -3305,20 +3305,18 @@ gd = { ref = "component_presets.gd", mode = "shared" }
 
     #[test]
     fn gd_loads_for_series_with_bundled_facts() {
-        for series in ["8.0", "8.1", "8.2", "8.3", "8.4", "8.5"] {
+        for series in ["8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"] {
             let (reg, _) = load(series, &[], &[]).unwrap();
             assert!(reg.get("component:gd").is_some(), "{series} 应该加载 gd");
         }
 
-        for series in ["7.4", "8.6"] {
-            let (reg, _) = load(series, &[], &[]).unwrap();
-            assert!(reg.get("component:gd").is_none(), "{series} 不该加载 gd");
-        }
+        let (reg, _) = load("7.4", &[], &[]).unwrap();
+        assert!(reg.get("component:gd").is_none(), "7.4 不该加载 gd");
     }
 
     #[test]
     fn zlib_is_bundled_for_minimal_series() {
-        // 7.4 / 8.6 的 bundled 只列了部分内置扩展；zlib 必须在里面，
+        // 7.4 的 bundled 只列了部分内置扩展；zlib 必须在里面，
         // 否则会被 catalog 的同名库记录当成外部 PHP 扩展。
         for series in ["7.4", "8.6"] {
             let (reg, _) = load(series, &[], &[]).unwrap();

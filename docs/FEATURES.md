@@ -110,6 +110,10 @@ component:openssl
 | gd `--with-webp` | 常用 | feature `webp`，默认关 |
 | gd `--with-freetype` | 常用 | feature `freetype`，默认关 |
 | gd `--with-avif` | 常用但依赖较大 | feature `avif` + `needs=["aom","avif"]`，默认关 |
+| gd `--with-tiff` | 常用，PHP 8.6 起才有 | feature `tiff` + `needs=["libtiff"]`，默认关，requires php 8.6 |
+| gd `--with-heif` | 常用，PHP 8.6 起才有 | feature `heif` + `needs=["libheif"]`，默认关，requires php 8.6 |
+| gd `--with-imagequant` | 调色板量化，PHP 8.6 起才有 | feature `imagequant` + `needs=["libimagequant"]`，默认关，requires php 8.6 |
+| gd `--with-uhdr` | UltraHDR，PHP 8.6 起才有 | feature `uhdr` + `needs=["libultrahdr"]`，默认关，requires php 8.6 |
 | gd `--with-external-gd` / `--with-xpm` / `--enable-gd-jis-conv` | 少用 | ignored |
 | libjpeg-turbo `WITH_SIMD` | 常用（性能） | dep feature `simd`，默认关；`requires.commands=["nasm"]` |
 | libzip `ENABLE_OPENSSL` | 常用（读写 AES 加密的 zip） | dep feature `encryption` + `needs=["openssl"]`，默认开（`[component_presets].zip`） |
@@ -128,7 +132,7 @@ component:openssl
 | mbstring `--enable-mbregex` | 常用（multibyte 正则） | configure 固定开，oniguruma 在树内 |
 | zlib / sqlite3 / pdo_sqlite / zip / sodium / gettext / pcntl / sockets / shmop / sysv* / pdo_mysql | 只有正向开关 | configure 固定 |
 
-PNG 不是 feature：PHP 8.5 gd 强制依赖 libpng，`--enable-gd` 就带上。
+PNG 不是 feature：PHP 8.5 / 8.6 gd 强制依赖 libpng，`--enable-gd` 就带上。
 
 ### 3.2 宿主机命令条件
 

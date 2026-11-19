@@ -6,6 +6,10 @@ IMAGE_LINES = {
     "aom": ["3.12"],
     "avif": ["1.3"],
     "freetype": ["2.13"],
+    "libtiff": ["4.7"],
+    "libheif": ["1.23"],
+    "libimagequant": ["2.18"],
+    "libultrahdr": ["2.0"],
 }
 
 # gd 没有同名依赖，不能写 PRODUCT_LINES；这里按 PHP 系列列出每个图片依赖允许的线。
@@ -47,6 +51,27 @@ def target(ctx):
                 configure = ["--with-avif"],
                 requires = {"product": ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6"]},
             ),
+            # 下面四个开关是 PHP 8.6 新增的（8.5 的 gd config.m4 里没有）。
+            "tiff": feature(
+                needs = ["libtiff"],
+                configure = ["--with-tiff"],
+                requires = {"product": ["8.6"]},
+            ),
+            "heif": feature(
+                needs = ["libheif"],
+                configure = ["--with-heif"],
+                requires = {"product": ["8.6"]},
+            ),
+            "imagequant": feature(
+                needs = ["libimagequant"],
+                configure = ["--with-imagequant"],
+                requires = {"product": ["8.6"]},
+            ),
+            "uhdr": feature(
+                needs = ["libultrahdr"],
+                configure = ["--with-uhdr"],
+                requires = {"product": ["8.6"]},
+            ),
         },
         ignored = {
             "--with-external-gd": "少用：改用系统 libgd，版本和功能不可控",
@@ -59,7 +84,7 @@ def target(ctx):
         configure = ["--enable-gd"],
         source_path = "ext/gd",
         ini = "20-gd.ini",
-        desc = "PHP gd 扩展；PNG 固定由 libpng 提供，JPEG/WebP/AVIF/FreeType 可选",
+        desc = "PHP gd 扩展；PNG 固定由 libpng 提供，JPEG/WebP/AVIF/FreeType 可选，PHP 8.6 起可选 TIFF/HEIF/ImageQuant/UltraHDR",
     )
 
 

@@ -1,0 +1,62 @@
+def target(ctx):
+    self = ctx["self"]
+
+    return dep(
+        name = "libheif",
+        version = self["version"],
+        url = self["url"],
+        sha256 = self["sha256"],
+        tools = ["cmake"],
+        needs = ["libde265"],
+        # 只留 HEVC 解码（libde265）；其它编解码器全部显式关闭，避免探测系统库。
+        configure = [
+            "cmake",
+            "-S", "{build}",
+            "-B", "{build}",
+            "-DCMAKE_INSTALL_PREFIX={prefix}",
+            "-DCMAKE_INSTALL_LIBDIR=lib",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+            "-DCMAKE_PREFIX_PATH={dep:libde265}",
+            "-DBUILD_SHARED_LIBS=ON",
+            "-DENABLE_PLUGIN_LOADING=OFF",
+            "-DWITH_LIBDE265=ON",
+            "-DWITH_X265=OFF",
+            "-DWITH_KVAZAAR=OFF",
+            "-DWITH_UVG266=OFF",
+            "-DWITH_VVDEC=OFF",
+            "-DWITH_VVENC=OFF",
+            "-DWITH_X264=OFF",
+            "-DWITH_OpenH264_DECODER=OFF",
+            "-DWITH_DAV1D=OFF",
+            "-DWITH_AOM_DECODER=OFF",
+            "-DWITH_AOM_ENCODER=OFF",
+            "-DWITH_SvtEnc=OFF",
+            "-DWITH_RAV1E=OFF",
+            "-DWITH_JPEG_DECODER=OFF",
+            "-DWITH_JPEG_ENCODER=OFF",
+            "-DWITH_OpenJPEG_ENCODER=OFF",
+            "-DWITH_OpenJPEG_DECODER=OFF",
+            "-DWITH_OPENJPH_ENCODER=OFF",
+            "-DWITH_FFMPEG_DECODER=OFF",
+            "-DWITH_UNCOMPRESSED_CODEC=OFF",
+            "-DWITH_WEBCODECS=OFF",
+            "-DWITH_LIBSHARPYUV=OFF",
+            "-DWITH_EXAMPLES=OFF",
+            "-DWITH_EXAMPLE_HEIF_THUMB=OFF",
+            "-DWITH_EXAMPLE_HEIF_VIEW=OFF",
+            "-DWITH_GDK_PIXBUF=OFF",
+            "-DBUILD_TESTING=OFF",
+            "-DBUILD_DEVELOPMENT_TOOLS=OFF",
+            "-DWITH_FUZZERS=OFF",
+        ],
+        make = [
+            "cmake --build {build}",
+            "cmake --install {build}",
+        ],
+        artifacts = ["lib/libheif.so"],
+        desc = "libheif 库，供 gd 的 HEIF 支持使用；HEVC 解码用树内 libde265",
+    )
+
+
+TARGET = target

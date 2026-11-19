@@ -146,7 +146,7 @@ cargo run -- install php@8.5 --component 'curl=mode:shared,dep:libcurl[ssl,nghtt
 cargo run -- install php@8.5 --component gd
 cargo run -- install php@8.5 --component 'gd=dep:jpeg[simd]'
 cargo run -- install php@8.5 --component 'gd=feature:[jpeg,webp,freetype,avif]'
-cargo run -- install php@8.6 --component gd     # 必须失败：gd 只在 8.0 ~ 8.5 加载
+cargo run -- install php@8.6 --component 'gd=feature:[jpeg,webp,freetype,tiff,heif,imagequant,uhdr]'  # 8.6 的 gd 新后端
 cargo run -- install php@7.4 --component swoole # swoole 4.8 + openssl 1.1.1
 cargo run -- install php@8.2 --component swoole=version:6.0
 cargo run -- install php@8.5 --component swoole --dep openssl=4.0

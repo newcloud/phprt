@@ -19,8 +19,13 @@
     { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz" },
     { version = "8.4.11", url = "https://www.php.net/distributions/php-8.4.11.tar.gz" },
 ]
-"8.5" = [ { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209" } ]
-"8.6" = [ { version = "8.6.0", url = "https://www.php.net/distributions/php-8.6.0.tar.gz" } ]
+"8.5" = [
+    { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209" },
+    { version = "8.5.11", url = "https://www.php.net/distributions/php-8.5.11.tar.xz" }
+]
+# 8.6 还没正式发布；RC 包只在发布经理目录短期存在，正式版发布后追加 8.6.0 并
+# 指向 www.php.net，旧 RC 保留。
+"8.6" = [ { version = "8.6.0RC3", url = "https://downloads.php.net/~svpernova09/php-8.6.0RC3.tar.bz2", sha256 = "12d024eba9fa4bf379693c045a544eec2144de2d7de71f31a6ed4496717e0307" } ]
 
 # OpenSSL 官方发布页只做跳转：https://www.openssl.org/source/openssl-<版本>.tar.gz
 # 会 301 到 GitHub Releases，所以这里直接写跳转后的最终地址。下载器按 catalog
@@ -86,6 +91,26 @@
 
 [freetype]
 "2.13" = [ { version = "2.13.3", url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz", sha256 = "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289" } ]
+
+# PHP 8.6 gd 新增的 HEIF / TIFF / ImageQuant / UltraHDR 支持用的库。
+# libheif 1.17 起不再自带 libde265，HEVC 解码单独一条线。
+[libtiff]
+"4.7" = [ { version = "4.7.2", url = "https://download.osgeo.org/libtiff/tiff-4.7.2.tar.gz", sha256 = "672bd7d10aee4606171afb864f3570b83340f6a33e2c186dc0512f7145ffdf6a" } ]
+
+[libheif]
+"1.23" = [ { version = "1.23.7", url = "https://github.com/strukturag/libheif/releases/download/v1.23.7/libheif-1.23.7.tar.gz", sha256 = "f7483e818503ea6224c8863e4a56ac02c7089021a98472c811c12aa19faf2475" } ]
+
+[libde265]
+"1.1" = [ { version = "1.1.3", url = "https://github.com/strukturag/libde265/releases/download/v1.1.3/libde265-1.1.3.tar.gz" } ]
+
+# libimagequant 4.x 改成 Rust（Cargo）构建，phprt 没有 cargo 工具；
+# 2.18.0 是最后一个 C + autotools 版本，PHP 用到的 C API 没变。
+[libimagequant]
+"2.18" = [ { version = "2.18.0", url = "https://github.com/ImageOptim/libimagequant/archive/refs/tags/2.18.0.tar.gz" } ]
+
+# GitHub tag 归档会跳到 codeload；这里写稳定的 tag 地址。
+[libultrahdr]
+"2.0" = [ { version = "2.0.2", url = "https://github.com/google/libultrahdr/archive/refs/tags/v2.0.2.tar.gz", sha256 = "aa8d193bb887c348c419780511dd03b374f4e07af8812b6d3f80c8537cf1ef2c" } ]
 
 # 构建期工具：phpize 需要 autoconf。GNU FTP 直连，不套 GitHub 镜像。
 # 工具按 catalog 的每条线各成一个可选版本；旧版本留在文件里，供节点收窄到
