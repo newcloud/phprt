@@ -57,7 +57,7 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 
 | 层 | 文件 | 只回答 |
 | --- | --- | --- |
-| catalog | `recipes/catalog.toml` | 这条线当前是哪个补丁、从哪下载 |
+| catalog | `recipes/catalog.toml` | 这条线有哪些补丁、从哪下载 |
 | recipe | `recipes/products/**`、`components/**`、`dep/**`、`tools/**` | 怎么编译、允许哪些线、需要哪些依赖和构建期工具 |
 | bundle | `recipes/bundles/<产品>/<系列>.toml` | 默认用哪条线、默认装哪些组件、默认选哪些 target |
 | state | `.phprt/<产品>-<系列>/state.json`（工具目录在项目根下，默认 `.phprt`，可配置） | 本机这次实际选了什么、装到哪一步 |

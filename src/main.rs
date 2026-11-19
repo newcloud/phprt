@@ -1934,13 +1934,20 @@ fn select_product_patch(
     catalog
         .product_version_for(product, series, installed)
         .map_err(|_| {
-            let current = catalog
-                .get(product, series)
-                .map(|artifact| artifact.version.as_str())
-                .unwrap_or("无");
+            let versions: Vec<&str> = catalog
+                .lines(product)
+                .and_then(|lines| lines.get(series))
+                .map(|artifacts| {
+                    artifacts
+                        .iter()
+                        .map(|artifact| artifact.version.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
             anyhow!(
-                "state 里的 {product} {installed} 不在 catalog（{series} 线当前 {current}，无旧补丁）；\
-                 用 phprt update {product}@{series} 升级，或在 catalog 里保留旧补丁"
+                "state 里的 {product} {installed} 不在 catalog（{series} 线可用：{}）；\
+                 用 phprt update {product}@{series} 升级，或在 catalog 里保留旧补丁",
+                versions.join(", ")
             )
         })
 }

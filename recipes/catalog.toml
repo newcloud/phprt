@@ -1,163 +1,170 @@
 # phprt 版本数据库（测试用）
 #
-# 每条线保存“当前最新小版本”和下载地址；patches 里登记旧补丁，
-# 供 `install php@8.4.13` 这类显式补丁安装和测试使用。
+# 每条线是一个数组，保存这条线发布过的所有补丁（version / url / sha256）。
+# 默认选择取数组中版本最大的补丁，和数组顺序无关；
+# `--lock` 和 `install php@8.4.13` 这类显式补丁按版本精确查找。
 # 兼容性（哪条线支持哪个产品、依赖哪些库）写在 recipe 的 LINES / PRODUCT_LINES 里。
 #
-# 更新时只改对应线的 version / url / sha256，bundle 和 recipe 不动。
+# 更新时在对应线的数组里加新补丁；旧补丁保留，不删除。
 
 [php]
-"7.4" = { version = "7.4.33", url = "https://www.php.net/distributions/php-7.4.33.tar.gz" }
-"8.0" = { version = "8.0.30", url = "https://www.php.net/distributions/php-8.0.30.tar.gz" }
-"8.1" = { version = "8.1.34", url = "https://www.php.net/distributions/php-8.1.34.tar.gz" }
-"8.2" = { version = "8.2.29", url = "https://www.php.net/distributions/php-8.2.29.tar.gz" }
-"8.3" = { version = "8.3.26", url = "https://www.php.net/distributions/php-8.3.26.tar.gz" }
-"8.4" = { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz", patches = [
+"7.4" = [ { version = "7.4.33", url = "https://www.php.net/distributions/php-7.4.33.tar.gz" } ]
+"8.0" = [ { version = "8.0.30", url = "https://www.php.net/distributions/php-8.0.30.tar.gz" } ]
+"8.1" = [ { version = "8.1.34", url = "https://www.php.net/distributions/php-8.1.34.tar.gz" } ]
+"8.2" = [ { version = "8.2.29", url = "https://www.php.net/distributions/php-8.2.29.tar.gz" } ]
+"8.3" = [ { version = "8.3.26", url = "https://www.php.net/distributions/php-8.3.26.tar.gz" } ]
+"8.4" = [
+    { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz" },
     { version = "8.4.13", url = "https://www.php.net/distributions/php-8.4.13.tar.gz" },
     { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz" },
     { version = "8.4.11", url = "https://www.php.net/distributions/php-8.4.11.tar.gz" },
-] }
-"8.5" = { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209" }
-"8.6" = { version = "8.6.0", url = "https://www.php.net/distributions/php-8.6.0.tar.gz" }
+]
+"8.5" = [ { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209" } ]
+"8.6" = [ { version = "8.6.0", url = "https://www.php.net/distributions/php-8.6.0.tar.gz" } ]
 
 # OpenSSL 官方发布页只做跳转：https://www.openssl.org/source/openssl-<版本>.tar.gz
 # 会 301 到 GitHub Releases，所以这里直接写跳转后的最终地址。下载器按 catalog
 # 里的原始主机决定是否套用 GitHub 镜像、30s 短超时和站点并发桶。
 # 注意 1.1.1w 的 tag 是 OpenSSL_1_1_1w，3.0 及以后是 openssl-<版本>。
 [openssl]
-"1.1.1" = { version = "1.1.1w", url = "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz" }
-"3.0" = { version = "3.0.17", url = "https://github.com/openssl/openssl/releases/download/openssl-3.0.17/openssl-3.0.17.tar.gz" }
-"3.5" = { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a" }
-"4.0" = { version = "4.0.0", url = "https://github.com/openssl/openssl/releases/download/openssl-4.0.0/openssl-4.0.0.tar.gz" }
+"1.1.1" = [ { version = "1.1.1w", url = "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz" } ]
+"3.0" = [ { version = "3.0.17", url = "https://github.com/openssl/openssl/releases/download/openssl-3.0.17/openssl-3.0.17.tar.gz" } ]
+# 数组顺序故意不按版本排：默认选择取最大的 3.5.9。
+"3.5" = [
+    { version = "3.5.6", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.6/openssl-3.5.6.tar.gz" },
+    { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a" },
+    { version = "3.5.8", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz" },
+]
+"4.0" = [ { version = "4.0.0", url = "https://github.com/openssl/openssl/releases/download/openssl-4.0.0/openssl-4.0.0.tar.gz" } ]
 
 [swoole]
-"4.8" = { version = "4.8.13", url = "https://pecl.php.net/get/swoole-4.8.13.tgz" }
-"5.1" = { version = "5.1.7", url = "https://pecl.php.net/get/swoole-5.1.7.tgz" }
-"6.0" = { version = "6.0.2", url = "https://pecl.php.net/get/swoole-6.0.2.tgz" }
-"6.2" = { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c" }
+"4.8" = [ { version = "4.8.13", url = "https://pecl.php.net/get/swoole-4.8.13.tgz" } ]
+"5.1" = [ { version = "5.1.7", url = "https://pecl.php.net/get/swoole-5.1.7.tgz" } ]
+"6.0" = [ { version = "6.0.2", url = "https://pecl.php.net/get/swoole-6.0.2.tgz" } ]
+"6.2" = [ { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c" } ]
 
 [xdebug]
-"3.1" = { version = "3.1.6", url = "https://pecl.php.net/get/xdebug-3.1.6.tgz" }
-"3.5" = { version = "3.5.3", url = "https://pecl.php.net/get/xdebug-3.5.3.tgz", sha256 = "f073de91bea046106abf4d6071c963ea71e58571df6ce58948ceca89d121cb2d" }
+"3.1" = [ { version = "3.1.6", url = "https://pecl.php.net/get/xdebug-3.1.6.tgz" } ]
+"3.5" = [ { version = "3.5.3", url = "https://pecl.php.net/get/xdebug-3.5.3.tgz", sha256 = "f073de91bea046106abf4d6071c963ea71e58571df6ce58948ceca89d121cb2d" } ]
 
 [libcurl]
-"8.23" = { version = "8.23.0", url = "https://curl.se/download/curl-8.23.0.tar.xz", sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5" }
+"8.23" = [ { version = "8.23.0", url = "https://curl.se/download/curl-8.23.0.tar.xz", sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5" } ]
 
 # PHP 8.0 的 openssl 扩展编不过 OpenSSL 3.x，curl 只能用 7.88 线配 1.1.1。
-"7.88" = { version = "7.88.0", url = "https://curl.se/download/curl-7.88.0.tar.xz", sha256 = "fd17432cf28714a4cf39d89e26b8ace0d8901199fe5d01d75eb0ae3bbfcc731f" }
+"7.88" = [ { version = "7.88.0", url = "https://curl.se/download/curl-7.88.0.tar.xz", sha256 = "fd17432cf28714a4cf39d89e26b8ace0d8901199fe5d01d75eb0ae3bbfcc731f" } ]
 
 # GNOME 下载站直接提供 tar.xz，不跳转；sha256 取自同目录的 .sha256sum。
 [libxml2]
-"2.15" = { version = "2.15.4", url = "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz", sha256 = "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821" }
+"2.15" = [ { version = "2.15.4", url = "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz", sha256 = "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821" } ]
 
 # libxml2 2.12 改了 xmlStructuredErrorFunc 的 const 签名并删掉了 xmlversion.h 里的
 # ATTRIBUTE_UNUSED 宏；PHP 8.0/7.4 分支 EOL 后没拿到上游修复，编不过 2.12+，
 # 只能钉在 2.11（php-src UPGRADING：8.0 要求 libxml >= 2.9.0）。
-"2.11" = { version = "2.11.9", url = "https://download.gnome.org/sources/libxml2/2.11/libxml2-2.11.9.tar.xz", sha256 = "780157a1efdb57188ec474dca87acaee67a3a839c2525b2214d318228451809f" }
+"2.11" = [ { version = "2.11.9", url = "https://download.gnome.org/sources/libxml2/2.11/libxml2-2.11.9.tar.xz", sha256 = "780157a1efdb57188ec474dca87acaee67a3a839c2525b2214d318228451809f" } ]
 
 [zlib]
-"1.3" = { version = "1.3.2", url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz", sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" }
+"1.3" = [ { version = "1.3.2", url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz", sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" } ]
 
 # libpng 1.7 还是 beta，稳定线锁 1.6。
 # download.sourceforge.net 会 301 到 downloads.sourceforge.net，再 302 到带临时
 # 签名的镜像；这里写稳定的发布路径。
 [libpng]
-"1.6" = { version = "1.6.59", url = "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.59/libpng-1.6.59.tar.xz", sha256 = "d80dd2a38a37f803cb9b6ac7b14bd6e74ddc3b654780a8380bdf93523fdb4389" }
+"1.6" = [ { version = "1.6.59", url = "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.59/libpng-1.6.59.tar.xz", sha256 = "d80dd2a38a37f803cb9b6ac7b14bd6e74ddc3b654780a8380bdf93523fdb4389" } ]
 
 [jpeg]
-"3.1" = { version = "3.1.4.1", url = "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.4.1/libjpeg-turbo-3.1.4.1.tar.gz", sha256 = "ecae8008e2cc9ade2f2c1bb9d5e6d4fb73e7c433866a056bd82980741571a022" }
+"3.1" = [ { version = "3.1.4.1", url = "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.4.1/libjpeg-turbo-3.1.4.1.tar.gz", sha256 = "ecae8008e2cc9ade2f2c1bb9d5e6d4fb73e7c433866a056bd82980741571a022" } ]
 
 [webp]
-"1.6" = { version = "1.6.0", url = "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz", sha256 = "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564" }
+"1.6" = [ { version = "1.6.0", url = "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz", sha256 = "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564" } ]
 
 [aom]
-"3.12" = { version = "3.12.1", url = "https://storage.googleapis.com/aom-releases/libaom-3.12.1.tar.gz", sha256 = "9e9775180dec7dfd61a79e00bda3809d43891aee6b2e331ff7f26986207ea22e" }
+"3.12" = [ { version = "3.12.1", url = "https://storage.googleapis.com/aom-releases/libaom-3.12.1.tar.gz", sha256 = "9e9775180dec7dfd61a79e00bda3809d43891aee6b2e331ff7f26986207ea22e" } ]
 
 # GitHub tag 归档会跳到 codeload；这里写稳定的 tag 地址。
 [avif]
-"1.3" = { version = "1.3.0", url = "https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.3.0.tar.gz", sha256 = "0a545e953cc049bf5bcf4ee467306a2f113a75110edf59e61248873101cd26c1" }
+"1.3" = [ { version = "1.3.0", url = "https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.3.0.tar.gz", sha256 = "0a545e953cc049bf5bcf4ee467306a2f113a75110edf59e61248873101cd26c1" } ]
 
 [freetype]
-"2.13" = { version = "2.13.3", url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz", sha256 = "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289" }
+"2.13" = [ { version = "2.13.3", url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz", sha256 = "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289" } ]
 
 # 构建期工具：phpize 需要 autoconf。GNU FTP 直连，不套 GitHub 镜像。
 # 工具按 catalog 的每条线各成一个可选版本；旧版本留在文件里，供节点收窄到
 # 旧版或 --lock 复现。当前默认取满足区间的最高版本（2.72）。
 [autoconf]
-"2.71" = { version = "2.71", url = "https://ftp.gnu.org/gnu/autoconf/autoconf-2.71.tar.xz", sha256 = "f14c83cfebcc9427f2c3cea7258bd90df972d92eb26752da4ddad81c87a0faa4" }
-"2.72" = { version = "2.72", url = "https://ftp.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz", sha256 = "ba885c1319578d6c94d46e9b0dceb4014caafe2490e437a0dbca3f270a223f5a" }
+"2.71" = [ { version = "2.71", url = "https://ftp.gnu.org/gnu/autoconf/autoconf-2.71.tar.xz", sha256 = "f14c83cfebcc9427f2c3cea7258bd90df972d92eb26752da4ddad81c87a0faa4" } ]
+"2.72" = [ { version = "2.72", url = "https://ftp.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz", sha256 = "ba885c1319578d6c94d46e9b0dceb4014caafe2490e437a0dbca3f270a223f5a" } ]
 
 # 构建期工具：设置 ELF 的 rpath。GitHub Releases 的源码包（含 configure）。
 [patchelf]
-"0.19" = { version = "0.19.3", url = "https://github.com/NixOS/patchelf/releases/download/0.19.3/patchelf-0.19.3.tar.gz", sha256 = "fac76a3c0b730e8d53ea1d10cd6015322d78c9900af91736f2cca51d5837b612" }
+"0.19" = [ { version = "0.19.3", url = "https://github.com/NixOS/patchelf/releases/download/0.19.3/patchelf-0.19.3.tar.gz", sha256 = "fac76a3c0b730e8d53ea1d10cd6015322d78c9900af91736f2cca51d5837b612" } ]
 
 [nghttp2]
-"1.64" = { version = "1.64.0", url = "https://github.com/nghttp2/nghttp2/releases/download/v1.64.0/nghttp2-1.64.0.tar.gz" }
+"1.64" = [ { version = "1.64.0", url = "https://github.com/nghttp2/nghttp2/releases/download/v1.64.0/nghttp2-1.64.0.tar.gz" } ]
 
 # c-ares 发布在 GitHub Releases；c-ares.org/download 指向同一批文件。
 [c-ares]
-"1.34" = { version = "1.34.9", url = "https://github.com/c-ares/c-ares/releases/download/v1.34.9/c-ares-1.34.9.tar.gz" }
+"1.34" = [ { version = "1.34.9", url = "https://github.com/c-ares/c-ares/releases/download/v1.34.9/c-ares-1.34.9.tar.gz" } ]
 
 # ---------------------------------------------------------------------------
 # 常用 PECL 扩展（8.3 / 8.4 / 8.5）
 # ---------------------------------------------------------------------------
 
 [redis]
-"6.3" = { version = "6.3.0", url = "https://pecl.php.net/get/redis-6.3.0.tgz", sha256 = "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5" }
+"6.3" = [ { version = "6.3.0", url = "https://pecl.php.net/get/redis-6.3.0.tgz", sha256 = "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5" } ]
 
 [apcu]
-"5.1" = { version = "5.1.28", url = "https://pecl.php.net/get/apcu-5.1.28.tgz", sha256 = "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf" }
+"5.1" = [ { version = "5.1.28", url = "https://pecl.php.net/get/apcu-5.1.28.tgz", sha256 = "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf" } ]
 
 [igbinary]
-"3.2" = { version = "3.2.16", url = "https://pecl.php.net/get/igbinary-3.2.16.tgz", sha256 = "8bf25d465abc7973d9e2c9a3039a5f8eea635b23bc1477017ff3999ff95836da" }
+"3.2" = [ { version = "3.2.16", url = "https://pecl.php.net/get/igbinary-3.2.16.tgz", sha256 = "8bf25d465abc7973d9e2c9a3039a5f8eea635b23bc1477017ff3999ff95836da" } ]
 
 [msgpack]
-"3.0" = { version = "3.0.1", url = "https://pecl.php.net/get/msgpack-3.0.1.tgz", sha256 = "e30be355ab79aaea4568692fbd6073fd7c7f50ea8d3cf12edce40fc0c921d868" }
+"3.0" = [ { version = "3.0.1", url = "https://pecl.php.net/get/msgpack-3.0.1.tgz", sha256 = "e30be355ab79aaea4568692fbd6073fd7c7f50ea8d3cf12edce40fc0c921d868" } ]
 
 [protobuf]
-"5.36" = { version = "5.36.2", url = "https://pecl.php.net/get/protobuf-5.36.2.tgz", sha256 = "f0a17c67de29df0fb0e5215a381df9b155125e1ace6252dd617bf16b4194dd5b" }
+"5.36" = [ { version = "5.36.2", url = "https://pecl.php.net/get/protobuf-5.36.2.tgz", sha256 = "f0a17c67de29df0fb0e5215a381df9b155125e1ace6252dd617bf16b4194dd5b" } ]
 
 [yaml]
-"2.3" = { version = "2.3.0", url = "https://pecl.php.net/get/yaml-2.3.0.tgz", sha256 = "bc8404807a3a4dc896b310af21a7f8063aa238424ff77f27eb6ffa88b5874b8a" }
+"2.3" = [ { version = "2.3.0", url = "https://pecl.php.net/get/yaml-2.3.0.tgz", sha256 = "bc8404807a3a4dc896b310af21a7f8063aa238424ff77f27eb6ffa88b5874b8a" } ]
 
 [memcached]
-"3.4" = { version = "3.4.0", url = "https://pecl.php.net/get/memcached-3.4.0.tgz", sha256 = "c163434eb0da97c8f45c7ad41d979d381f8b81c49402b1b90b063987fb37972e" }
+"3.4" = [ { version = "3.4.0", url = "https://pecl.php.net/get/memcached-3.4.0.tgz", sha256 = "c163434eb0da97c8f45c7ad41d979d381f8b81c49402b1b90b063987fb37972e" } ]
 
 [imagick]
-"3.8" = { version = "3.8.1", url = "https://pecl.php.net/get/imagick-3.8.1.tgz", sha256 = "3a3587c0a524c17d0dad9673a160b90cd776e836838474e173b549ed864352ee" }
+"3.8" = [ { version = "3.8.1", url = "https://pecl.php.net/get/imagick-3.8.1.tgz", sha256 = "3a3587c0a524c17d0dad9673a160b90cd776e836838474e173b549ed864352ee" } ]
 
 [ssh2]
-"1.5" = { version = "1.5.0", url = "https://pecl.php.net/get/ssh2-1.5.0.tgz", sha256 = "a943427fae39a5503c813179018ae6c500323c8c9fb434e1a9a665fb32a4d7b4" }
+"1.5" = [ { version = "1.5.0", url = "https://pecl.php.net/get/ssh2-1.5.0.tgz", sha256 = "a943427fae39a5503c813179018ae6c500323c8c9fb434e1a9a665fb32a4d7b4" } ]
 
 [amqp]
-"2.2" = { version = "2.2.0", url = "https://pecl.php.net/get/amqp-2.2.0.tgz", sha256 = "5ae624bd785e299523f6132c204bd562cc73066dd33a10a12aa96389f55a4de7" }
+"2.2" = [ { version = "2.2.0", url = "https://pecl.php.net/get/amqp-2.2.0.tgz", sha256 = "5ae624bd785e299523f6132c204bd562cc73066dd33a10a12aa96389f55a4de7" } ]
 
 [rdkafka]
-"6.0" = { version = "6.0.5", url = "https://pecl.php.net/get/rdkafka-6.0.5.tgz", sha256 = "0af6b665c963c8c7d1109cec738034378d9c8863cbf612c0bd3235e519a708f1" }
+"6.0" = [ { version = "6.0.5", url = "https://pecl.php.net/get/rdkafka-6.0.5.tgz", sha256 = "0af6b665c963c8c7d1109cec738034378d9c8863cbf612c0bd3235e519a708f1" } ]
 
 # ---------------------------------------------------------------------------
 # 上面扩展用的依赖库
 # ---------------------------------------------------------------------------
 
 [libyaml]
-"0.2" = { version = "0.2.5", url = "https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz", sha256 = "c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4" }
+"0.2" = [ { version = "0.2.5", url = "https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz", sha256 = "c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4" } ]
 
 # GitHub tag 归档会跳到 codeload；这里写稳定的 tag 地址。
 [libmemcached]
-"1.1" = { version = "1.1.4", url = "https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz", sha256 = "c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a" }
+"1.1" = [ { version = "1.1.4", url = "https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz", sha256 = "c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a" } ]
 
 # ImageMagick 的 tag 是 7.1.2-35 这种带连字符的形式，版本比较工具只认纯数字，升级时手工改。
 [imagemagick]
-"7.1" = { version = "7.1.2-35", url = "https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-35.tar.gz", sha256 = "40b6fefa88fe16ca5a4b3d3db5133eaebfb0157f21f98530bde8aec5dd5b0776" }
+"7.1" = [ { version = "7.1.2-35", url = "https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-35.tar.gz", sha256 = "40b6fefa88fe16ca5a4b3d3db5133eaebfb0157f21f98530bde8aec5dd5b0776" } ]
 
 [libssh2]
-"1.11" = { version = "1.11.1", url = "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.gz", sha256 = "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7" }
+"1.11" = [ { version = "1.11.1", url = "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.gz", sha256 = "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7" } ]
 
 [rabbitmq-c]
-"0.18" = { version = "0.18.1", url = "https://github.com/alanxz/rabbitmq-c/archive/refs/tags/v0.18.1.tar.gz", sha256 = "0779bd4f00175ff2f722f9dc43b542bea3bc606ed079e7099fa8a18627c2ddc9" }
+"0.18" = [ { version = "0.18.1", url = "https://github.com/alanxz/rabbitmq-c/archive/refs/tags/v0.18.1.tar.gz", sha256 = "0779bd4f00175ff2f722f9dc43b542bea3bc606ed079e7099fa8a18627c2ddc9" } ]
 
 [librdkafka]
-"2.16" = { version = "2.16.0", url = "https://github.com/confluentinc/librdkafka/archive/refs/tags/v2.16.0.tar.gz", sha256 = "e6b61de61d3282879a88e4ee3d9f634a8b05bf78a9198dfc25c4820c0c9ed231" }
+"2.16" = [ { version = "2.16.0", url = "https://github.com/confluentinc/librdkafka/archive/refs/tags/v2.16.0.tar.gz", sha256 = "e6b61de61d3282879a88e4ee3d9f634a8b05bf78a9198dfc25c4820c0c9ed231" } ]
 
 # ---------------------------------------------------------------------------
 # v2 默认内置扩展集需要的依赖库
@@ -166,32 +173,32 @@
 # sqlite.org 的发布页只有版本目录；autoconf 包名是 sqlite-autoconf-<编号>，
 # 编号规则见 https://www.sqlite.org/changes.html（3.54.1 → 3540100）。
 [sqlite]
-"3.54" = { version = "3.54.1", url = "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz", sha256 = "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e" }
+"3.54" = [ { version = "3.54.1", url = "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz", sha256 = "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e" } ]
 
 [libzip]
-"1.12" = { version = "1.12.1", url = "https://libzip.org/download/libzip-1.12.1.tar.gz", sha256 = "3b66fe92cbc768d8d4d16e1427bfb7399e15d9c2795c2fc482e7b30a6332a422" }
+"1.12" = [ { version = "1.12.1", url = "https://libzip.org/download/libzip-1.12.1.tar.gz", sha256 = "3b66fe92cbc768d8d4d16e1427bfb7399e15d9c2795c2fc482e7b30a6332a422" } ]
 
 [libsodium]
-"1.0" = { version = "1.0.22", url = "https://download.libsodium.org/libsodium/releases/libsodium-1.0.22.tar.gz", sha256 = "adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349" }
+"1.0" = [ { version = "1.0.22", url = "https://download.libsodium.org/libsodium/releases/libsodium-1.0.22.tar.gz", sha256 = "adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349" } ]
 
 # oniguruma 的 release tag 是 onig-<版本> 形式（不是 v 前缀）。
 [oniguruma]
-"6.9" = { version = "6.9.10", url = "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz", sha256 = "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05" }
+"6.9" = [ { version = "6.9.10", url = "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz", sha256 = "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05" } ]
 
 [nginx]
-"1.29" = { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz" }
+"1.29" = [ { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz" } ]
 
 [pcre2]
-"10.49" = { version = "10.49", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz" }
+"10.49" = [ { version = "10.49", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz" } ]
 
 [luajit]
-"2.1" = { version = "2.1", url = "https://github.com/openresty/luajit2/archive/refs/tags/v2.1-20261107.tar.gz" }
+"2.1" = [ { version = "2.1", url = "https://github.com/openresty/luajit2/archive/refs/tags/v2.1-20261107.tar.gz" } ]
 
 [lua-resty-core]
-"0.1" = { version = "0.1.32", url = "https://github.com/openresty/lua-resty-core/archive/refs/tags/v0.1.32.tar.gz" }
+"0.1" = [ { version = "0.1.32", url = "https://github.com/openresty/lua-resty-core/archive/refs/tags/v0.1.32.tar.gz" } ]
 
 [lua-resty-lrucache]
-"0.15" = { version = "0.15", url = "https://github.com/openresty/lua-resty-lrucache/archive/refs/tags/v0.15.tar.gz" }
+"0.15" = [ { version = "0.15", url = "https://github.com/openresty/lua-resty-lrucache/archive/refs/tags/v0.15.tar.gz" } ]
 
 [lua-nginx-module]
-"0.10" = { version = "0.10.29", url = "https://github.com/openresty/lua-nginx-module/archive/refs/tags/v0.10.29.tar.gz" }
+"0.10" = [ { version = "0.10.29", url = "https://github.com/openresty/lua-nginx-module/archive/refs/tags/v0.10.29.tar.gz" } ]

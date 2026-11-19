@@ -31,8 +31,8 @@ tarball 里），`dep:openssl` 是要单独下载编译的库。命令里靠前�
 
 - **line 不是 version**。`openssl=3.5` 是选线；`--dep openssl=3.5.9` 是钉补丁。
   换线时必须丢掉同名的旧补丁，不允许 `line=3.5` + `version=4.0.x`。
-- catalog 升级一条线时，旧补丁移进 `patches` 不删除，`--lock` 和 `scheme --lock`
-  从那里取源码（见 [LOCK.md](LOCK.md)）。
+- catalog 的一条线是一个补丁数组，默认取最大版本；旧补丁留在数组里，`--lock` 和
+  `scheme --lock` 按版本从数组里取源码（见 [LOCK.md](LOCK.md)）。
 - `version` 不参与依赖闭包求解：它只影响最终选哪个 artifact（version / url /
   sha256）和构建元数据，不改 `needs` / `features` / `tools`（契约见 [LOCK.md](LOCK.md) §3.2）。
 

@@ -2098,22 +2098,16 @@ pub fn load_targets(
         let src = fs::read_to_string(&file.path)
             .with_context(|| format!("读不到 {}", file.path.display()))?;
         let prelude = read_prelude(&file.path)?;
-        // 一条线里的当前补丁和 patches 都是可选版本；工具没有“产品系列”，
+        // 一条线里的每个补丁都是可选版本；工具没有“产品系列”，
         // 每个版本各自成节点。
         let mut versions: Vec<(String, String, String, String)> = Vec::new();
-        for (line, artifact) in lines {
-            versions.push((
-                line.clone(),
-                artifact.version.clone(),
-                artifact.url.clone(),
-                artifact.sha256.clone(),
-            ));
-            for patch in &artifact.patches {
+        for (line, artifacts) in lines {
+            for artifact in artifacts {
                 versions.push((
                     line.clone(),
-                    patch.version.clone(),
-                    patch.url.clone(),
-                    patch.sha256.clone(),
+                    artifact.version.clone(),
+                    artifact.url.clone(),
+                    artifact.sha256.clone(),
                 ));
             }
         }
@@ -3392,12 +3386,11 @@ gd = { ref = "component_presets.gd", mode = "shared" }
         let mut catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
         catalog.components.get_mut("jpeg").unwrap().insert(
             "4.0".into(),
-            crate::catalog::Artifact {
+            vec![crate::catalog::Artifact {
                 version: "4.0.0".into(),
                 url: "https://example.com/jpeg-4.0.0.tar.gz".into(),
                 sha256: String::new(),
-                patches: Vec::new(),
-            },
+            }],
         );
         let metas = load_meta(&dir, &catalog).unwrap();
         let bundle = Bundle::load(&dir.join("bundles/php/8.5.toml")).unwrap();

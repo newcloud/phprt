@@ -44,7 +44,7 @@ pub struct EffectivePins {
     pub versions: BTreeMap<String, String>,
 }
 
-/// 把 CLI 值规范成线或补丁。先按线精确匹配，再按当前补丁 / `patches` 反查所属线。
+/// 把 CLI 值规范成线或补丁。先按线精确匹配，再按线里的补丁版本反查所属线。
 pub fn cli_pin(catalog: &Catalog, name: &str, value: &str) -> Result<CliPin> {
     let lines = catalog
         .lines(name)
@@ -52,27 +52,24 @@ pub fn cli_pin(catalog: &Catalog, name: &str, value: &str) -> Result<CliPin> {
     if lines.contains_key(value) {
         return Ok(CliPin::Line(value.to_owned()));
     }
-    for (line, artifact) in lines {
-        if artifact.version == value || artifact.patches.iter().any(|p| p.version == value) {
+    for (line, artifacts) in lines {
+        if artifacts.iter().any(|artifact| artifact.version == value) {
             return Ok(CliPin::Version {
                 line: line.clone(),
                 version: value.to_owned(),
             });
         }
     }
-    let mut labels: Vec<String> = Vec::new();
-    for (line, artifact) in lines {
-        let mut text = format!("{line}（{}）", artifact.version);
-        if !artifact.patches.is_empty() {
-            let old: Vec<&str> = artifact
-                .patches
+    let labels: Vec<String> = lines
+        .iter()
+        .map(|(line, artifacts)| {
+            let versions: Vec<&str> = artifacts
                 .iter()
-                .map(|p| p.version.as_str())
+                .map(|artifact| artifact.version.as_str())
                 .collect();
-            text.push_str(&format!("，旧补丁 {}", old.join("/")));
-        }
-        labels.push(text);
-    }
+            format!("{line}（{}）", versions.join("/"))
+        })
+        .collect();
     bail!(
         "{name} 的版本 {value} 不在 catalog（可用：{}）",
         labels.join(", ")
@@ -186,13 +183,20 @@ pub fn exact_versions(
     let mut exact: BTreeMap<String, String> = BTreeMap::new();
     for (name, (line, version)) in picked {
         if line.is_empty() || catalog.artifact_for(&name, &line, &version).is_none() {
-            let current = catalog
-                .get(&name, &line)
-                .map(|artifact| artifact.version.as_str())
-                .unwrap_or("无");
+            let versions: Vec<&str> = catalog
+                .lines(&name)
+                .and_then(|lines| lines.get(&line))
+                .map(|artifacts| {
+                    artifacts
+                        .iter()
+                        .map(|artifact| artifact.version.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
             bail!(
-                "lock 里的 {name} {version} 不在 catalog（线 {line} 当前 {current}，无旧补丁）；\
+                "lock 里的 {name} {version} 不在 catalog（线 {line} 可用：{}）；\
                  用 phprt update {}@{} 升级，或在 catalog 里保留旧补丁",
+                versions.join(", "),
                 state.product,
                 state.series
             );

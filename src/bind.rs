@@ -404,17 +404,19 @@ fn locked_patch_missing(
     product: &str,
     series: &str,
 ) -> anyhow::Error {
-    let current = catalog.get(name, line);
-    let current_version = current
-        .map(|artifact| artifact.version.as_str())
-        .unwrap_or("无");
-    let mut available = vec![current_version.to_owned()];
-    if let Some(current) = current {
-        available.extend(current.patches.iter().map(|patch| patch.version.clone()));
-    }
+    let available: Vec<String> = catalog
+        .lines(name)
+        .and_then(|lines| lines.get(line))
+        .map(|artifacts| {
+            artifacts
+                .iter()
+                .map(|artifact| artifact.version.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     anyhow::anyhow!(
-        "lock 里的 {name} {version} 不在 catalog（线 {line} 当前 {current_version}，\
-         可用：{}）；用 phprt update {product}@{series} 升级，或在 catalog 里保留旧补丁",
+        "lock 里的 {name} {version} 不在 catalog（线 {line} 可用：{}）；\
+         用 phprt update {product}@{series} 升级，或在 catalog 里保留旧补丁",
         available.join(", ")
     )
 }

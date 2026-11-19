@@ -69,3 +69,45 @@ mod tests {
         assert!(ranges_overlap(("4.8", "13"), ("", "4.9")));
     }
 }
+
+/// 完整版本比较：数字段逐段比较，数字相同时再比后缀（如 `1.1.1w` > `1.1.1u`）；
+/// 缺的段按 0。用于 catalog 在一条线的多个补丁里取最大版本。
+pub fn compare(left: &str, right: &str) -> std::cmp::Ordering {
+    let mut left = left.split('.');
+    let mut right = right.split('.');
+    loop {
+        let l = left.next();
+        let r = right.next();
+        if l.is_none() && r.is_none() {
+            return std::cmp::Ordering::Equal;
+        }
+        let (left_num, left_rest) = split_segment(l.unwrap_or("0"));
+        let (right_num, right_rest) = split_segment(r.unwrap_or("0"));
+        match left_num.cmp(&right_num) {
+            std::cmp::Ordering::Equal => match left_rest.cmp(right_rest) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            },
+            other => return other,
+        }
+    }
+}
+
+fn split_segment(segment: &str) -> (u64, &str) {
+    let digits = segment.chars().take_while(|c| c.is_ascii_digit()).count();
+    (segment[..digits].parse().unwrap_or(0), &segment[digits..])
+}
+
+#[cfg(test)]
+mod compare_tests {
+    use super::*;
+
+    #[test]
+    fn full_compare_orders_patches() {
+        assert_eq!(compare("3.5.9", "3.5.8"), std::cmp::Ordering::Greater);
+        assert_eq!(compare("3.5.8", "3.5.9"), std::cmp::Ordering::Less);
+        assert_eq!(compare("4.0", "4.0.0"), std::cmp::Ordering::Equal);
+        assert_eq!(compare("1.1.1w", "1.1.1u"), std::cmp::Ordering::Greater);
+        assert_eq!(compare("8.4.14", "8.4.13"), std::cmp::Ordering::Greater);
+    }
+}

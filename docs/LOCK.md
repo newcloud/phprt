@@ -11,8 +11,8 @@ state 是锁的唯一事实来源，没有独立 lock 文件。
 `state.json` 记录了每个组件和依赖实际使用的 `line` / `version`，但早期解析时不使用：
 
 ```text
-catalog 里 openssl 3.5.9 -> 3.5.10
-  → bind::resolve 取 catalog 当前补丁 3.5.10
+catalog 里 openssl 3.5 线新增 3.5.10
+  → bind::resolve 取该线最大补丁 3.5.10
   → dep 构建签名变化
   → openssl 重编
   → 产品构建签名变化
@@ -20,7 +20,7 @@ catalog 里 openssl 3.5.9 -> 3.5.10
   → state.deps.version 被新版本覆盖
 ```
 
-`add` / `remove` 还会重新解析产品补丁：目标写 `php@8.5` 时总是取 catalog 当前补丁，
+`add` / `remove` 还会重新解析产品补丁：目标写 `php@8.5` 时总是取该线的最大补丁，
 检查安装树却用 `installed_version`。catalog 升到 8.5.13 后，`add` 会装出一棵新的
 8.5.13 树，旧树保留，`installed_version` 被改掉。
 
@@ -37,7 +37,7 @@ catalog 里 openssl 3.5.9 -> 3.5.10
 
 | 模式 | 锁定内容 | 补丁 |
 | --- | --- | --- |
-| 默认（不带 `--lock`） | 当前方案中已有节点的 line；产品补丁用 `installed_version` | 仍取 catalog 当前补丁 |
+| 默认（不带 `--lock`） | 当前方案中已有节点的 line；产品补丁用 `installed_version` | 仍取该线最大补丁 |
 | `--lock` | 在默认基础上，把当前方案中已有节点锁到 `state.*.version` | 不跟随 catalog 升级；缺失就报错 |
 | `update` | 保持 Scheme、保持 version line | 为当前闭包重新取 catalog 最新补丁 |
 
@@ -45,7 +45,7 @@ catalog 里 openssl 3.5.9 -> 3.5.10
 
 - 不新增独立 lock 文件，state 仍是唯一来源；
 - `plan` 能直接验证默认解析、`--lock` 解析和 `update` 前后的版本差异；
-- catalog 默认保留旧补丁，作为 `--lock` 和显式旧补丁安装的源码来源。
+- catalog 每条线保留全部旧版本，作为 `--lock` 和显式旧版本安装的源码来源。
 
 不在本次范围：
 
@@ -197,8 +197,8 @@ phprt update php@8.5            # 跟随 catalog 升级到 8.5 线最新补丁
 默认模式下，state 记录的产品补丁在 catalog 里不存在时直接报错，不回落最新版本：
 
 ```text
-state 里的 php 8.5.12 不在 catalog（8.5 线当前 8.5.13，无旧补丁）；
-用 phprt update php@8.5 升级，或在 catalog 里保留旧补丁
+state 里的 php 8.5.12 不在 catalog（8.5 线可用：8.5.13, 8.5.12）；
+用 phprt update php@8.5 升级，或在 catalog 里保留旧版本
 ```
 
 ### 4.2 完整方案列表
@@ -235,17 +235,17 @@ phprt scheme  php@8.5 --lock
    ```
 
 2. 只锁第 3 节定义的闭包内、且 state 里有 `version` 记录的节点。
-3. 新加入、state 里没有记录的节点仍取 catalog 当前补丁；`--lock` 只锁已有记录。
+3. 新加入、state 里没有记录的节点仍取该线最大补丁；`--lock` 只锁已有记录。
    `scheme --lock` 例外：它要导出可复现命令，闭包内没有 state 记录的节点会用本次
    解析实际选中的 artifact version 补齐（见第 7 节）。
-4. catalog 当前线和 `patches` 里找不到锁定补丁时报错，不回落：
+4. 该线的补丁数组里找不到锁定版本时报错，不回落：
 
    ```text
-   lock 里的 zlib 1.3.2 不在 catalog（线 1.3 当前 1.3.3，可用：1.3.3）；
-   用 phprt update php@8.5 升级，或在 catalog 里保留旧补丁
+   lock 里的 zlib 1.3.2 不在 catalog（线 1.3 可用：1.3.3）；
+   用 phprt update php@8.5 升级，或在 catalog 里保留旧版本
    ```
 
-   这条不能退回“当前补丁”：`--lock` 的意义就是精确复用已有源码。回归测试见
+   这条不能退回最大补丁：`--lock` 的意义就是精确复用已有源码。回归测试见
    第 11.1 节第 3 条。
 
 5. CLI 显式选择整体覆盖 binding（线 + 补丁一起换），不是只改补丁字段：
@@ -253,7 +253,7 @@ phprt scheme  php@8.5 --lock
    ```text
    state:     openssl line=3.5 version=3.5.9
    CLI:       --dep openssl=4.0
-   resolver:  openssl line=4.0 version=<catalog 4.0 当前补丁>
+   resolver:  openssl line=4.0 version=<4.0 线最大补丁>
    ```
 
    ```text
@@ -265,8 +265,8 @@ phprt scheme  php@8.5 --lock
    不允许出现 `line=3.5` 加 `version=4.0.x` 这种跨线组合：换线时必须丢掉同名的旧
    补丁 pin，换补丁时必须同时确定它所属的线。组件用 `version:` 走同一套规则。
 
-   CLI 值的解析顺序：先按 catalog 的 line 精确匹配；不匹配时在当前补丁和
-   `patches` 里按版本号反查所属线；都找不到就报错并列出可用值和旧补丁。
+   CLI 值的解析顺序：先按 catalog 的 line 精确匹配；不匹配时在各线的补丁数组里
+   按版本号反查所属线；都找不到就报错并列出可用版本。
 
 6. 显式产品补丁：产品按显式补丁，其他已有节点仍按 lock。
 7. `--lock` 不改变构建必要性。static / fold 组件改 PHP configure 时，PHP 仍会重编；
@@ -363,27 +363,28 @@ phprt install php@8.5.12 \
 - bundled 组件的 `version` 是产品补丁，永远不会被当成它自己的源码版本；同名依赖库
   （如 dep openssl / dep zlib）仍按依赖导出。
 
-## 8. catalog 默认保留旧补丁
+## 8. catalog 的补丁数组
 
 适用于产品、组件和依赖库的所有版本线。
 
-升级某条线的补丁时，把原来的 `version` / `url` / `sha256` 移进 `patches`，再写新补丁：
+每条线是一个数组，保存这条线发布过的所有补丁；默认选择取数组中版本最大的补丁，
+和数组顺序无关：
 
 ```toml
 [zlib]
-"1.3" = { version = "1.3.3", url = "https://zlib.net/fossils/zlib-1.3.3.tar.gz", sha256 = "...", patches = [
+"1.3" = [
+    { version = "1.3.3", url = "https://zlib.net/fossils/zlib-1.3.3.tar.gz", sha256 = "..." },
     { version = "1.3.2", url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz", sha256 = "..." },
-] }
+]
 ```
 
 规则：
 
-- `version` / `url` / `sha256` 永远是当前最新补丁；
-- 旧补丁默认不删除，按发布时间倒序或升级顺序追加；
-- `patches` 里的 `url` / `sha256` 必须保留旧补丁的真实值，不能只写版本号；
-- 显式安装旧补丁、`--lock`、`scheme --lock` 都只从这里取源码；
+- 新版本直接加进数组，旧版本保留不删除；
+- 每个元素的 `url` / `sha256` 必须是该版本的真实值，不能只写版本号；
+- 默认取最大版本；显式安装旧版本、`--lock`、`scheme --lock` 按版本精确查找；
 - state 只记版本，不复制 `url` / `sha256`；catalog 是唯一源码来源；
-- 旧补丁缺失时命令直接报错，不自动改用当前补丁。
+- 旧版本缺失时命令直接报错，不自动改用最大版本。
 
 ## 9. resolution digest
 
@@ -553,7 +554,7 @@ scheme_cmd=...
 | 18 | `second_pass_line_change_is_checked` | 加一条按 line 改变 `needs` 的 recipe 线：`--lock` 报“依赖闭包变了”并失败，普通命令只警告 |
 
 `update` 本身要编译，e2e 不跑它；第 9 条用“update 之后的 state”验证基准传递，
-`select_product_patch` 的单测覆盖 update 选 catalog 当前补丁。
+`select_product_patch` 的单测覆盖 update 取该线最大补丁。
 
 ### 11.2 单元测试
 
@@ -568,7 +569,7 @@ scheme_cmd=...
 - CLI 值先按线匹配、再按补丁反查线；
 - `exact_versions` 只导出闭包内节点，闭包外旧补丁缺失不报错；
 - 闭包里 state 没记录的节点用本次解析的 artifact version 补齐，不允许整条 pin 漏掉；
-- 补齐后同样要过 catalog 校验，state 旧补丁缺失时报错，不回落当前补丁。
+- 补齐后同样要过 catalog 校验，state 旧版本缺失时报错，不回落最大版本。
 
 `src/plan.rs`：
 

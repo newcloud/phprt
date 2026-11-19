@@ -51,8 +51,8 @@ impl Fixture {
         let text = fs::read_to_string(self.catalog()).unwrap();
         let text = replace_line(
             &text,
-            "\"1.1\" = {",
-            "\"1.2\" = { version = \"1.1.4\", url = \"https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz\", sha256 = \"c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a\" }",
+            "\"1.1\" = [",
+            "\"1.2\" = [ { version = \"1.1.4\", url = \"https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz\", sha256 = \"c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a\" } ]",
         );
         fs::write(self.catalog(), text).unwrap();
 
@@ -71,12 +71,12 @@ impl Fixture {
     fn add_openssl_free_swoole_line(&self) {
         let catalog = self.catalog();
         let text = fs::read_to_string(&catalog).unwrap();
-        let old = "\"6.2\" = { version = \"6.2.5\", url = \"https://pecl.php.net/get/swoole-6.2.5.tgz\", sha256 = \"edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c\" }";
+        let old = "\"6.2\" = [ { version = \"6.2.5\", url = \"https://pecl.php.net/get/swoole-6.2.5.tgz\", sha256 = \"edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c\" } ]";
         assert!(text.contains(old), "catalog 的 swoole 6.2 行变了");
         let text = text.replace(
             old,
             &format!(
-                "{old}\n\"6.3\" = {{ version = \"6.3.0\", url = \"https://example.com/swoole-6.3.0.tgz\" }}"
+                "{old}\n\"6.3\" = [ {{ version = \"6.3.0\", url = \"https://example.com/swoole-6.3.0.tgz\" }} ]"
             ),
         );
         fs::write(&catalog, text).unwrap();
@@ -97,29 +97,29 @@ impl Fixture {
         let text = fs::read_to_string(self.catalog()).unwrap();
         let text = replace_line(
             &text,
-            "\"8.5\" = {",
-            &format!(
-                "\"8.5\" = {{ version = \"8.5.13\", url = \"https://example.com/php-8.5.13.tar.xz\"{}{} }}",
-                patch_entry(php_old, "php", "8.5.12"),
-                patches_close(),
+            "\"8.5\" = [",
+            &list_line(
+                "8.5",
+                ("8.5.13", "https://example.com/php-8.5.13.tar.xz"),
+                php_old.then_some(("8.5.12", "https://example.com/php-8.5.12.tar.gz")),
             ),
         );
         let text = replace_line(
             &text,
-            "\"3.5\" = {",
-            &format!(
-                "\"3.5\" = {{ version = \"3.5.10\", url = \"https://example.com/openssl-3.5.10.tar.gz\"{}{} }}",
-                patch_entry(openssl_old, "openssl", "3.5.9"),
-                patches_close(),
+            "\"3.5\" = [",
+            &list_line(
+                "3.5",
+                ("3.5.10", "https://example.com/openssl-3.5.10.tar.gz"),
+                openssl_old.then_some(("3.5.9", "https://example.com/openssl-3.5.9.tar.gz")),
             ),
         );
         let text = replace_line(
             &text,
-            "\"1.3\" = {",
-            &format!(
-                "\"1.3\" = {{ version = \"1.3.3\", url = \"https://example.com/zlib-1.3.3.tar.gz\"{}{} }}",
-                patch_entry(zlib_old, "zlib", "1.3.2"),
-                patches_close(),
+            "\"1.3\" = [",
+            &list_line(
+                "1.3",
+                ("1.3.3", "https://example.com/zlib-1.3.3.tar.gz"),
+                zlib_old.then_some(("1.3.2", "https://example.com/zlib-1.3.2.tar.gz")),
             ),
         );
         fs::write(self.catalog(), text).unwrap();
@@ -154,31 +154,42 @@ impl Drop for Fixture {
     }
 }
 
-fn patches_close() -> &'static str {
-    ""
-}
-
-fn patch_entry(enabled: bool, name: &str, version: &str) -> String {
-    if !enabled {
-        return String::new();
+fn list_line(line: &str, new: (&str, &str), old: Option<(&str, &str)>) -> String {
+    let mut text = format!("\"{line}\" = [\n");
+    text.push_str(&format!(
+        "    {{ version = \"{}\", url = \"{}\" }},\n",
+        new.0, new.1
+    ));
+    if let Some((version, url)) = old {
+        text.push_str(&format!(
+            "    {{ version = \"{version}\", url = \"{url}\" }},\n"
+        ));
     }
-    format!(
-        ", patches = [ {{ version = \"{version}\", url = \"https://example.com/{name}-{version}.tar.gz\" }} ]"
-    )
+    text.push(']');
+    text
 }
 
 fn replace_line(text: &str, prefix: &str, replacement: &str) -> String {
-    text.lines()
-        .map(|line| {
-            if line.trim_start().starts_with(prefix) {
-                replacement
-            } else {
-                line
+    let mut out: Vec<String> = Vec::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        if skipping {
+            if line.trim_end().ends_with(']') {
+                skipping = false;
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n"
+            continue;
+        }
+        if line.trim_start().starts_with(prefix) {
+            out.push(replacement.to_owned());
+            // 多行数组：跳过后续元素，直到数组闭合。标量行不跳过。
+            if prefix.contains('[') && !line.trim_end().ends_with(']') {
+                skipping = true;
+            }
+        } else {
+            out.push(line.to_owned());
+        }
+    }
+    out.join("\n") + "\n"
 }
 
 fn copy_dir(from: &Path, to: &Path) {

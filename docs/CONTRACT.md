@@ -142,32 +142,37 @@ libcurl、nghttp2 与 PHP 没有直接关系；哪个 PHP 能用哪条 OpenSSL �
 
 ## 2. catalog
 
-`recipes/catalog.toml` 存“组件 + 线 → 当前补丁 + 下载地址”，需要时再登记旧补丁：
+`recipes/catalog.toml` 存“组件 + 线 → 这条线的全部补丁（version / url / sha256）”：
 
 ```toml
 [php]
-"8.4" = { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz",
-          patches = [
-              { version = "8.4.13", url = "https://www.php.net/distributions/php-8.4.13.tar.gz" },
-              { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz" },
-          ] }
-"8.5" = { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz" }
+"8.4" = [
+    { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz" },
+    { version = "8.4.13", url = "https://www.php.net/distributions/php-8.4.13.tar.gz" },
+    { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz" },
+]
+"8.5" = [ { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz" } ]
 
 [nginx]
-"1.29" = { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz" }
+"1.29" = [ { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz" } ]
 
 [swoole]
-"6.2" = { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "..." }
+"6.2" = [ { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "..." } ]
 
 [openssl]
-"3.5" = { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "..." }
+"3.5" = [
+    { version = "3.5.6", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.6/openssl-3.5.6.tar.gz" },
+    { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "..." },
+    { version = "3.5.8", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz" },
+]
 ```
 
 - 产品名就是 catalog 的组件名；不再强制 `[php]`。
-- 每条线必须有 `version` 和 `url`；`version` 是这条线的当前补丁。
-- `patches` 可选，登记同一条线的旧补丁（`version` / `url` / `sha256`），
-  让 `install php@8.4.13` 能装指定补丁；不写就只能装当前补丁。
-- `patches` 里的补丁不能和当前补丁重复，版本号不能重复。
+- 每条线是一个非空数组，数组里每个元素必须有 `version` 和 `url`；
+  版本号在同一条线里不能重复。
+- 默认选择取数组中**最大版本**（数字段逐段比较），和数组顺序无关。
+- `--lock`、显式补丁（`install php@8.4.13`、`--dep openssl=3.5.8`）按版本精确查找。
+- 新的补丁直接加进数组，旧补丁保留不删。
 - `url` 写上游最终地址；跳转链路用注释记录，判定规则见 [ADD-RECIPE.md](ADD-RECIPE.md)。
 - 不写产品兼容性、不写构建参数。
 - 补丁更新只改这里。
@@ -389,7 +394,7 @@ TARGET = target
 规则：
 
 - 路径是 `recipes/tools/<名字>.star`，节点 id 是 `tool:<名字>@<版本>`。
-- 版本、url、sha256 由 catalog 注入；catalog 里每条线（含 `patches`）都是一个可选版本。
+- 版本、url、sha256 由 catalog 注入；catalog 里每条线的数组元素都是一个可选版本。
 - 安装前缀是 `build/tools/<名字>-<版本>`，源码目录仍是 `build/<名字>/<stem>`。
 - 不能声明 `needs`（工具不能依赖库），只能声明 `tools`（工具依赖工具）。
 - 不允许产品 / 组件字段：`product` / `series` / `source` / `modes` / `bundled` /

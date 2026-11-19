@@ -105,7 +105,7 @@ phprt plan php@8.5
 
 - `产品` 是 catalog 里的产品名：`php`、`nginx`。
 - `系列` 是产品版本线，如 `8.5`、`1.29`；也接受该线上的补丁号（如 `php@8.5.12`）。
-  补丁必须出现在 catalog 里：当前补丁或该线的 `patches` 列表。
+  补丁必须出现在 catalog 里：该线数组中的某个版本。
 - 一条命令只处理一个产品。多产品就写多条命令：
 
 ```bash
@@ -449,7 +449,7 @@ phprt install php@8.5.12 'curl=mode:static,dep:libcurl[ssl],swoole=mode:shared,v
 - 有自己版本线的外部组件写 `version:<补丁>`，bundled 组件不写；
 - 依赖库写 `--dep NAME=<补丁>`；
 - 只导出当前闭包里的节点，已删除组件的历史依赖不写进命令；
-- 导出的补丁必须仍在 catalog 的 `patches` 里，缺失直接报错，不改用当前补丁；
+- 导出的补丁必须仍在该线的数组里，缺失直接报错，不改用最大版本；
 - state 里没有 `version` 记录的闭包节点，用本次解析实际选中的 artifact version 补齐，
   不允许整条 pin 漏掉；
 - `scheme --lock` 会走完整两遍解析；state 里的线不在 catalog 时，报 `bind::resolve`
