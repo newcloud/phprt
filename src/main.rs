@@ -14,6 +14,7 @@ mod recipe;
 mod render;
 mod sources;
 mod state;
+mod targets;
 mod tools;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,6 +60,10 @@ struct Cli {
     /// 备份目录；覆盖 local_backup_dir / global_backup_dir，可绝对或相对
     #[arg(long = "backup-dir", global = true, value_parser = path_value)]
     backup_dir: Option<PathBuf>,
+
+    /// 编译并发数；覆盖 phprt.toml 的 parallel，默认 CPU 数 - 1（最少 1）。shell 的 MAKEFLAGS 无效
+    #[arg(long, global = true, value_name = "N")]
+    parallel: Option<usize>,
 
     /// 全局模式：把产品直接装到 --prefix，不在项目里生成安装树
     #[arg(long, global = true)]
@@ -108,6 +113,8 @@ enum Cmd {
         lock: bool,
         #[command(flatten)]
         components: ComponentArgs,
+        #[command(flatten)]
+        targets: TargetArgs,
     },
     /// 打印一条可复制执行的重建命令
     Scheme {
@@ -123,6 +130,8 @@ enum Cmd {
         target: Vec<String>,
         #[command(flatten)]
         components: ComponentArgs,
+        #[command(flatten)]
+        targets: TargetArgs,
         #[command(flatten)]
         download: DownloadArgs,
         /// 已装的补丁先改名备份再全新安装；补丁不同时直接装目标补丁
@@ -141,6 +150,8 @@ enum Cmd {
         target: Vec<String>,
         #[command(flatten)]
         components: ComponentArgs,
+        #[command(flatten)]
+        targets: TargetArgs,
         #[command(flatten)]
         download: DownloadArgs,
         /// 本次不备份 PHP 扩展的 ini
@@ -209,6 +220,13 @@ struct ComponentArgs {
     disable_default_component: Vec<String>,
 }
 
+#[derive(Args, Clone, Default)]
+struct TargetArgs {
+    /// 构建目标：cli、cli,fpm、cli,fpm=user:www-data,group:www-data；可重复
+    #[arg(long = "targets", value_name = "SPEC")]
+    targets: Vec<String>,
+}
+
 #[derive(Args, Clone)]
 struct DownloadArgs {
     /// 只下载源码，不解压、不写状态
@@ -256,6 +274,7 @@ fn run() -> Result<()> {
         bail!("配置不存在: {}", config_file.display());
     }
     let config = config::Config::load(&config_file)?;
+    let parallel = effective_parallel(cli.parallel, &config)?;
     match (cli.global, cli.prefix.as_deref()) {
         (true, None) => bail!("--global 需要 --prefix，例如 --prefix /usr/local/php"),
         (false, Some(_)) => bail!("--prefix 只能和 --global 一起用"),
@@ -364,25 +383,42 @@ fn run() -> Result<()> {
     }
 
     let mut scheme_list: Option<String> = None;
-    let (target_spec, components, download, goal, json) = match &cli.cmd {
+    let (target_spec, components, target_args, download, goal, json) = match &cli.cmd {
         Cmd::List { target, .. } => (
             target.clone().unwrap_or_default(),
             ComponentArgs::default(),
+            TargetArgs::default(),
             None,
             None,
             false,
         ),
-        Cmd::Graph { target } => (target.clone(), ComponentArgs::default(), None, None, false),
-        Cmd::Scheme { target, .. } => (target.clone(), ComponentArgs::default(), None, None, false),
+        Cmd::Graph { target } => (
+            target.clone(),
+            ComponentArgs::default(),
+            TargetArgs::default(),
+            None,
+            None,
+            false,
+        ),
+        Cmd::Scheme { target, .. } => (
+            target.clone(),
+            ComponentArgs::default(),
+            TargetArgs::default(),
+            None,
+            None,
+            false,
+        ),
         Cmd::Plan {
             target,
             goal,
             json,
             components,
+            targets,
             ..
         } => (
             target.clone(),
             components.clone(),
+            targets.clone(),
             None,
             goal.clone(),
             *json,
@@ -390,6 +426,7 @@ fn run() -> Result<()> {
         Cmd::Install {
             target,
             components,
+            targets,
             download,
             ..
         } => {
@@ -401,16 +438,25 @@ fn run() -> Result<()> {
                 bail!("方案列表不能和 --component / --disable-default-component 一起用");
             }
             scheme_list = list;
-            (one, components.clone(), Some(download.clone()), None, false)
+            (
+                one,
+                components.clone(),
+                targets.clone(),
+                Some(download.clone()),
+                None,
+                false,
+            )
         }
         Cmd::Update {
             target,
             components,
+            targets,
             download,
             ..
         } => (
             single_target(target, "install")?,
             components.clone(),
+            targets.clone(),
             Some(download.clone()),
             None,
             false,
@@ -428,6 +474,7 @@ fn run() -> Result<()> {
                 dep: dep.clone(),
                 ..ComponentArgs::default()
             },
+            TargetArgs::default(),
             Some(download.clone()),
             None,
             false,
@@ -437,13 +484,24 @@ fn run() -> Result<()> {
         } => (
             target.clone(),
             ComponentArgs::default(),
+            TargetArgs::default(),
             Some(download.clone()),
             None,
             false,
         ),
-        Cmd::Audit { target, json } => {
-            (target.clone(), ComponentArgs::default(), None, None, *json)
-        }
+        Cmd::Audit { target, json } => (
+            target.clone(),
+            ComponentArgs::default(),
+            TargetArgs::default(),
+            None,
+            None,
+            *json,
+        ),
+    };
+    let cli_targets = if target_args.targets.is_empty() {
+        None
+    } else {
+        Some(targets::parse_cli(&target_args.targets)?)
     };
     let (product_name, requested) = split_target(&target_spec)?;
 
@@ -678,6 +736,14 @@ fn run() -> Result<()> {
     }
 
     project.validate(&reg)?;
+    let selected_targets = targets::effective(
+        &reg,
+        &bundle.targets_default,
+        &project.targets,
+        cli_targets.as_ref(),
+    )?;
+    targets::apply(&mut reg, &selected_targets)?;
+    project.targets = selected_targets.clone();
 
     let mut cli_sel = match &scheme_list {
         Some(list) => recipe::parse_scheme(&reg, list)?,
@@ -735,6 +801,7 @@ fn run() -> Result<()> {
             };
             product_id = reg.product_any()?.id();
             project.validate(&reg)?;
+            targets::apply(&mut reg, &selected_targets)?;
             // 重新加载的 reg 不带方案里的组件列表，检查前先按方案挂回去。
             project.apply_scheme(&mut reg, &names)?;
             let sel_after = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
@@ -811,6 +878,7 @@ fn run() -> Result<()> {
                 &series,
                 &sel,
                 &scheme_bindings,
+                &selected_targets,
                 &is_dep_kind(&metas),
             );
 
@@ -832,6 +900,7 @@ fn run() -> Result<()> {
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
             let resolution = marker::resolution_digest(&version, &order);
 
+            let target_args = targets::scheme_args(&selected_targets);
             let mut plan = marker::Plan::Install;
             if install_cmd && !download.downloads {
                 plan = marker::decide(
@@ -848,6 +917,7 @@ fn run() -> Result<()> {
                         tree: tree_display.clone(),
                         installed_tree,
                         command: &command,
+                        target_args: &target_args,
                     },
                     force,
                 )?;
@@ -898,6 +968,7 @@ fn run() -> Result<()> {
                     root: &cli.root,
                     recipes: &recipes,
                     ui: download.ui,
+                    parallel,
                     scheme: &scheme,
                     backup,
                 },
@@ -961,6 +1032,7 @@ fn run() -> Result<()> {
                         &project.installed_version,
                         &sel,
                         &scheme_lines,
+                        &selected_targets,
                         &exact,
                         &is_dep
                     )
@@ -973,6 +1045,7 @@ fn run() -> Result<()> {
                         &series,
                         &sel,
                         &project.bindings,
+                        &selected_targets,
                         &is_dep_kind(&metas)
                     )
                 );
@@ -1123,6 +1196,7 @@ fn run() -> Result<()> {
                 &series,
                 &sel,
                 &scheme_bindings,
+                &selected_targets,
                 &is_dep_kind(&metas),
             );
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
@@ -1153,6 +1227,7 @@ fn run() -> Result<()> {
                     root: &cli.root,
                     recipes: &recipes,
                     ui: download.ui,
+                    parallel,
                     scheme: &scheme,
                     backup,
                 },
@@ -1190,6 +1265,7 @@ fn run() -> Result<()> {
                 &series,
                 &sel,
                 &project.bindings,
+                &selected_targets,
                 &is_dep_kind(&metas),
             );
 
@@ -1266,6 +1342,7 @@ fn run() -> Result<()> {
                         root: &cli.root,
                         recipes: &recipes,
                         ui: download.ui,
+                        parallel,
                         scheme: &scheme,
                         backup,
                     },
@@ -1299,6 +1376,7 @@ fn run() -> Result<()> {
                 let mut record = installed.clone();
                 record.components.retain(|item| item.name != name);
                 record.scheme = scheme.digest.clone();
+                record.resolution = marker::resolution_digest(&version, &order);
                 record.scheme_cmd = scheme.command.clone();
                 marker::write(&cli.root, &product_name, &tree_version, &record)?;
             }
@@ -1458,6 +1536,15 @@ fn command_prefix(cli: &Cli) -> String {
             format!("phprt --global --prefix {}", prefix.display())
         }
         _ => "phprt".to_owned(),
+    }
+}
+
+/// 编译并发数：命令行 `--parallel` 优先，其次 `phprt.toml` 的 `parallel`，最后 CPU 数 - 1。
+fn effective_parallel(given: Option<usize>, config: &config::Config) -> Result<usize> {
+    match given {
+        Some(0) => bail!("--parallel 至少为 1"),
+        Some(n) => Ok(n),
+        None => config.parallel(),
     }
 }
 
@@ -1890,6 +1977,20 @@ mod tests {
     }
 
     #[test]
+    fn parallel_prefers_cli_then_config_then_default() {
+        let mut config: config::Config = toml::from_str("parallel = 4\n").unwrap();
+        assert_eq!(effective_parallel(Some(2), &config).unwrap(), 2);
+        assert_eq!(effective_parallel(None, &config).unwrap(), 4);
+
+        config.parallel = None;
+        assert_eq!(
+            effective_parallel(None, &config).unwrap(),
+            config::default_parallel()
+        );
+        assert!(effective_parallel(Some(0), &config).is_err());
+    }
+
+    #[test]
     fn recipes_precedence_is_cli_then_config_then_default() {
         let root = Path::new("/proj");
         let cli = Path::new("/cli/recipes");
@@ -2055,6 +2156,7 @@ mod tests {
             &state.series,
             &state.as_selection(),
             &state.bindings,
+            &crate::recipe::TargetSelection::new(),
             &|name| name == "openssl",
         );
         assert_eq!(

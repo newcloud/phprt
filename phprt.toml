@@ -8,7 +8,7 @@ recipes = ""
 # 下载缓存目录，命令行 --download-dir 优先。
 # 留空时：本地用 local_internal_dir/downloads，全局用 ~/phprtdownloads。
 # 可绝对或相对（本地相对项目根，全局相对 $HOME）。
-download_dir = ""
+download_dir = "/home/z/testphp/downloads"
 
 # ---------- 本地模式（默认，不加 --global）----------
 # 下面三个只在本地模式使用，都相对项目根（--root）。
@@ -28,6 +28,11 @@ local_backup_dir = ""
 # 默认分别是 ~/phprtbuild、~/phprtbackup。
 global_build_dir = ""
 global_backup_dir = ""
+
+# ---------- 编译 ----------
+# 编译并发数，作为 make -j / cmake 的并行度。
+# 注释掉时用 CPU 数 - 1（最少 1）；数字必须 >= 1。命令行 --parallel 优先。
+# parallel = 8
 
 # GitHub 直连失败后是否改用镜像下载：enable / disable
 enable_github_proxy_download = "enable"

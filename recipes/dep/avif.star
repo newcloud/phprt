@@ -27,7 +27,7 @@ def target(ctx):
             "-DAVIF_ENABLE_WERROR=OFF",
         ],
         make = [
-            "cmake --build {build} --parallel",
+            "cmake --build {build}",
             "cmake --install {build}",
         ],
         artifacts = ["lib/libavif.so"],

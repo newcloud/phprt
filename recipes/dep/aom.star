@@ -27,7 +27,7 @@ def target(ctx):
             "-DCONFIG_MULTITHREAD=1",
         ],
         make = [
-            "cmake --build {build}/aom-build --parallel",
+            "cmake --build {build}/aom-build",
             "cmake --install {build}/aom-build",
         ],
         artifacts = ["lib/libaom.so"],

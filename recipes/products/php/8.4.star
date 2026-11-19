@@ -103,6 +103,39 @@ BUILTIN_DISABLE = {
         "sysvshm": "--disable-sysvshm",
 }
 
+# 构建目标：PHP 的 SAPI。每个版本单独声明，版本差异直接写在这里。
+#
+# 已核对 7.4～8.5 的 configure：
+#   --disable-cli、--disable-cgi 存在；--enable-fpm 存在；
+#   --disable-fpm 不存在（FPM 默认关闭，未选中时不生成禁用参数）。
+TARGETS = {
+    "cli": {
+        "flags": ["--enable-cli"],
+        "disable_flags": ["--disable-cli"],
+        "artifacts": ["bin/php"],
+        "verify": ["{tree}/bin/php", "-v"],
+        "verify_modules": "{tree}/bin/php -m",
+        "entry": "myphp-{series}",
+        "entry_template": "entry.sh",
+    },
+    "fpm": {
+        "flags": ["--enable-fpm"],
+        "disable_flags": [],
+        "artifacts": ["sbin/php-fpm"],
+        "verify": ["{tree}/sbin/php-fpm", "-v"],
+        "config": {
+            "user": {"type": "string", "flags": "--with-fpm-user={value}"},
+            "group": {"type": "string", "flags": "--with-fpm-group={value}"},
+        },
+    },
+    "cgi": {
+        "flags": ["--enable-cgi"],
+        "disable_flags": ["--disable-cgi"],
+        "artifacts": ["bin/php-cgi"],
+        "verify": ["{tree}/bin/php-cgi", "-v"],
+    },
+}
+
 TARGET = product(
     name = "php",
     profile = PROFILE,
@@ -113,8 +146,6 @@ TARGET = product(
         "--prefix={tree}",
         "--with-config-file-path={tree}/etc",
         "--with-config-file-scan-dir={tree}/etc/conf.d",
-        "--enable-cli",
-        "--disable-cgi",
         "--without-pear",
         "--enable-filter",
         "--enable-phar",
@@ -124,6 +155,7 @@ TARGET = product(
         "--enable-exif",
     ],
     make = ["make", "make install"],
-    artifacts = ["bin/php"],
+    artifacts = [],
+    targets = TARGETS,
     desc = "PHP 8.4 本体",
 )

@@ -83,7 +83,7 @@ impl Fixture {
 
         let recipe = self.recipes().join("components/php/swoole.star");
         let text = fs::read_to_string(&recipe).unwrap();
-        let old = "    \"6.2\": {\"product\": [\"8.4\", \"8.5\", \"8.6\"], \"openssl\": [\"1.1.1\", \"3.0\", \"3.5\", \"4.0\"]},";
+        let old = "    \"6.2\": {\"product\": [\"8.4\", \"8.5\"], \"openssl\": [\"1.1.1\", \"3.0\", \"3.5\", \"4.0\"]},";
         assert!(text.contains(old), "swoole.star 的 6.2 行变了");
         let text = text.replace(
             old,

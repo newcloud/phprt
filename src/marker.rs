@@ -11,7 +11,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::recipe::{Selection, Target};
+use crate::recipe::{Selection, Target, TargetSelection};
 
 pub const FILE_NAME: &str = ".phprt-installed";
 
@@ -90,6 +90,8 @@ pub struct InstallFacts<'a> {
     pub installed_tree: String,
     /// 建议命令的前缀，如 `phprt` 或 `phprt --global --prefix /usr/local/php`。
     pub command: &'a str,
+    /// 本次的 `--targets '...'` 片段（含前导空格）；空表示产品没有 targets。
+    pub target_args: &'a str,
 }
 
 pub fn tree_path(root: &Path, product: &str, version: &str) -> PathBuf {
@@ -212,11 +214,12 @@ impl Scheme {
         series: &str,
         sel: &Selection,
         bindings: &BTreeMap<String, String>,
+        targets: &TargetSelection,
         is_dep: &dyn Fn(&str) -> bool,
     ) -> Self {
         Self {
-            digest: scheme_digest(sel, bindings),
-            command: scheme_command(product, series, sel, bindings, is_dep),
+            digest: scheme_digest(sel, bindings, targets),
+            command: scheme_command(product, series, sel, bindings, targets, is_dep),
         }
     }
 }
@@ -230,18 +233,21 @@ pub fn scheme_command(
     series: &str,
     sel: &Selection,
     bindings: &BTreeMap<String, String>,
+    targets: &TargetSelection,
     is_dep: &dyn Fn(&str) -> bool,
 ) -> String {
-    render_scheme(product, series, None, sel, bindings, None, is_dep)
+    render_scheme(product, series, None, sel, bindings, targets, None, is_dep)
 }
 
 /// `scheme --lock`：和普通 `scheme` 共用渲染，只额外写产品补丁和精确版本。
+#[allow(clippy::too_many_arguments)]
 pub fn scheme_command_locked(
     product: &str,
     series: &str,
     version: &str,
     sel: &Selection,
     bindings: &BTreeMap<String, String>,
+    targets: &TargetSelection,
     exact: &BTreeMap<String, String>,
     is_dep: &dyn Fn(&str) -> bool,
 ) -> String {
@@ -251,17 +257,20 @@ pub fn scheme_command_locked(
         Some(version),
         sel,
         bindings,
+        targets,
         Some(exact),
         is_dep,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_scheme(
     product: &str,
     series: &str,
     version: Option<&str>,
     sel: &Selection,
     bindings: &BTreeMap<String, String>,
+    targets: &TargetSelection,
     exact: Option<&BTreeMap<String, String>>,
     is_dep: &dyn Fn(&str) -> bool,
 ) -> String {
@@ -316,13 +325,22 @@ fn render_scheme(
         Some(version) => format!("{product}@{version}"),
         None => format!("{product}@{series}"),
     };
-    format!("phprt install {target} '{}'{pins}", specs.join(","))
+    format!(
+        "phprt install {target} '{}'{}{pins}",
+        specs.join(","),
+        crate::targets::scheme_args(targets)
+    )
 }
 
 /// 方案指纹：只含用户输入——组件名、mode、feature、依赖转授、版本线、绑定。
 /// 不含补丁号、解析出的依赖线交集、configure 参数、环境变量。
-pub fn scheme_digest(sel: &Selection, bindings: &BTreeMap<String, String>) -> String {
+pub fn scheme_digest(
+    sel: &Selection,
+    bindings: &BTreeMap<String, String>,
+    targets: &TargetSelection,
+) -> String {
     let mut text = String::new();
+    text.push_str(&crate::targets::digest_text(targets));
     for (name, spec) in &sel.per_component {
         text.push_str(&format!("component={name}\n"));
         text.push_str(&format!("mode={}\n", spec.mode.as_deref().unwrap_or("")));
@@ -406,6 +424,7 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
         tree,
         installed_tree,
         command,
+        target_args,
     } = facts;
 
     if !installed.is_empty() && installed == target {
@@ -439,7 +458,7 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
                 bail!(
                     "{head}\n  \
                      要重新安装，任选其一：\n    \
-                     {command} install {product}@{target} --force     # 已装版本改名成 {tree}-backup-<日期>，然后全新安装\n    \
+                     {command} install {product}@{target}{target_args} --force     # 已装版本改名成 {tree}-backup-<日期>，然后全新安装\n    \
                      rm -rf {tree}             # 确认不再需要这个版本，删掉后再装"
                 )
             }
@@ -464,9 +483,9 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
     bail!(
         "已存在旧版本 {product} {installed}（{installed_tree}），本次解析到 {target}\n  \
          要装 {target}，请显式写补丁号：\n    \
-         {command} install {product}@{target}\n  \
+         {command} install {product}@{target}{target_args}\n  \
          或者交给 --force：直接装 {target}，不动 {installed} 这个版本\n    \
-         {command} install {product}@{series} --force"
+         {command} install {product}@{series}{target_args} --force"
     )
 }
 
@@ -535,6 +554,7 @@ mod tests {
             tree: ".phprt/php-8.4.14".into(),
             installed_tree: ".phprt/php-8.4.14".into(),
             command: "phprt",
+            target_args: "",
         }
     }
 
@@ -792,16 +812,44 @@ mod tests {
         }
     }
 
+    fn targets(spec: &str) -> TargetSelection {
+        crate::targets::parse_cli(&[spec.to_owned()]).unwrap()
+    }
+
+    #[test]
+    fn scheme_digest_and_command_include_targets() {
+        let sel = Selection::default();
+        let empty = BTreeMap::new();
+        let a = targets("cli,fpm=user:www-data,group:www-data");
+        let b = targets("fpm=group:www-data,user:www-data,cli");
+        assert_eq!(
+            scheme_digest(&sel, &empty, &a),
+            scheme_digest(&sel, &empty, &b),
+            "target / 配置顺序不应改变指纹"
+        );
+        assert_ne!(
+            scheme_digest(&sel, &empty, &a),
+            scheme_digest(&sel, &empty, &TargetSelection::new()),
+            "targets 变化必须改变指纹"
+        );
+        let command = scheme_command("php", "8.5", &sel, &empty, &a, &|_| false);
+        assert!(
+            command.contains("--targets 'cli,fpm=group:www-data,user:www-data'"),
+            "{command}"
+        );
+    }
+
     #[test]
     fn scheme_digest_follows_user_input_only() {
         let mut sel = Selection::default();
         sel.per_component
             .insert("gd".into(), spec(Some("static"), None, None));
         let empty = BTreeMap::new();
-        let base = scheme_digest(&sel, &empty);
+        let targets = TargetSelection::new();
+        let base = scheme_digest(&sel, &empty, &targets);
 
         // 同样的输入必然得到同样的指纹。
-        assert_eq!(base, scheme_digest(&sel, &empty));
+        assert_eq!(base, scheme_digest(&sel, &empty, &targets));
 
         // mode / feature / 版本线 / 绑定 任一变化都会变。
         for changed in [
@@ -811,10 +859,10 @@ mod tests {
         ] {
             let mut other = Selection::default();
             other.per_component.insert("gd".into(), changed);
-            assert_ne!(base, scheme_digest(&other, &empty));
+            assert_ne!(base, scheme_digest(&other, &empty, &targets));
         }
         let bindings = BTreeMap::from([("openssl".to_string(), "3.5".to_string())]);
-        assert_ne!(base, scheme_digest(&sel, &bindings));
+        assert_ne!(base, scheme_digest(&sel, &bindings, &targets));
 
         // 依赖转授的书写顺序不影响指纹。
         let mut a = Selection::default();
@@ -828,8 +876,8 @@ mod tests {
             .insert("libcurl".into(), vec!["nghttp2".into(), "ssl".into()]);
         b.per_component.insert("curl".into(), two);
         assert_eq!(
-            scheme_digest(&a, &empty),
-            scheme_digest(&b, &empty),
+            scheme_digest(&a, &empty, &targets),
+            scheme_digest(&b, &empty, &targets),
             "依赖 feature 顺序不应改变指纹"
         );
     }

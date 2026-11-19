@@ -396,6 +396,135 @@ impl Profile {
     }
 }
 
+/// 产品的一个构建目标（SAPI、可执行文件等）。
+///
+/// 只由产品 recipe 声明；选中状态由工具注入到 `Target::selected_targets`。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BuildTarget {
+    /// target 选中时应用的 configure 参数。
+    #[serde(default)]
+    pub flags: Vec<String>,
+    /// target 未选中时应用的 configure 参数；不写就不生成。
+    #[serde(default)]
+    pub disable_flags: Vec<String>,
+    /// target 选中时追加的产物。
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    /// target 选中时追加的安装后动作。
+    #[serde(default)]
+    pub post_install: Vec<Action>,
+    /// target 选中时用于产品校验的命令。
+    #[serde(default)]
+    pub verify: Vec<String>,
+    /// target 选中时用于模块校验的 shell 命令。
+    #[serde(default)]
+    pub verify_modules: String,
+    /// target 选中时生成的入口名模板；空表示不生成。
+    #[serde(default)]
+    pub entry: String,
+    /// 入口模板文件，相对产品 recipe 目录。
+    #[serde(default)]
+    pub entry_template: String,
+    /// target 自己的配置项：名字 -> 类型和构建参数模板。
+    #[serde(default)]
+    pub config: BTreeMap<String, TargetConfig>,
+}
+
+impl BuildTarget {
+    fn validate(&self, at: &str, name: &str) -> Result<()> {
+        for (kind, list) in [
+            ("flags", &self.flags),
+            ("disable_flags", &self.disable_flags),
+            ("artifacts", &self.artifacts),
+        ] {
+            let mut seen = BTreeSet::new();
+            for item in list {
+                if item.is_empty() {
+                    bail!("{at}: target:{name} 的 {kind} 里有空值");
+                }
+                if !seen.insert(item) {
+                    bail!("{at}: target:{name} 的 {kind} 重复: {item}");
+                }
+            }
+        }
+        for action in &self.post_install {
+            action.validate()?;
+        }
+        if !self.entry_template.is_empty() {
+            let path = Path::new(&self.entry_template);
+            if path.components().count() != 1
+                || !matches!(
+                    path.components().next(),
+                    Some(std::path::Component::Normal(_))
+                )
+            {
+                bail!(
+                    "{at}: target:{name} 的 entry_template={} 必须是产品目录下的文件名",
+                    self.entry_template
+                );
+            }
+        }
+        if !self.entry.is_empty() && self.entry_template.is_empty() {
+            bail!("{at}: target:{name} 设置了 entry，但没有 entry_template");
+        }
+        for (key, config) in &self.config {
+            if key.is_empty() {
+                bail!("{at}: target:{name} 的 config 里有空名字");
+            }
+            if !is_target_name(key) {
+                bail!("{at}: target:{name} 的配置项 {key} 含有不支持的字符");
+            }
+            match config.kind.as_str() {
+                "string" | "list" => {}
+                other => bail!(
+                    "{at}: target:{name} 的配置项 {key} 的 type={other} 不合法（只支持 string / list）"
+                ),
+            }
+            if config.flags.is_empty() {
+                bail!("{at}: target:{name} 的配置项 {key} 缺少 flags");
+            }
+            if !config.flags.contains("{value}") {
+                bail!(
+                    "{at}: target:{name} 的配置项 {key} 的 flags 必须包含 {{value}}：{}",
+                    config.flags
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+/// target / 配置项名字只允许字母、数字、`-`、`_`。
+fn is_target_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// 一个 target 配置项的声明。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetConfig {
+    /// `string` 或 `list`。
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    /// 含 `{value}` 的构建参数模板。
+    #[serde(default)]
+    pub flags: String,
+}
+
+/// target 配置值：字符串或字符串列表。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TargetValue {
+    One(String),
+    Many(Vec<String>),
+}
+
+/// 规范化后的 target 选择：target 名/配置名按 BTreeMap 排序，列表保留元素顺序。
+pub type TargetSelection = BTreeMap<String, BTreeMap<String, TargetValue>>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
     pub kind: Kind,
@@ -429,6 +558,12 @@ pub struct Target {
     /// 产品 profile。
     #[serde(default)]
     pub profile: Profile,
+    /// 产品：构建目标声明；target 名 -> 声明。
+    #[serde(default)]
+    pub targets: BTreeMap<String, BuildTarget>,
+    /// 产品：本次选中的 target 及配置；由工具注入，recipe 不写。
+    #[serde(skip)]
+    pub selected_targets: TargetSelection,
     /// 组件：所属产品。
     #[serde(default)]
     pub product: String,
@@ -568,6 +703,7 @@ impl Target {
                     || !self.profile.is_empty()
                     || !self.components.is_empty()
                     || !self.series.is_empty()
+                    || !self.targets.is_empty()
                 {
                     bail!("{at}: component:{} 不允许产品字段", self.name);
                 }
@@ -781,6 +917,15 @@ impl Target {
                         bail!("{at}: product:{} 的 profile.env[{key}] 是空的", self.name);
                     }
                 }
+                for (name, target) in &self.targets {
+                    if !is_target_name(name) {
+                        bail!(
+                            "{at}: product:{} 的 target 名 {name} 只允许字母、数字、- 和 _",
+                            self.name
+                        );
+                    }
+                    target.validate(&at.to_string(), name)?;
+                }
             }
         }
         self.check_ignored(&at)?;
@@ -796,6 +941,9 @@ impl Target {
         }
         if !self.modes.is_empty() || !self.source.is_empty() || !self.product.is_empty() {
             bail!("{at}: dep:{} 不允许组件字段", self.name);
+        }
+        if !self.targets.is_empty() {
+            bail!("{at}: dep:{} 不允许 targets", self.name);
         }
         Ok(())
     }
@@ -1306,7 +1454,7 @@ fn command_available(name: &str) -> bool {
     })
 }
 
-fn split_top(s: &str, sep: char) -> Result<Vec<&str>> {
+pub(crate) fn split_top(s: &str, sep: char) -> Result<Vec<&str>> {
     let mut parts = Vec::new();
     let mut depth = 0usize;
     let mut start = 0usize;
@@ -2533,6 +2681,49 @@ mod tests {
     }
 
     #[test]
+    fn php_targets_are_declared_per_series() {
+        let (reg, _) = load("8.5", &[], &[]).unwrap();
+        let product = reg.product_any().unwrap();
+        for name in ["cli", "fpm", "cgi"] {
+            assert!(product.targets.contains_key(name), "缺少 target {name}");
+        }
+        assert_eq!(product.targets["cli"].artifacts, vec!["bin/php".to_owned()]);
+        assert_eq!(
+            product.targets["fpm"].artifacts,
+            vec!["sbin/php-fpm".to_owned()]
+        );
+        assert!(
+            product.targets["fpm"].disable_flags.is_empty(),
+            "PHP 没有 --disable-fpm，不能生成禁用参数"
+        );
+        assert_eq!(
+            product.targets["fpm"].config["user"].flags,
+            "--with-fpm-user={value}"
+        );
+    }
+
+    #[test]
+    fn php_bundle_default_targets_are_declared() {
+        for series in ["7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"] {
+            let (reg, _) = load(series, &[], &[]).unwrap();
+            let product = reg.product_any().unwrap();
+            let bundle =
+                crate::bundle::Bundle::load(&dir().join(format!("bundles/php/{series}.toml")))
+                    .unwrap();
+            assert!(
+                !bundle.targets_default.is_empty(),
+                "{series} 没有默认 targets"
+            );
+            for name in &bundle.targets_default {
+                assert!(
+                    product.targets.contains_key(name),
+                    "{series} 的默认 target {name} 没有声明"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn nginx_profile_is_shared() {
         let (reg, _) = load_product("nginx", "1.29", &[], &[]).unwrap();
         let product = reg.product_any().unwrap();
@@ -2707,6 +2898,10 @@ mod tests {
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
         for series in catalog.lines("php").unwrap().keys() {
             let series = series.clone();
+            // 8.6 还没适配；swoole / xdebug 也没有支持 8.6 的版本线，不在这里验收。
+            if series == "8.6" {
+                continue;
+            }
             let (reg, bindings) = load(&series, &["swoole", "openssl", "xdebug"], &[]).unwrap();
             let product = reg.product_any().unwrap();
             assert_eq!(
@@ -2850,6 +3045,17 @@ gd = { ref = "component_presets.gd", mode = "shared" }
         for series in ["7.4", "8.6"] {
             let (reg, _) = load(series, &[], &[]).unwrap();
             assert!(reg.get("component:gd").is_none(), "{series} 不该加载 gd");
+        }
+    }
+
+    #[test]
+    fn zlib_is_bundled_for_minimal_series() {
+        // 7.4 / 8.6 的 bundled 只列了部分内置扩展；zlib 必须在里面，
+        // 否则会被 catalog 的同名库记录当成外部 PHP 扩展。
+        for series in ["7.4", "8.6"] {
+            let (reg, _) = load(series, &[], &[]).unwrap();
+            let zlib = reg.component("zlib").unwrap();
+            assert_eq!(zlib.source, "bundled", "{series}");
         }
     }
 

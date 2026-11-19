@@ -38,6 +38,9 @@ pub struct Config {
     /// 全局模式的备份目录；空表示 `~/phprtbackup`。
     #[serde(default)]
     pub global_backup_dir: String,
+    /// 编译并发数；不写时取 CPU 数 - 1，最少 1。命令行 `--parallel` 优先。
+    #[serde(default)]
+    pub parallel: Option<usize>,
 }
 
 /// 目录配置：空（或 `.`）视为没配置；去掉尾部 `/`；拒绝 `.`/`..` 段。
@@ -59,6 +62,14 @@ fn default_switch() -> String {
     "enable".to_owned()
 }
 
+/// 没配 `parallel` 时用 CPU 数 - 1，最少 1：留一个核给前台。
+pub fn default_parallel() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1))
+        .unwrap_or(1)
+        .max(1)
+}
+
 fn default_proxy_urls() -> Vec<String> {
     GitHubProxy::default().urls
 }
@@ -75,6 +86,7 @@ impl Default for Config {
             download_dir: String::new(),
             global_build_dir: String::new(),
             global_backup_dir: String::new(),
+            parallel: None,
         }
     }
 }
@@ -97,6 +109,7 @@ impl Config {
         config.download_dir_name()?;
         config.global_build_dir_name()?;
         config.global_backup_dir_name()?;
+        config.parallel()?;
         Ok(config)
     }
 
@@ -144,6 +157,15 @@ impl Config {
             .unwrap_or_else(|| "~/phprtbackup".to_owned()))
     }
 
+    /// 编译并发数：`make -j` 和 `CMAKE_BUILD_PARALLEL_LEVEL` 的值；未配置时 CPU 数 - 1，最少 1。
+    pub fn parallel(&self) -> Result<usize> {
+        match self.parallel {
+            None => Ok(default_parallel()),
+            Some(0) => bail!("{FILE_NAME}: parallel 至少为 1"),
+            Some(n) => Ok(n),
+        }
+    }
+
     /// 校验开关并转换成下载器使用的设置。
     pub fn github_proxy(&self) -> Result<GitHubProxy> {
         let enabled = match self.enable_github_proxy_download.trim() {
@@ -179,6 +201,27 @@ mod tests {
         )
         .unwrap();
         assert!(!config.github_proxy().unwrap().enabled);
+    }
+
+    #[test]
+    fn parallel_defaults_to_cpus_minus_one() {
+        let config = Config::load(Path::new("/nonexistent/phprt.toml")).unwrap();
+        assert_eq!(config.parallel().unwrap(), default_parallel());
+        // 单核机器上 -1 会变成 0，必须兜到 1。
+        assert!(config.parallel().unwrap() >= 1);
+    }
+
+    #[test]
+    fn parallel_accepts_explicit_value() {
+        let config: Config = toml::from_str("parallel = 6\n").unwrap();
+        assert_eq!(config.parallel().unwrap(), 6);
+    }
+
+    #[test]
+    fn zero_parallel_is_an_error() {
+        let config: Config = toml::from_str("parallel = 0\n").unwrap();
+        let err = config.parallel().unwrap_err().to_string();
+        assert!(err.contains("parallel"), "{err}");
     }
 
     #[test]

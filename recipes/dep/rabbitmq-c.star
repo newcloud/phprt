@@ -25,7 +25,7 @@ def target(ctx):
             "-DOPENSSL_ROOT_DIR={dep:openssl}",
         ],
         make = [
-            "cmake --build {build} --parallel",
+            "cmake --build {build}",
             "cmake --install {build}",
         ],
         artifacts = ["lib/librabbitmq.so"],

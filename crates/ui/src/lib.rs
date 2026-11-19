@@ -1,7 +1,12 @@
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use clap::ValueEnum;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+
+/// 转圈的刷新间隔；steady tick 不开时 spinner 不转。
+const TICK: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Mode {
@@ -20,6 +25,8 @@ pub struct Tracker {
     tags: Vec<String>,
     mp: Option<MultiProgress>,
     total: usize,
+    /// 这一行是否已经开始。一个节点要跑多条命令，秒表只在第一次开始时归零。
+    started: Vec<AtomicBool>,
 }
 
 impl Tracker {
@@ -50,6 +57,7 @@ impl Tracker {
                 tags,
                 mp: None,
                 total,
+                started: Vec::new(),
             };
         }
 
@@ -58,7 +66,7 @@ impl Tracker {
             .iter()
             .map(|tag| {
                 let bar = mp.add(ProgressBar::new(0));
-                bar.set_style(spinner_style());
+                bar.set_style(idle_style());
                 bar.set_message(pad(tag));
                 bar
             })
@@ -69,6 +77,7 @@ impl Tracker {
             tags,
             mp: Some(mp),
             total,
+            started: (0..total).map(|_| AtomicBool::new(false)).collect(),
         }
     }
 
@@ -89,7 +98,20 @@ impl Tracker {
             return;
         }
         if let Some(bar) = self.bars.get(index) {
+            bar.set_style(spinner_style());
             bar.set_message(pad(&format!("{tag} {verb}")));
+            // 一个节点会依次跑 configure / make / install；秒表只在它第一次开始时归零，
+            // 否则会从 8s 跳回 0s，看起来像重来了一遍。
+            let first = self
+                .started
+                .get(index)
+                .map(|started| !started.swap(true, Ordering::Relaxed))
+                .unwrap_or(true);
+            if first {
+                bar.reset_elapsed();
+                // 没有 steady tick 时 spinner 不会转，长命令看起来像卡住。
+                bar.enable_steady_tick(TICK);
+            }
         }
     }
 
@@ -105,7 +127,7 @@ impl Tracker {
                 bar.set_style(bar_style());
                 bar.set_length(total);
             }
-            _ => bar.set_style(spinner_style()),
+            _ => bar.set_style(bytes_spinner_style()),
         }
     }
 
@@ -121,9 +143,12 @@ impl Tracker {
         }
     }
 
-    pub fn set_message(&self, index: usize, message: &str) {
+    pub fn set_status(&self, index: usize, verb: &str) {
+        let Some(tag) = self.tags.get(index) else {
+            return;
+        };
         if let Some(bar) = self.bars.get(index) {
-            bar.set_message(pad(message));
+            bar.set_message(pad(&format!("{tag} {verb}")));
         }
     }
 
@@ -191,7 +216,12 @@ pub fn human(bytes: u64) -> String {
 
 const BAR_TEMPLATE: &str =
     "  {msg} [{bar:28}] {percent:>3}% {bytes:>10}/{total_bytes:<10} {bytes_per_sec}";
-const SPINNER_TEMPLATE: &str = "  {msg} {spinner} {bytes}";
+/// 运行中：转圈 + 这条命令已用时间。时间在走，才知道没卡住。
+const SPINNER_TEMPLATE: &str = "  {msg} {spinner} {elapsed}";
+/// 长度未知时：转圈 + 已处理字节数。
+const BYTES_SPINNER_TEMPLATE: &str = "  {msg} {spinner} {bytes}";
+/// 还没轮到的行：不转圈，免得看起来在跑。
+const IDLE_TEMPLATE: &str = "  {msg} ⠸ 等待";
 
 fn bar_style() -> ProgressStyle {
     ProgressStyle::with_template(BAR_TEMPLATE)
@@ -200,7 +230,19 @@ fn bar_style() -> ProgressStyle {
 }
 
 fn spinner_style() -> ProgressStyle {
-    ProgressStyle::with_template(SPINNER_TEMPLATE)
+    tick_style(SPINNER_TEMPLATE)
+}
+
+fn bytes_spinner_style() -> ProgressStyle {
+    tick_style(BYTES_SPINNER_TEMPLATE)
+}
+
+fn idle_style() -> ProgressStyle {
+    ProgressStyle::with_template(IDLE_TEMPLATE).unwrap_or_else(|_| ProgressStyle::default_spinner())
+}
+
+fn tick_style(template: &'static str) -> ProgressStyle {
+    ProgressStyle::with_template(template)
         .unwrap_or_else(|_| ProgressStyle::default_spinner())
         .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
 }
@@ -213,6 +255,15 @@ mod tests {
     fn progress_templates_are_valid() {
         assert!(ProgressStyle::with_template(BAR_TEMPLATE).is_ok());
         assert!(ProgressStyle::with_template(SPINNER_TEMPLATE).is_ok());
+        assert!(ProgressStyle::with_template(BYTES_SPINNER_TEMPLATE).is_ok());
+        assert!(ProgressStyle::with_template(IDLE_TEMPLATE).is_ok());
+    }
+
+    #[test]
+    fn running_row_shows_elapsed_not_bytes() {
+        // 编译阶段没有字节数可报，显示 `0 B` 只会让人以为没动。
+        assert!(SPINNER_TEMPLATE.contains("{elapsed}"));
+        assert!(!SPINNER_TEMPLATE.contains("{bytes}"));
     }
 
     #[test]

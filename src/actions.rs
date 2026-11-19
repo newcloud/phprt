@@ -23,44 +23,64 @@ pub fn run(
     opts: &Options<'_>,
 ) -> Result<()> {
     for action in &product.profile.post_install {
-        match action {
-            Action::EnsureDir { path } => {
-                let path = safe_path(tree, path)?;
-                fs::create_dir_all(&path).with_context(|| format!("建不了 {}", path.display()))?;
+        run_action(action, reg, product, sel, tree, opts)?;
+    }
+    for (name, target) in &product.targets {
+        if !product.selected_targets.contains_key(name) {
+            continue;
+        }
+        for action in &target.post_install {
+            run_action(action, reg, product, sel, tree, opts)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_action(
+    action: &Action,
+    reg: &Registry,
+    product: &Target,
+    sel: &Selection,
+    tree: &Path,
+    opts: &Options<'_>,
+) -> Result<()> {
+    match action {
+        Action::EnsureDir { path } => {
+            let path = safe_path(tree, path)?;
+            fs::create_dir_all(&path).with_context(|| format!("建不了 {}", path.display()))?;
+        }
+        Action::WriteFile {
+            path,
+            content,
+            if_missing,
+        } => {
+            let path = safe_path(tree, path)?;
+            if *if_missing && path.exists() {
+                return Ok(());
             }
-            Action::WriteFile {
-                path,
-                content,
-                if_missing,
-            } => {
-                let path = safe_path(tree, path)?;
-                if *if_missing && path.exists() {
-                    continue;
-                }
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("建不了 {}", parent.display()))?;
-                }
-                fs::write(&path, content).with_context(|| format!("写不了 {}", path.display()))?;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("建不了 {}", parent.display()))?;
             }
-            Action::CopyCaBundle { to, candidates } => {
-                let to = safe_path(tree, to)?;
-                if to.exists() {
-                    continue;
-                }
-                if let Some(parent) = to.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("建不了 {}", parent.display()))?;
-                }
-                if let Some(source) = candidates.iter().find(|path| Path::new(path).is_file()) {
-                    fs::copy(source, &to).with_context(|| format!("复制不了 CA {}", source))?;
-                } else {
-                    eprintln!("注意: 没找到系统 CA，HTTPS 校验会失败");
-                }
+            fs::write(&path, content).with_context(|| format!("写不了 {}", path.display()))?;
+        }
+        Action::CopyCaBundle { to, candidates } => {
+            let to = safe_path(tree, to)?;
+            if to.exists() {
+                return Ok(());
             }
-            Action::WriteComponentIni { dir, register } => {
-                write_component_ini(reg, product, sel, tree, dir, register, opts)?;
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("建不了 {}", parent.display()))?;
             }
+            if let Some(source) = candidates.iter().find(|path| Path::new(path).is_file()) {
+                fs::copy(source, &to).with_context(|| format!("复制不了 CA {}", source))?;
+            } else {
+                eprintln!("注意: 没找到系统 CA，HTTPS 校验会失败");
+            }
+        }
+        Action::WriteComponentIni { dir, register } => {
+            write_component_ini(reg, product, sel, tree, dir, register, opts)?;
         }
     }
     Ok(())

@@ -459,6 +459,8 @@ mod tests {
             components: vec![],
             deps: Default::default(),
             profile: Default::default(),
+            targets: Default::default(),
+            selected_targets: Default::default(),
             product: String::new(),
             source: String::new(),
             modes: vec![],

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::recipe::{ComponentSpec, Kind, Registry, Selection, Target};
+use crate::recipe::{ComponentSpec, Kind, Registry, Selection, Target, TargetSelection};
 
 pub fn state_path(root: &Path, product: &str, series: &str) -> PathBuf {
     crate::layout::state_file(root, product, series)
@@ -66,6 +66,9 @@ pub struct ProjectState {
     /// 用户显式指定的版本线；bundle 解析出来的默认线不写在这里。
     #[serde(default)]
     pub bindings: BTreeMap<String, String>,
+    /// 产品构建目标：target 名 -> 配置名 -> 值。空表示沿用 bundle 默认值。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub targets: TargetSelection,
     #[serde(default)]
     pub components: BTreeMap<String, ComponentState>,
     #[serde(default)]
@@ -81,6 +84,7 @@ impl Default for ProjectState {
             series: String::new(),
             installed_version: String::new(),
             bindings: BTreeMap::new(),
+            targets: TargetSelection::new(),
             components: BTreeMap::new(),
             deps: BTreeMap::new(),
         }
@@ -189,6 +193,7 @@ impl ProjectState {
                 }
             }
         }
+        crate::targets::validate_selection(reg, &self.targets, "state.json")?;
         for (name, dep) in &self.deps {
             let target = reg
                 .get(&format!("dep:{name}"))
@@ -530,6 +535,8 @@ mod tests {
             components: vec![],
             deps: Default::default(),
             profile: Default::default(),
+            targets: Default::default(),
+            selected_targets: Default::default(),
             product: String::new(),
             source: String::new(),
             modes: vec![],
@@ -594,6 +601,21 @@ mod tests {
             product,
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn targets_round_trip_through_json() {
+        let targets =
+            crate::targets::parse_cli(&["cli,fpm=user:www-data,group:www-data".to_owned()])
+                .unwrap();
+        let state = ProjectState {
+            targets: targets.clone(),
+            ..ProjectState::default()
+        };
+        let text = serde_json::to_string(&state).unwrap();
+        assert!(text.contains("\"targets\""), "{text}");
+        let back: ProjectState = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.targets, state.targets);
     }
 
     #[test]

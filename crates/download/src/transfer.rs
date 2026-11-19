@@ -354,7 +354,7 @@ fn chunked(
         return Err(err);
     }
 
-    ui.set_message(index, "校验中");
+    ui.set_status(index, "校验中");
     let part = store::part_path(&item.archive);
     let mut out = File::create(&part).with_context(|| format!("写不到 {}", part.display()))?;
     let mut buf = [0u8; 64 * 1024];

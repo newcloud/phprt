@@ -18,6 +18,8 @@ pub struct Options<'a> {
     pub root: &'a Path,
     pub recipes: &'a Path,
     pub ui: Mode,
+    /// 编译并发数：命令行 `--parallel` > `phprt.toml` 的 `parallel` > CPU 数 - 1。
+    pub parallel: usize,
     /// 方案指纹和可复制的 install 命令，写进完成标记。
     pub scheme: &'a marker::Scheme,
     /// 是否按产品规则备份被改写的登记文件。
@@ -37,9 +39,7 @@ pub fn run(
     let tree_path = crate::layout::tree_path(&root, &product.name, &product.version);
     let tree = tree_path.display().to_string();
     let product_build = root.join(layout::build_dir_of(product));
-    let jobs = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let parallel = opts.parallel;
     let vendor = fs::canonicalize(opts.recipes.join("../vendor/perl")).ok();
     let host = HostEnv::from_process();
     let mut dep_sigs: BTreeMap<String, String> = BTreeMap::new();
@@ -83,7 +83,6 @@ pub fn run(
             &product.profile.runtime.lib_dir,
             &link_prefixes,
             &tool_prefixes,
-            jobs,
             vendor.as_deref(),
         );
         let node_ctx = ctx(&tree, &work, &prefix);
@@ -136,6 +135,7 @@ pub fn run(
                 args.extend(render::product_configure_flags(
                     reg, target, sel, &node_ctx,
                 )?);
+                render::dedupe(&mut args);
                 let mut commands = Vec::new();
                 if !args.is_empty() {
                     // 产品 recipe 的 configure 可以写 "./configure" 作为第一项，
@@ -159,6 +159,13 @@ pub fn run(
                         artifacts.extend(artifacts_expanded(&def.artifacts, component));
                     }
                 }
+                for (name, build_target) in &target.targets {
+                    if target.selected_targets.contains_key(name) {
+                        artifacts.extend(artifacts_expanded(&build_target.artifacts, target));
+                    }
+                }
+                let mut seen = std::collections::BTreeSet::new();
+                artifacts.retain(|item| seen.insert(item.clone()));
                 (commands, artifacts)
             }
             Kind::Component => {
@@ -200,9 +207,9 @@ pub fn run(
         )?;
         dep_sigs.insert(target.name.clone(), sig.clone());
 
-        // 签名只用工具生成的确定性环境；宿主的 PATH / CFLAGS 等在这里才接上，
-        // 换 shell 或上 CI 不会让整棵树重编。
-        add_host_env(&mut env, &host);
+        // 签名只用工具生成的确定性环境；宿主的 PATH / CFLAGS 和并行度在这里才接上，
+        // 换 shell、上 CI、机器核数不同都不会让整棵树重编。
+        add_host_env(&mut env, &host, parallel);
 
         steps.push(Step {
             tag: format!(
@@ -594,7 +601,6 @@ fn build_env(
     runtime_lib_dir: &str,
     deps: &[PathBuf],
     tools: &[PathBuf],
-    jobs: usize,
     vendor: Option<&Path>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
@@ -625,7 +631,6 @@ fn build_env(
     env.insert("PATH".to_owned(), path.join(":"));
     env.insert("CFLAGS".to_owned(), "-O2".to_owned());
     env.insert("CXXFLAGS".to_owned(), "-O2".to_owned());
-    env.insert("MAKEFLAGS".to_owned(), format!("-j{jobs}"));
     if let Some(vendor) = vendor {
         env.insert("PERL5LIB".to_owned(), vendor.display().to_string());
     }
@@ -663,7 +668,8 @@ impl HostEnv {
 }
 
 /// 把宿主的值接到工具生成的值后面，等价于 shell 里的 `VAR=base $VAR`。
-fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv) {
+/// 这里的值只用于执行，不进构建签名。
+fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv, parallel: usize) {
     fn append(env: &mut BTreeMap<String, String>, key: &str, extra: &Option<String>) {
         let Some(extra) = extra else {
             return;
@@ -682,6 +688,13 @@ fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv) {
     append(env, "LDFLAGS", &host.ldflags);
     append(env, "CFLAGS", &host.cflags);
     append(env, "CXXFLAGS", &host.cxxflags);
+    // 并行度跟着机器和配置走：只影响这次执行，不进签名。
+    // make 认 MAKEFLAGS；cmake 认 CMAKE_BUILD_PARALLEL_LEVEL（recipe 里不要再写 --parallel）。
+    env.insert("MAKEFLAGS".to_owned(), format!("-j{parallel}"));
+    env.insert(
+        "CMAKE_BUILD_PARALLEL_LEVEL".to_owned(),
+        parallel.to_string(),
+    );
     if let Some(path) = &host.path {
         let base = env.get("PATH").cloned().unwrap_or_default();
         let value = if base.is_empty() {
@@ -914,11 +927,35 @@ fn is_elf(path: &Path) -> bool {
 }
 
 fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
-    if product.profile.verify.is_empty() {
+    if product.targets.is_empty() {
+        return verify_one(
+            reg,
+            product,
+            tree,
+            &product.profile.verify,
+            &product.profile.verify_modules,
+        );
+    }
+    for (name, target) in &product.targets {
+        if product.selected_targets.contains_key(name) {
+            verify_one(reg, product, tree, &target.verify, &target.verify_modules)?;
+        }
+    }
+    Ok(())
+}
+
+fn verify_one(
+    reg: &Registry,
+    product: &Target,
+    tree: &Path,
+    verify: &[String],
+    verify_modules: &str,
+) -> Result<()> {
+    if verify.is_empty() {
         return Ok(());
     }
     let mut argv = Vec::new();
-    for arg in &product.profile.verify {
+    for arg in verify {
         argv.push(arg.replace("{tree}", &tree.display().to_string()));
     }
     let program = argv.remove(0);
@@ -935,13 +972,10 @@ fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
         );
     }
 
-    if product.profile.verify_modules.is_empty() {
+    if verify_modules.is_empty() {
         return Ok(());
     }
-    let command = product
-        .profile
-        .verify_modules
-        .replace("{tree}", &tree.display().to_string());
+    let command = verify_modules.replace("{tree}", &tree.display().to_string());
     let output = Command::new("sh")
         .arg("-c")
         .arg(&command)
@@ -982,16 +1016,45 @@ fn verify(reg: &Registry, product: &Target, tree: &Path) -> Result<()> {
 }
 
 fn write_entry(root: &Path, product: &Target, recipes: &Path, target: &str) -> Result<()> {
-    if product.profile.entry.is_empty() || crate::layout::is_global() {
+    let (entry, entry_template) = if product.targets.is_empty() {
+        (
+            product.profile.entry.as_str(),
+            product.profile.entry_template.as_str(),
+        )
+    } else {
+        let mut found = Vec::new();
+        for (name, build_target) in &product.targets {
+            if product.selected_targets.contains_key(name) && !build_target.entry.is_empty() {
+                found.push((
+                    build_target.entry.as_str(),
+                    build_target.entry_template.as_str(),
+                ));
+            }
+        }
+        match found.as_slice() {
+            [] => return Ok(()),
+            [one] => *one,
+            many => {
+                let names: Vec<&str> = many.iter().map(|(entry, _)| *entry).collect();
+                bail!(
+                    "{}@{} 同时选中了多个声明 entry 的 target（{}）；入口只能有一个",
+                    product.name,
+                    product.series,
+                    names.join(", ")
+                );
+            }
+        }
+    };
+    if entry.is_empty() || crate::layout::is_global() {
         return Ok(());
     }
     let template_path = recipes
         .join("products")
         .join(&product.name)
-        .join(&product.profile.entry_template);
+        .join(entry_template);
     let template = fs::read_to_string(&template_path)
         .with_context(|| format!("读不到入口模板 {}", template_path.display()))?;
-    let name = product.profile.entry.replace("{series}", &product.series);
+    let name = entry.replace("{series}", &product.series);
     let content = template
         .replace("@@TREE@@", &format!("{}-{}", product.name, product.version))
         .replace("@@TARGET@@", target);
@@ -1052,6 +1115,8 @@ mod tests {
             components: vec![],
             deps: Default::default(),
             profile: Default::default(),
+            targets: Default::default(),
+            selected_targets: Default::default(),
             product: String::new(),
             source: String::new(),
             modes: vec![],
@@ -1169,35 +1234,37 @@ mod tests {
 
     #[test]
     fn build_env_uses_profile_runtime_lib_dir() {
-        let env = build_env("/tree", "lib/custom", &[], &[], 4, None);
+        let env = build_env("/tree", "lib/custom", &[], &[], None);
         assert_eq!(
             env["LD_LIBRARY_PATH"].split(':').next(),
             Some("/tree/lib/custom")
         );
-        assert_eq!(env["MAKEFLAGS"], "-j4");
         assert!(!env.contains_key("PHP_AUTOCONF"));
         assert!(!env.contains_key("PHP_AUTOHEADER"));
 
         let deps = vec![PathBuf::from("/deps/zlib")];
-        let env = build_env("/tree", "", &deps, &[], 4, None);
+        let env = build_env("/tree", "", &deps, &[], None);
         assert!(!env["LD_LIBRARY_PATH"].contains("/tree/"));
         assert!(env["LD_LIBRARY_PATH"].starts_with("/deps/zlib/lib"));
     }
 
     #[test]
     fn signature_env_has_no_host_values() {
-        let env = build_env("/tree", "", &[], &[], 4, None);
+        let env = build_env("/tree", "", &[], &[], None);
         assert_eq!(env["PATH"], "/tree/bin");
         assert_eq!(env["CFLAGS"], "-O2");
         assert_eq!(env["CXXFLAGS"], "-O2");
         assert_eq!(env["CPPFLAGS"], "");
         assert_eq!(env["LDFLAGS"], "");
         assert!(!env.contains_key("PERL5LIB"));
+        // 并行度是机器属性，不进签名：换机器、改 parallel 都不触发重编。
+        assert!(!env.contains_key("MAKEFLAGS"));
+        assert!(!env.contains_key("CMAKE_BUILD_PARALLEL_LEVEL"));
     }
 
     #[test]
     fn host_env_is_added_for_execution_only() {
-        let mut env = build_env("/tree", "", &[], &[], 4, None);
+        let mut env = build_env("/tree", "", &[], &[], None);
         let host = HostEnv {
             path: Some("/host/bin".into()),
             cflags: Some("-march=native".into()),
@@ -1206,7 +1273,9 @@ mod tests {
             ldflags: Some("-L/host/lib".into()),
             perl5lib: Some("/host/perl".into()),
         };
-        add_host_env(&mut env, &host);
+        add_host_env(&mut env, &host, 4);
+        assert_eq!(env["MAKEFLAGS"], "-j4");
+        assert_eq!(env["CMAKE_BUILD_PARALLEL_LEVEL"], "4");
         assert_eq!(env["CFLAGS"], "-O2 -march=native");
         assert_eq!(env["CXXFLAGS"], "-O2 -fPIC");
         assert_eq!(env["CPPFLAGS"], "-DHOST");
@@ -1216,8 +1285,8 @@ mod tests {
         assert!(!env.contains_key("PERL5LIB"));
 
         let deps = vec![PathBuf::from("/deps/zlib")];
-        let mut env = build_env("/tree", "", &deps, &[], 4, Some(Path::new("/vendor/perl")));
-        add_host_env(&mut env, &host);
+        let mut env = build_env("/tree", "", &deps, &[], Some(Path::new("/vendor/perl")));
+        add_host_env(&mut env, &host, 4);
         assert_eq!(env["CPPFLAGS"], "-I/deps/zlib/include -DHOST");
         assert_eq!(env["PERL5LIB"], "/vendor/perl:/host/perl");
     }

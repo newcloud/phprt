@@ -33,6 +33,10 @@ libssh2 = "1.11"
 rabbitmq-c = "0.18"
 librdkafka = "2.16"
 
+# 默认构建目标；由 --targets 覆盖。
+[targets]
+default = ["cli"]
+
 # 扩展被选中时的默认 feature / 依赖功能；不决定是否默认安装。
 # --ext 名字 或 ext add 名字 时使用这里的配置。
 [component_presets]

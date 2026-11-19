@@ -4,13 +4,15 @@ use anyhow::{Result, anyhow, bail};
 use serde::Serialize;
 
 use crate::layout;
-use crate::recipe::{Kind, Registry, Selection, Strategy, Target};
+use crate::recipe::{Kind, Registry, Selection, Strategy, Target, TargetSelection, TargetValue};
 use crate::state::ProjectState;
 
 #[derive(Debug, Serialize)]
 pub struct Sim {
     pub root: String,
     pub tree: String,
+    /// 本次选择的构建目标。
+    pub targets: TargetSelection,
     pub order: Vec<Node>,
 }
 
@@ -160,6 +162,7 @@ pub fn build(
                 prefix: tree.clone(),
             };
             configure.extend(product_configure_flags(reg, t, sel, &product_ctx)?);
+            dedupe(&mut configure);
         }
 
         let make = t
@@ -241,6 +244,12 @@ pub fn build(
                         );
                     }
                 }
+                for (name, target) in &t.targets {
+                    if t.selected_targets.contains_key(name) {
+                        artifacts.extend(target.artifacts.iter().cloned());
+                    }
+                }
+                dedupe(&mut artifacts);
             }
             _ => {}
         }
@@ -292,6 +301,7 @@ pub fn build(
     Ok(Sim {
         root: root.to_owned(),
         tree,
+        targets: product.selected_targets.clone(),
         order: nodes,
     })
 }
@@ -324,9 +334,57 @@ pub(crate) fn dep_configure(
     Ok(out)
 }
 
-/// 产品 configure 里由组件贡献的参数：
+/// 把用户输入去重，保留首次出现的顺序。
+pub(crate) fn dedupe(items: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    items.retain(|item| seen.insert(item.clone()));
+}
+
+/// 按产品声明的 targets 生成 configure 参数。
+///
+/// 选中的 target 用 `flags`，未选中的用 `disable_flags`；配置项只对选中的 target 生效。
+pub(crate) fn target_configure_flags(
+    reg: &Registry,
+    product: &Target,
+    ctx: &Ctx<'_>,
+) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for (name, target) in &product.targets {
+        if product.selected_targets.contains_key(name) {
+            out.extend(target.flags.iter().cloned());
+        } else {
+            out.extend(target.disable_flags.iter().cloned());
+        }
+    }
+    for (name, target) in &product.targets {
+        let Some(config) = product.selected_targets.get(name) else {
+            continue;
+        };
+        for (key, decl) in &target.config {
+            let Some(value) = config.get(key) else {
+                continue;
+            };
+            let values = match (decl.kind.as_str(), value) {
+                ("string", TargetValue::One(value)) => vec![value.clone()],
+                ("list", TargetValue::Many(values)) => values.clone(),
+                (kind, _) => bail!("target {name} 的配置项 {key} 类型 {kind} 不支持"),
+            };
+            for value in values {
+                out.push(decl.flags.replace("{value}", &value));
+            }
+        }
+    }
+    let mut expanded = Vec::new();
+    for flag in out {
+        expanded.push(expand(&flag, ctx, reg)?);
+    }
+    dedupe(&mut expanded);
+    Ok(expanded)
+}
+
+/// 产品 configure 里由组件和构建目标贡献的参数：
 /// `bundled_disable` 里的组件没选 fold 时用它的关闭参数，
-/// 选了 fold 时用 profile 的模板和组件自己的 configure。
+/// 选了 fold 时用 profile 的模板和组件自己的 configure；targets 按选中状态追加。
 pub(crate) fn product_configure_flags(
     reg: &Registry,
     product: &Target,
@@ -358,6 +416,8 @@ pub(crate) fn product_configure_flags(
         out.extend(component_configure(reg, component, sel, ctx)?);
         out.extend(fold_templates(reg, product, component, &mode, ctx)?);
     }
+    out.extend(target_configure_flags(reg, product, ctx)?);
+    dedupe(&mut out);
     Ok(out)
 }
 
@@ -464,8 +524,12 @@ pub fn to_json(sim: &Sim) -> Result<String> {
 pub fn to_text(sim: &Sim) -> String {
     let mut out = String::new();
     out.push_str("phprt plan\n");
-    out.push_str(&format!("  root   {}\n", sim.root));
-    out.push_str(&format!("  tree   {}\n", sim.tree));
+    out.push_str(&format!("  root    {}\n", sim.root));
+    out.push_str(&format!("  tree    {}\n", sim.tree));
+    out.push_str(&format!(
+        "  targets {}\n",
+        crate::targets::display(&sim.targets)
+    ));
 
     out.push_str("\nbuild order\n");
     for (i, n) in sim.order.iter().enumerate() {
@@ -774,6 +838,8 @@ mod tests {
             components: vec![],
             deps: Default::default(),
             profile: Default::default(),
+            targets: Default::default(),
+            selected_targets: Default::default(),
             product: String::new(),
             source: String::new(),
             modes: vec![],

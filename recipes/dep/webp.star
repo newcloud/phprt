@@ -28,7 +28,7 @@ def target(ctx):
             "-DWEBP_BUILD_EXTRAS=OFF",
         ],
         make = [
-            "cmake --build {build} --parallel",
+            "cmake --build {build}",
             "cmake --install {build}",
         ],
         artifacts = ["lib/libwebp.so"],

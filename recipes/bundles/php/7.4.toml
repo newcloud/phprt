@@ -6,3 +6,7 @@ xdebug = "3.1"
 [deps]
 openssl = "1.1.1"
 libxml2 = "2.11"
+
+# 默认构建目标；由 --targets 覆盖。
+[targets]
+default = ["cli"]

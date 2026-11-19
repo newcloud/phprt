@@ -40,7 +40,7 @@ def target(ctx):
             "-DCMAKE_PREFIX_PATH={dep:zlib}",
         ],
         make = [
-            "cmake --build {build} --parallel",
+            "cmake --build {build}",
             "cmake --install {build}",
         ],
         artifacts = ["lib/libzip.so"],

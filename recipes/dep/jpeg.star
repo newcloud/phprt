@@ -32,7 +32,7 @@ def target(ctx):
             "-DWITH_TURBOJPEG=OFF",
         ],
         make = [
-            "cmake --build {build} --parallel",
+            "cmake --build {build}",
             "cmake --install {build}",
         ],
         artifacts = ["lib/libjpeg.so"],

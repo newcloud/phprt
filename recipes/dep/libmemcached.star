@@ -27,7 +27,7 @@ def target(ctx):
             "-DENABLE_OPENSSL_CRYPTO=OFF",
         ],
         make = [
-            "cmake --build {build} --parallel",
+            "cmake --build {build}",
             "cmake --install {build}",
         ],
         artifacts = ["lib/libmemcached.so"],

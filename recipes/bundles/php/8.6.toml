@@ -1,9 +1,12 @@
 # 只写默认版本线，不写补丁号；顶层是扩展，[deps] 是依赖库。
 product = "php"
-swoole = "6.2"
-xdebug = "3.5"
+# swoole 6.2.5 / xdebug 3.5.3 都不支持 PHP 8.6；等有支持的版本线再加回。
 
 [deps]
 openssl = "3.5"
 libcurl = "8.23"
 libxml2 = "2.15"
+
+# 默认构建目标；由 --targets 覆盖。
+[targets]
+default = ["cli"]

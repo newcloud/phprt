@@ -356,6 +356,7 @@ def product(
         make = ["make", "make install"],
         artifacts = ["bin/php"],
         profile = {},
+        targets = {},
         desc = ""):
     """一个产品（PHP、nginx、CPython）。
 
@@ -380,6 +381,7 @@ def product(
         "make": make,
         "artifacts": artifacts,
         "profile": profile,
+        "targets": targets,
         "desc": desc,
     }
 

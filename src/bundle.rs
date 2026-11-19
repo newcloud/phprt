@@ -20,6 +20,8 @@ pub struct Bundle {
     pub dep_lines: BTreeMap<String, String>,
     pub component_presets: BTreeMap<String, ComponentDefault>,
     pub default_components: BTreeMap<String, ComponentDefault>,
+    /// `[targets] default`：产品声明的构建目标默认选择。空表示没有配置。
+    pub targets_default: Vec<String>,
 }
 
 /// 一个组件的默认配置：挂载方式可选，feature 和依赖功能都是集合。
@@ -52,6 +54,7 @@ impl Bundle {
         let mut component_presets = BTreeMap::new();
         let mut product = None;
         let mut default_components = BTreeMap::new();
+        let mut targets_default = Vec::new();
         for (key, value) in raw {
             if key == "product" {
                 match value {
@@ -73,6 +76,8 @@ impl Bundle {
                 default_components = value.try_into().with_context(|| {
                     format!("{} 的 [default_components] 不合法", path.display())
                 })?;
+            } else if key == "targets" {
+                targets_default = parse_targets_default(value, path)?;
             } else {
                 match value {
                     toml::Value::String(text) => {
@@ -94,6 +99,7 @@ impl Bundle {
             dep_lines,
             component_presets,
             default_components,
+            targets_default,
         };
         bundle.validate_refs(path)?;
         Ok(bundle)
@@ -192,6 +198,40 @@ impl Bundle {
         }
         Ok(())
     }
+}
+
+fn parse_targets_default(value: toml::Value, path: &Path) -> Result<Vec<String>> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("{} 的 [targets] 必须是表", path.display()))?;
+    for key in table.keys() {
+        if key != "default" {
+            bail!(
+                "{} 的 [targets] 只支持 default；未知键 {key}",
+                path.display()
+            );
+        }
+    }
+    let Some(value) = table.get("default") else {
+        return Ok(Vec::new());
+    };
+    let list = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("{} 的 [targets] default 必须是数组", path.display()))?;
+    let mut out = Vec::new();
+    for item in list {
+        let name = item.as_str().ok_or_else(|| {
+            anyhow::anyhow!("{} 的 [targets] default 里必须是字符串", path.display())
+        })?;
+        if name.is_empty() {
+            bail!("{} 的 [targets] default 里有空名字", path.display());
+        }
+        if out.iter().any(|item: &String| item == name) {
+            bail!("{} 的 [targets] default 重复: {name}", path.display());
+        }
+        out.push(name.to_owned());
+    }
+    Ok(out)
 }
 
 fn preset_name(reference: &str) -> Result<&str> {
@@ -334,6 +374,42 @@ mod tests {
         );
         assert!(gd.reference.is_empty());
         assert!(!bundle.default_components.contains_key("gd"));
+    }
+
+    #[test]
+    fn targets_default_is_read() {
+        let bundle = Bundle::load(&dir().join("bundles/php/8.5.toml")).unwrap();
+        assert_eq!(bundle.targets_default, vec!["cli".to_owned()]);
+    }
+
+    #[test]
+    fn targets_reject_unknown_keys_and_duplicates() {
+        let path = temp_path("targets");
+        std::fs::write(
+            &path,
+            r#"
+product = "php"
+[targets]
+default = ["cli", "cli"]
+"#,
+        )
+        .unwrap();
+        let err = Bundle::load(&path).unwrap_err().to_string();
+        assert!(err.contains("重复"), "{err}");
+        let _ = std::fs::remove_file(&path);
+
+        std::fs::write(
+            &path,
+            r#"
+product = "php"
+[targets]
+other = ["cli"]
+"#,
+        )
+        .unwrap();
+        let err = Bundle::load(&path).unwrap_err().to_string();
+        assert!(err.contains("只支持 default"), "{err}");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
