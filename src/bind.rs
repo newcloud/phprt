@@ -161,8 +161,8 @@ pub fn resolve(
     // 3. 每一条已绑定的线都要满足它自己的产品兼容表。
     // skipped 记录「只有一条线但不支持当前系列」的组件，供第 4 步给出准确报错。
     let mut skipped: BTreeMap<String, String> = BTreeMap::new();
-    let notes = {
-        let mut notes = Vec::new();
+    let mut notes = Vec::new();
+    {
         for (name, choice) in choices.clone() {
             let Some(meta) = component_meta_of(metas, product, &name) else {
                 continue;
@@ -188,20 +188,13 @@ pub fn resolve(
                 choices.remove(&name);
                 continue;
             }
-            if choice.source == Source::Bundle && allowed.len() == 1 {
-                let line = allowed.iter().next().expect("刚刚判断只有一个").clone();
-                notes.push(format!(
-                    "{name} 的默认线 {} 不适用于产品 {series}，自动改用 {line}",
-                    choice.line
-                ));
-                choices.insert(
-                    name.clone(),
-                    Choice {
-                        line,
-                        source: Source::Auto,
-                    },
+            if choice.source == Source::Bundle {
+                bail!(
+                    "bundle 里 {name} = {} 不支持产品 {series}（可用：{}）；\
+                     改正 bundles/{product}/{series}.toml",
+                    choice.line,
+                    list(&allowed)
                 );
-                continue;
             }
             bail!(
                 "{name} {} 不支持产品 {series}（可用：{}）",
@@ -209,9 +202,7 @@ pub fn resolve(
                 list(&allowed)
             );
         }
-        notes
-    };
-    let mut notes = notes;
+    }
 
     // 4. 收集被选组件和产品本身对依赖线的约束。内置组件一定会加载（is_bundled），
     //    即便不在本次方案里，它的 PRODUCT_LINES / PRODUCT_DEP_LINES 也要参与约束，
@@ -568,10 +559,38 @@ mod tests {
     }
 
     #[test]
+    fn bundle_line_for_the_wrong_series_is_an_error() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        let metas = crate::recipe::load_meta(&dir, &catalog).unwrap();
+        let mut bundle = Bundle::load(&dir.join("bundles/php/7.4.toml")).unwrap();
+        bundle
+            .component_lines
+            .insert("xdebug".to_owned(), "3.5".to_owned());
+        let err = resolve(
+            &catalog,
+            &bundle,
+            &metas,
+            "php",
+            "7.4",
+            &[],
+            &EffectivePins::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("bundle 里 xdebug = 3.5 不支持产品 7.4"),
+            "{err}"
+        );
+        assert!(err.contains("3.1"), "{err}");
+    }
+
+    #[test]
     fn single_line_component_not_for_this_series_is_skipped() {
-        let (catalog, mut bundle, metas) = setup();
-        bundle.component_lines.remove("protobuf");
-        bundle.component_lines.remove("ssh2");
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        let metas = crate::recipe::load_meta(&dir, &catalog).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php/7.4.toml")).unwrap();
         let bindings = resolve(
             &catalog,
             &bundle,

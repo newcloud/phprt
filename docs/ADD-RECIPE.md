@@ -443,6 +443,7 @@ loading 时会直接拒绝下列写法，不会静默忽略：
 | tool recipe | 必须在 `catalog.toml` 有同名条目；只能 `tool_target(...)`；不能有 `needs`、产品 / 组件字段 |
 | toolchain | 至少声明 `gcc` / `gxx` 之一；档位不能重叠；`gcc` 只写 `cflags`、`gxx` 只写 `cxxflags` |
 | component | `product` / `modes` / 默认 mode 必须和产品 profile 对得上；bundled 必须出现在产品 `bundled` 里 |
+| bundle | 组件默认线必须在 `LINES[线].product` 里包含该系列，且线在 catalog 里；写错直接报错，不会自动改用唯一可用线 |
 | dep | 必须有 version / url；不能写产品 / 组件字段、`prepare`、`dep_configure` |
 | 产品系列 | 必须同时有 `products/<产品>/<系列>.star` 和 `bundles/<产品>/<系列>.toml`；catalog 系列集合要和 recipe 一致 |
 

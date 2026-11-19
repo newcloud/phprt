@@ -33,8 +33,8 @@ CLI 显式 > state.bindings > bundle 默认 > 单线组件自动
 3. 有自己版本线的组件（swoole / xdebug / redis / lua-nginx-module / …）校验
    `LINES[线].product` 包含当前产品系列。
    - 显式线不满足 → 报错。
-   - bundle 线不满足、且只有一条候选 → 自动改用并打印提示。
-   - 否则报错并列出候选。
+   - bundle 线不满足 → 报错并列出可用线，不再自动改用；错误会点名
+     `bundles/<产品>/<系列>.toml`，方便改正写错的默认线。
    - 只有一条 catalog 线的组件被自动绑定时不支持当前系列 → 直接跳过，
      该系列不加载这个组件（例如 protobuf 5.36 最低支持 PHP 8.2）；
      显式 `--component` 选中它时会报「不支持产品 <系列>」。
