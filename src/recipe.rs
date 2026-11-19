@@ -3214,18 +3214,12 @@ mod tests {
     }
 
     #[test]
-    fn soft_default_switches_to_the_only_compatible_line() {
-        let (_, bindings) = load("8.2", &["swoole"], &[("swoole", "4.8")]).unwrap();
-        assert_eq!(bindings.lines["swoole"], "4.8");
-        assert_eq!(bindings.lines["openssl"], "1.1.1");
-        assert!(
-            bindings
-                .notes
-                .iter()
-                .any(|note| note.contains("自动改用 1.1.1")),
-            "{:?}",
-            bindings.notes
-        );
+    fn bundle_dep_line_conflict_with_a_component_is_an_error() {
+        let err = load("8.2", &["swoole"], &[("swoole", "4.8")])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bundle 里 openssl = 3.5"), "{err}");
+        assert!(err.contains("1.1.1"), "{err}");
     }
 
     #[test]

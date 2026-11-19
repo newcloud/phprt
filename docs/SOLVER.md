@@ -97,8 +97,10 @@ dep 自身不参与产品兼容；它只是库。
 
 - 显式 pin 不在 `allowed` → 报错。
 - bundle 默认线在 `allowed` → 用它。
-- bundle 默认线不在、但 `allowed` 只有一个 → 自动改用并打印提示。
-- `allowed` 有多个或为空 → 报错，提示用 `--dep` 指定。
+- bundle 默认线不在 `allowed` → **报错**，不会自动换线；错误点名 bundle 文件和可用的线。
+- bundle 和 CLI 的线行为一致：写出来的线就是硬要求，冲突时都必须显式改。
+- 只有完全没有声明（bundle 没写、CLI 没给）且 `allowed` 恰好一条时才自动使用，
+  并打印提示；`allowed` 有多个或为空 → 报错，提示用 `--dep` 指定。
 
 例：
 
@@ -106,10 +108,11 @@ dep 自身不参与产品兼容；它只是库。
 php 8.2 bundle [deps]: openssl = 3.5
 --component swoole=version:4.8
 swoole 4.8 只允许 openssl 1.1.1
-→ openssl 自动改用 1.1.1，并打印提示
-```
+→ error: bundle 里 openssl = 3.5 与当前产品/组件选择冲突（可用：1.1.1）
 
-如果同时 `--dep openssl=3.5`，3.5 是显式 pin，直接报冲突。
+# 要换线必须显式写：
+phprt plan php@8.2 --component swoole=version:4.8 --dep openssl=1.1.1
+```
 
 ## 3. 取补丁
 

@@ -337,21 +337,15 @@ pub fn resolve(
                     list(&allowed)
                 );
             }
-            Some(choice) if choice.source == Source::Bundle && allowed.len() == 1 => {
-                let line = allowed.iter().next().expect("刚刚判断只有一个").clone();
-                notes.push(format!(
-                    "{dep} 的默认线 {} 与当前选择冲突，自动改用 {line}",
-                    choice.line
-                ));
-                choices.insert(
-                    dep.clone(),
-                    Choice {
-                        line,
-                        source: Source::Auto,
-                    },
-                );
-            }
             Some(choice) => {
+                if choice.source == Source::Bundle {
+                    bail!(
+                        "bundle 里 {dep} = {} 与当前产品/组件选择冲突（可用：{}）；\
+                         改正 bundles/{product}/{series}.toml，或用 --dep {dep}=<线> 显式指定",
+                        choice.line,
+                        list(&allowed)
+                    );
+                }
                 bail!(
                     "{dep} {} 与当前产品/组件选择冲突（可用：{}）",
                     choice.line,

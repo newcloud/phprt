@@ -105,6 +105,9 @@
 - 产品共享 profile 写在 `products/<产品>/_profile.star`，只定义 `PROFILE`；
   系列 recipe 用 `profile = PROFILE`，差异用 `extend_profile(PROFILE, ...)` 覆盖
   （tools 按名字合并、env 按 key 合并，其他字段传了才替换）。
+- bundle 的 `[deps]` 和 CLI 的 `--dep` 都是硬要求：与已选组件的版本线约束冲突时
+  直接报错，不会自动换线；要换必须显式写 `--dep`，并同步改 bundle，别让默认线
+  和组件选择长期不一致。
 - 新增 recipe 的硬校验（写错会直接加载失败，不静默忽略）：
   - `Target` 拒绝未知字段；旧的 `host_tools` 已删除，写了会报错；
   - `tools` 里不能写 `gcc` / `g++` / `gxx` / `cc` / `c++`，编译器只属于 `toolchain`；
