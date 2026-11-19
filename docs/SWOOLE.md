@@ -233,10 +233,11 @@ swoole = { features = ["sockets"] }
 ```
 
 `recipes/components/php/swoole.star` 的 `LINES["6.2"].product` 改成 `["8.4", "8.5"]`：PHP 8.6 不提供
-swoole（原因见 §4.4）。`bundles/php/8.6.toml` 里的 `swoole = "6.2"` 保留，这样
-`audit php@8.6 时的 --component swoole` 的报错是「swoole 6.2 不支持产品 8.6」；删掉这一行只会变成
-「请为扩展 swoole 指定版本线」，反而看不出原因。它只是默认线，不会让 swoole 在
-8.6 默认安装。
+swoole（原因见 §4.4）。`bundles/php/8.6.toml` 里的 `swoole = "6.2"` 也要一起删掉：bundle 的默认线
+会参与选线校验，留着会让 `list php@8.6` 直接报「swoole 6.2 不支持产品 8.6」。删掉后
+`add php@8.6 swoole` 会停在选线阶段：不写版本线会要求指定，指定 6.2 会报
+「swoole 6.2 不支持产品 8.6」，不会产出必失败的计划。swoole 本来就不在
+8.6 的默认组件里。
 
 - 只影响 `--component swoole` / `add php@8.5 swoole`，不会让 swoole 变成默认安装的扩展。
 - 8.0 走 5.1 线，8.1 ~ 8.3 走 6.0 线，8.4 / 8.5 走 6.2 线，三条线都有 `sockets` / `sqlite`。
@@ -268,10 +269,11 @@ recipe 只写构建方式。
 ### 4.4 8.6 不提供 swoole
 
 6.2.5 的 `ext-src/php_swoole_private.h` 在 `PHP_VERSION_ID >= 80600` 直接
-`#error "require PHP version 8.5 or earlier"`。做法是把 8.6 从 `LINES["6.2"]` 撤掉；
-`bundles/php/8.6.toml` 的 `swoole = "6.2"` 保留，让 `audit php@8.6 时的 --component swoole` 在选线阶段报
-「swoole 6.2 不支持产品 8.6」，而不是产出一个必失败的计划。等 6.3 有版本线时再把
-8.6 加回。
+`#error "require PHP version 8.5 or earlier"`。做法是把 8.6 从 `LINES["6.2"]` 撤掉，
+并删掉 `bundles/php/8.6.toml` 里的 `swoole = "6.2"`；否则 bundle 的默认线会在
+`list php@8.6` 这类操作里被校验并直接报错。删掉后显式选 swoole 会停在选线阶段
+（不写版本线会要求指定，指定 6.2 会报不支持产品 8.6），而不是产出一个必失败的计划。
+等 6.3 有版本线时再把 8.6 加回。
 
 ### 4.5 pdo_pgsql（PG 的方向）
 

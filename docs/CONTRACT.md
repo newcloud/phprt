@@ -275,7 +275,8 @@ TARGET = target
 
 - dep 的 `configure` 第一个元素是程序，其余是参数；CMake 依赖写
   `configure=["cmake", "-S", "{build}", ...]`，`make` 用
-  `cmake --build {build} --parallel` / `cmake --install {build}`。
+  `cmake --build {build}` / `cmake --install {build}`。不要在 recipe 里写 `--parallel`：
+  并发数由 `phprt.toml` 的 `parallel` / `--parallel` 通过 `CMAKE_BUILD_PARALLEL_LEVEL` 给。
 - `ignored` 是「看过但决定不暴露」的上游选项 -> 理由；`phprt audit` 会对照上游清单检查。
 
 ## 5. component
@@ -377,11 +378,41 @@ TARGET = product(
     },
     configure=["--prefix={tree}", "--with-config-file-scan-dir={tree}/etc/conf.d"],
     make=["make", "make install"],
-    artifacts=["bin/php"],
+    artifacts=[],
     profile=PROFILE,
+    targets=TARGETS,
     desc="PHP 8.5 本体",
 )
 ```
+
+`targets` 是产品构建目标声明，target 名 → 声明：
+
+```python
+TARGETS = {
+    "cli": {
+        "flags": ["--enable-cli"],
+        "disable_flags": ["--disable-cli"],
+        "artifacts": ["bin/php"],
+        "config": {},
+    },
+    "fpm": {
+        "flags": ["--enable-fpm"],
+        "disable_flags": [],
+        "artifacts": ["sbin/php-fpm"],
+        "config": {
+            "user": {"type": "string", "flags": "--with-fpm-user={value}"},
+        },
+    },
+}
+```
+
+- target 名和配置项名只允许字母、数字、`-`、`_`。
+- `type` 只支持 `string` / `list`；`flags` 必须包含 `{value}`。
+- 每个 target 可选 `artifacts` / `post_install` / `verify` / `verify_modules` /
+  `entry` / `entry_template`；产品声明了 targets 时由选中 target 提供，见
+  [TARGETS.md](TARGETS.md)。
+- 默认选择只在 bundle 的 `[targets] default`，recipe 不写默认 target。
+- target 声明写在各系列自己的文件里，不写进 `_profile.star`；版本差异直接在文件里覆盖。
 
 - 路径是 `products/<产品>/<系列>.star`；`series` 必须和文件名一致。
 - 同一产品的所有系列共用 `products/<产品>/_profile.star` 里的 `PROFILE`；
@@ -461,6 +492,8 @@ TARGET = product(
 | `post_install` | `product_profile(post_install=[...])` | 安装后整理：目录、文件、CA、组件 ini | 构建完成、收库之后，按声明顺序 | 固定原语，不执行任意 shell | 动作参数进 recipe 内容，间接进签名 |
 | `verify` / `verify_modules` | `product_profile(...)` | 安装后验证 | `post_install` 之后 | `{tree}` | 不进签名（只验证不重编） |
 | `entry` / `entry_template` | `product_profile(...)` | 项目入口 | 安装完成时 | `{series}` | 不进签名 |
+| `targets`（product） | `product(targets=...)` | 构建目标声明：flags / disable_flags / config / 可选产物与安装动作 | 产品 configure 和安装阶段 | target 名、配置名规范化为排序结构 | configure 参数和产物进签名；targets 文本进方案指纹 |
+| `targets`（bundle） | `[targets] default` | 该系列默认选哪些 target | 没有 CLI / state 选择时 | 只写 target 名 | 不直接进签名 |
 
 边界：执行器只负责「按顺序展开占位符并执行」；选什么参数、什么步骤、什么环境，
 由 PHP / nginx 等产品 recipe 自己声明。新增产品行为时先查这张表，
@@ -495,15 +528,17 @@ TARGET = product(
    `features.*.requires.dep` 的 key 也在 `needs` 里。`requires.commands` 每项非空；
    dep 的 feature 只允许 `commands` 条件。`ignored` 只能出现在 dep / component 上，
    key 是 `--...` 选项，理由非空。
-8. component 的 `modes` 必须在产品 profile 的 `modes` 里；默认 mode 也必须在 `modes` 里。
-9. product 的 `bundled` 无重复；`bundled_disable` 的 key 是其子集，值是单个
+8. product 的 `targets` 名字、配置项名、类型、`{value}` 模板必须合法；声明了 targets
+   时，cli / state / bundle 里的未知 target 或未知配置项都直接报错，不静默丢弃。
+9. component 的 `modes` 必须在产品 profile 的 `modes` 里；默认 mode 也必须在 `modes` 里。
+10. product 的 `bundled` 无重复；`bundled_disable` 的 key 是其子集，值是单个
    `--without-*` / `--disable-*`；profile 的 `modes` 非空、`strategy` 合法。
-10. catalog 的产品系列与 product recipe 集合一致。
-11. catalog 里每个组件都有同名 recipe；组件声明 `LINES` 时线集合必须一致。
-12. `LINES` 的每条线对组件必须有非空 `product` 数组；产品可以省略 `product`。
-13. dep recipe 不声明 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`。
-14. `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 只用于 component，引用的系列和线都在 catalog 里。
-15. 既不是当前产品 bundled、也没有 catalog 记录的 component recipe 不加载。
-16. `[component_presets]` 自己不能写 `ref`；`[default_components]` 的 `ref` 必须是
+11. catalog 的产品系列与 product recipe 集合一致。
+12. catalog 里每个组件都有同名 recipe；组件声明 `LINES` 时线集合必须一致。
+13. `LINES` 的每条线对组件必须有非空 `product` 数组；产品可以省略 `product`。
+14. dep recipe 不声明 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`。
+15. `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 只用于 component，引用的系列和线都在 catalog 里。
+16. 既不是当前产品 bundled、也没有 catalog 记录的 component recipe 不加载。
+17. `[component_presets]` 自己不能写 `ref`；`[default_components]` 的 `ref` 必须是
     `"component_presets.<同名组件>"`，指向存在的 preset，且不能和本地 `features`/`deps`
     同时写。

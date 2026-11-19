@@ -3,10 +3,10 @@
 `install` / `update` 在解压之后按构建顺序编译源码，产物安装到
 `.phprt/<产品>-<产品版本>/`（工具目录默认 `<项目根>/.phprt`，如 `/www/blog/.phprt`；
 名字可由 `phprt.toml` 的 `local_internal_dir` 或 `--internal-dir` 改，可绝对或相对），
-最后按产品 profile 做运行时整理和验证；全局模式（`--global --prefix <目录>`）直接装到 prefix，不生成项目入口。
+最后按产品 profile 和选中的构建目标做运行时整理和验证；全局模式（`--global --prefix <目录>`）直接装到 prefix，不生成项目入口。
 
-PHP 还会生成
-项目入口 `myphp-<系列>`。`--downloads` 在下载阶段结束，不进入本阶段。
+PHP 选中 `cli` target 时还会生成项目入口 `myphp-<系列>`；只选 `fpm` / `cgi` 时不生成。
+`--downloads` 在下载阶段结束，不进入本阶段。
 
 ## 1. 顺序
 
@@ -62,13 +62,22 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 | `LD_LIBRARY_PATH` | 产品 profile 的 `runtime.lib_dir`（非空时）和依赖的 `lib` / `lib64` |
 | `PATH` | `{tree}/bin`、工具 dep 的 `bin`，再接原有 PATH |
 | `CFLAGS` / `CXXFLAGS` | `-O2`，再接用户已有的值 |
-| `MAKEFLAGS` | `-j<nproc>` |
+| `MAKEFLAGS` | `-j<parallel>`，默认 CPU 数 - 1（最少 1），见 `phprt.toml` |
+| `CMAKE_BUILD_PARALLEL_LEVEL` | 同上的并发数，给 `cmake --build` 用 |
 | `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块），再接用户已有的值 |
 
 表格里“再接原有 PATH”“再接用户已有的值”只发生在执行时。宿主 `PATH` / `CPPFLAGS` /
 `LDFLAGS` / `CFLAGS` / `CXXFLAGS` / `PERL5LIB` 不参与签名，所以换 shell、上 CI、
 `.bashrc` 里多一条路径都不会让整棵树重编；反过来，改了这些值也不会自动触发重编，
 要重编用 `install --force` 或删 `build/`。
+
+`MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 同样只用于执行，不进签名：并行度是机器
+属性，改 `parallel`、加 `--parallel`、换一台核数不同的机器都不该让整棵树重编。
+`make -j1` 这类 recipe 里写死的参数仍然优先于 `MAKEFLAGS`（LuaJIT 就这么写）。
+
+并行度只有一个来源：`--parallel N`，或者 `phprt.toml` 的 `parallel`（CLI 优先，都没写用
+CPU 数 - 1）。phprt 把它写成 `MAKEFLAGS` 和 `CMAKE_BUILD_PARALLEL_LEVEL` 传给子进程，
+所以 **shell 里 `export MAKEFLAGS=4`、`export CMAKE_BUILD_PARALLEL_LEVEL=4` 都不生效**。
 
 产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX` / `PHP_AUTOCONF` /
 `PHP_AUTOHEADER`；8.0 / 7.4 的 `CFLAGS`）。`{tool:NAME}` 只在当前节点的 `tools` 含该工具
@@ -84,7 +93,7 @@ dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 
 - 节点 id、版本、源码 `url` / `sha256`、`host_tools`、挂载策略；
 - configure 程序和全部参数；
 - 组件 `prepare` / profile mode 的 steps / make 命令（按声明顺序）；
-- 注入的环境变量（只算工具生成的部分，见第 3 节）；
+- 注入的环境变量（只算工具生成的部分，见第 3 节；`MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 不算）；
 - 预期的产物路径；
 - `copy_from` 源码目录的内容指纹（相对路径 + 内容 hash，软链记目标）；
 - 依赖闭包里每个 dep 的名字、版本和它的构建签名。
@@ -117,10 +126,14 @@ dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 
    - nginx：`sbin/nginx` / `modules/*.so` → `$ORIGIN/../lib/phprt`。
 3. 按 profile 的 `post_install` 执行动作：`ensure_dir` / `write_file` /
    `copy_ca_bundle` / `write_component_ini`。PHP 的 `php.ini`、`00-ssl.ini`、CA 和
-   shared 组件 ini 都在这里生成；动作内容见 [PRODUCT.md](PRODUCT.md)。
-4. 运行 profile 的 `verify`；有 `verify_modules` 时再逐个校验组件的 `modules`。
-5. 按 profile 的 `entry` / `entry_template` 写项目入口。PHP 写 `myphp-<系列>`；
-   项目里只有一个 PHP 系列时再写 `myphp`。nginx 不生成入口。
+   shared 组件 ini 都在这里生成；动作内容见 [PRODUCT.md](PRODUCT.md)。产品声明了
+   targets 时，再按声明顺序执行选中 target 的 `post_install`。
+4. 运行校验：产品没有 targets 时用 profile 的 `verify`；有 targets 时逐个运行选中
+   target 的 `verify` / `verify_modules`。
+5. 写入入口：产品没有 targets 时按 profile 的 `entry` / `entry_template`；有 targets
+   时取选中 target 里声明了 `entry` 的那一个，多个同时声明则报错。PHP 的 `cli`
+   target 写 `myphp-<系列>`，项目里只有一个 PHP 系列时再写 `myphp`；只选 `fpm` 时
+   不生成项目入口。nginx 不生成入口。
 
 `myphp-<系列>` 会设置 `PHPRC`、`PHP_INI_SCAN_DIR`、`SSL_CERT_FILE`、`PATH` 和
 `extension_dir`，所以整棵树搬走后仍能用；入口里写死安装树目录，不需要

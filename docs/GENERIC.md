@@ -278,7 +278,7 @@ profile 字段的含义：
 | `register` | 组件装好后怎么让产品看见它：登记动作名，与 `post_install` 的 `write_component_ini(register=...)` 对应 |
 | `runtime` | 运行时库目录和 rpath 模板 |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 可以检查组件是否真的加载 |
-| `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件（如 `entry.sh`）；PHP 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；nginx 不生成，CPython 可以是 `python3.5` |
+| `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件（如 `entry.sh`）；PHP 的 `cli` target 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；有 targets 的产品把入口放在 target 里（见 [TARGETS.md](TARGETS.md)）；nginx 不生成，CPython 可以是 `python3.5` |
 | `env` | 产品专用环境变量；PHP 的 `PHP_AUTOCONF` 不再污染其他节点 |
 | `audit` | 选项清单来源：`php-config-m4` / `configure-help` / `none` |
 
@@ -459,7 +459,7 @@ recipes/ext/<名字>.star     → recipes/components/php/<名字>.star
 | 状态 | `.phprt/php-8.5/state.json` | `.phprt/<产品>-<系列>/state.json` |
 | 安装树 | `.phprt/php-8.5.12/` | `.phprt/<产品>-<版本>/` |
 | 当前链接 | `.phprt/current → php-8.5.12` | 不再有全局 `.phprt/current`；入口名带系列，避免隐式指向某个版本 |
-| 项目入口 | `myphp` | PHP 生成 `myphp-<系列>`；项目里只有一个 PHP 系列时再额外生成 `myphp` |
+| 项目入口 | `myphp` | PHP 选中 `cli` target 时生成 `myphp-<系列>`；项目里只有一个 PHP 系列时再额外生成 `myphp` |
 | 源码缓存 | `.phprt/downloads/` | 不变，所有产品共用 |
 | 解压目录 | `build/php/<stem>` | `build/<产品>/<stem>`；dep / component 仍按名字 |
 | 日志 | `build/logs/<kind>-<name>-<version>.log` | 不变 |
@@ -474,6 +474,7 @@ recipes/ext/<名字>.star     → recipes/components/php/<名字>.star
   "series": "8.5",
   "version": "8.5.12",
   "bindings": { "swoole": "6.2" },
+  "targets": { "cli": {} },
   "components": {
     "swoole": {
       "line": "6.2",
@@ -989,8 +990,8 @@ CPython 仍未实现，只保留为模型示例。
 - 把 `src/build.rs` 里的 PHP 后处理、`src/render.rs` 里的 shared 组件步骤、`audit.rs`
   的 `config.m4` 逻辑收进 PHP profile。
 - profile 只描述，不执行；主流程按 profile 生成 `Step`。
-- 目标：PHP 的构建树、rpath、ini 和验证结果按现有逻辑复现；入口按新规则生成
-  `myphp-<系列>`，只有单个 PHP 系列时额外生成 `myphp`。
+- 目标：PHP 的构建树、rpath、ini 和验证结果按现有逻辑复现；选中 `cli` target 时
+  入口按新规则生成 `myphp-<系列>`，只有单个 PHP 系列时额外生成 `myphp`。
 
 ### 第 3 步：契约改名
 
@@ -1090,8 +1091,10 @@ ls .phprt/downloads | sort | uniq -d   # 不应有重复文件名
 
 判定标准：
 
-- PHP 的 `plan` 节点、线、依赖顺序、configure 参数、产物、ini 和验证结果与设计前一致；
-  入口是 `myphp-8.5`，只有一个 PHP 系列时才额外生成 `myphp`。
+- PHP 的 `plan` 节点、线、依赖顺序、configure 参数（含选中 target 的 flags）、产物
+  （含选中 target 的 artifacts）、ini 和验证结果与设计前一致；选中 `cli` target 时
+  入口是 `myphp-8.5`，只有一个 PHP 系列时才额外生成 `myphp`；只选 `fpm` / `cgi`
+  时不生成入口。
 - nginx 的 `plan` 里 `dep:pcre2` / `dep:openssl` 在 `product:nginx` 之前；nginx 的
   configure 能看到 OpenSSL / PCRE2 的 include/lib；构建产物 `sbin/nginx` 存在。
 - nginx 的动态模块 `modules/ngx_http_lua_module.so` 存在，`nginx -V` 能看到

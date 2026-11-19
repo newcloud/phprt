@@ -81,6 +81,13 @@
   能用 configure 参数解决的事不要写 prepare；通用构建执行器不按文件名自动处理。
 - 默认启用集合写在 bundle 的 `[default_components]` 表：`mode` / `features` / `deps`，
   不允许 `version:`；有依赖的 bundled 组件必须一起写，不做依赖展开。
+- 产品构建目标（如 PHP 的 cli / fpm / cgi）用 `product(targets = {...})` 声明，
+  默认值写在 bundle 的 `[targets] default`。targets 必须逐系列写完整，不放进
+  `_profile.star`，也不做共享常量或 `extend_targets`；版本差异直接写在该系列文件。
+- `disable_flags` 只能写该版本上游真实支持的禁用参数；必须查 `configure --help` /
+  `configure.ac`，不能按 `--enable-*` 推断。没有就留空，未选中时不生成参数。
+- target 的 `config` 类型只支持 `string` / `list`，模板必须含 `{value}`；未知 target、
+  未知配置项、类型不匹配、重复项都必须报错，不静默忽略。
 - 组件被选中时的默认 feature 写在 `[component_presets]`；`[default_components]` 用
   `ref = "component_presets.<同名组件>"` 引用，写 ref 时不再重复 features/deps。
 - 新增或修改 component / dep recipe 时，必须按 `docs/FEATURES.md` 盘点上游选项：
@@ -103,6 +110,8 @@
   （cmake、nasm）写在该 dep / component 的 `host_tools`，不写死进 Rust。
   检查集合是产品 `tools` 与闭包内 `host_tools` 的并集，同名按最严的一条
   （有 min 优先，min 更高优先）。
+  Tool / Toolchain 的待实施方案见 `docs/TOOLS.md`（`tools` 统一、host-first、
+  同名工具多版本、gcc/g++ 归 `toolchain`）；实施前仍按本节规则。
 - 安装后行为写在产品 profile 的 `post_install`：`ensure_dir` / `write_file` /
   `copy_ca_bundle` / `write_component_ini`。不往 Rust 里加产品专用分支，也不使用
   任意 shell；需要改上游源码的命令仍写在组件的 `prepare`。组件 ini 的目录由

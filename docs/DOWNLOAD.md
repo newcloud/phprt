@@ -78,6 +78,9 @@ global_backup_dir = ""
 # GitHub 直连失败后是否改用镜像下载：enable / disable
 enable_github_proxy_download = "enable"
 
+# 编译并发数（make -j / cmake 并行度）；不写用 CPU 数 - 1，最少 1。不进构建签名。
+# parallel = 8
+
 # 镜像前缀，按顺序尝试，只对 https://github.com/ 生效。
 proxy_urls = [
     "https://gh-proxy.com/",
@@ -173,12 +176,13 @@ proxy_urls = [
 ```text
 源码缓存: .phprt/downloads
 并发: 10 个文件（每站点 2），单文件分片 4（≥8 MB 才启用）
-  [product] php 8.5.12             [██████████░░░░]  72%  10.1 MB / 13.9 MB  3.4 MB/s
-  [deps] openssl 3.5.9             ⠹ 1.2 MB
+  [product] php 8.5.12             [██████████████████░░░░░░░░░░]  72%  10.04 MiB/13.94 MiB  3.41 MiB/s
+  [deps] openssl 3.5.9             ⠹ 1.20 MiB
   [component] swoole 6.2.5         ⠸ 等待
 ```
 
-- 未知总长时显示转圈和已下载字节数。
+- 还没开始的行显示 `⠸ 等待`，不转圈。
+- 未知总长时显示转圈和已下载字节数，转圈靠 steady tick 推进，不靠数据到达。
 - 完成后固定成一行：`✓ 完成（13.9 MB）`；缓存命中显示 `✓ 已存在`。
 - 非 TTY、`TERM=dumb`、设置了 `NO_COLOR` 或 `--ui plain` 时，退回逐行日志。
 - `--ui` 同时控制解压阶段；解压按压缩包字节数显示进度。

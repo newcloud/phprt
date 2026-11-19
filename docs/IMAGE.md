@@ -33,67 +33,124 @@ CLI.md、BUILD.md、CONTRACT.md 和 DESIGN.md；本文与代码冲突时以代�
 后续出镜像完全离线。所以准确的说法是：**不需要 daemon 来构建镜像，但第一次要能
 访问那个镜像**。
 
-## 3. toolchain 是一条线
+## 3. 构建镜像是一条线
 
-builder 镜像不是写死的常量，而是和补丁号一样的数据：catalog 存、recipe 声明要求、
-bundle 给默认、state 记实际选择。产品 recipe 里永远不出现 `fedora:43`。
+镜像不是写死的常量，而是和补丁号一样的数据：catalog 存、recipe 声明要求、
+bundle 给默认、state 记实际选择。产品 recipe 里永远不出现 `debian:12`。
 
-### 3.1 catalog：`recipes/toolchains.toml`
+宿主构建不需要这一节；只有 `--image <线名>`（或 `build` 出镜像）时才用到。
+
+### 3.1 catalog：`recipes/images.toml`
 
 ```toml
 # 只登记验证过的镜像；digest 必须写，tag 会漂。
-[toolchains.fedora-43]
-image  = "registry.fedoraproject.org/fedora:43"
+[images.debian12]
+image = "docker.io/library/debian:12"
 digest = "sha256:..."
-libc   = "2.42"
-gcc    = "15.2"
+pm     = "apt"
+gcc    = "12.2"
+glibc  = "2.36"
 
-[toolchains.fedora-42]
-image  = "registry.fedoraproject.org/fedora:42"
+[images.fedora43]
+image = "registry.fedoraproject.org/fedora:43"
 digest = "sha256:..."
-libc   = "2.41"
-gcc    = "15.1"
+pm     = "dnf"
+gcc    = "15.3.1"
+glibc  = "2.42"
+
+[images.rocky8]
+image = "quay.io/rockylinux/rockylinux:8"
+digest = "sha256:..."
+pm     = "dnf"
+gcc    = "8.5"
+glibc  = "2.28"
+
+# 工具名 -> 发行版包名，按包管理器分组。只写需要在镜像里自动安装的工具；
+# 没写的名字认为基础镜像自带，装完由常规 tools 检查兜底。
+# ld 现在不由 toolchain 声明；如果某个 recipe 把 ld 写进 tools，就按这里装。
+[package_maps.apt]
+gcc        = "gcc"
+gxx        = "g++"
+ld         = "binutils"
+make       = "make"
+perl       = "perl"
+m4         = "m4"
+pkg-config = "pkg-config"
+patchelf   = "patchelf"
+autoconf   = "autoconf"
+
+[package_maps.dnf]
+gcc        = "gcc"
+gxx        = "gcc-c++"
+ld         = "binutils"
+make       = "make"
+perl       = "perl"
+m4         = "m4"
+pkg-config = "pkgconf"
+patchelf   = "patchelf"
+autoconf   = "autoconf"
 ```
 
-- 一个条目就是一条线，名字是 `fedora-43` 这种稳定标识，和补丁号分开。
+- 一个条目就是一条线，名字是 `debian12` / `fedora43` 这种稳定标识，和补丁号分开。
 - `digest` 必填。可复现、签名、探针缓存都按它索引。
-- 版本号**手写 + 首次使用时探针校验**。不一致就报错，不静默采信。
+- `gcc` / `glibc` **手写 + 首次使用时探针校验**，不一致就报错，不静默采信。
   理由：纯探针生成的话，加一条镜像必须联网拉镜像，`--offline` 就用不了；
   纯手写不校验的话，tag 漂了或写错了，错误会拖到编译中途才暴露。
-- 默认带 Fedora 的当前稳定版和前一到两条。先只做 Fedora：Debian 系的裁剪清单
-  （`dpkg -L`）和包名是另一套，跨家族要先把「包管理器」抽象出来，属于另一摊，
-  不和第一版混做。
-- 用户加版本 = 在这里加一段，需要时再改 bundle 的默认。首次使用会探针校验，
-  和手写值不一致就报错；加错、验不过由用户自己处理，仓库只对自带的条目负责。
+- **`gcc` 是唯一参与构建判断的版本**。`glibc` 只用于显示和运行下限提示，
+  选镜像时告诉用户「产物要求目标系统 glibc >= 这个值」，不参与构建是否可用的判断。
+- `pm` 只支持 `apt` / `dnf`；其它包管理器报错，不做通用抽象。
+- 旧条目保留规则同 catalog 补丁：升级某条线的 digest 时把旧条目留在文件里，
+  `--lock` 只从这里取。
+- 用户加镜像 = 在这里加一段并跑一次探针校验；加错、验不过由用户自己处理，
+  仓库只对自带的条目负责。
 
-### 3.2 产品声明：复用 `tools`，只补 `libc`
+`phprt list_oci_images` 打印这张表：
 
-构建工具的要求已经在产品 profile 里：
+```text
+$ phprt list_oci_images
+线名      镜像                                  GCC     glibc  包管理
+debian12  docker.io/library/debian:12          12.2    2.36   apt
+fedora43  registry.fedoraproject.org/fedora:43  15.3.1  2.42   dnf
+rocky8    quay.io/rockylinux/rockylinux:8      8.5     2.28   dnf
+```
+
+表下一行固定说明：**glibc 是产物能运行的最低 glibc，不参与构建判断。**
+
+### 3.2 产品声明：只声明 gcc / g++
+
+选镜像的硬条件只有 `toolchain` 里的 gcc / g++ 区间：
 
 ```python
+TOOLCHAIN = toolchain(
+    gcc = [
+        toolchain_range(min = "4.8", max = "13"),
+        toolchain_range(
+            min = "14",
+            cflags = "-std=gnu17 -Wno-error=incompatible-pointer-types",
+        ),
+    ],
+    gxx = [
+        toolchain_range(min = "4.8", max = "13"),
+        toolchain_range(min = "14"),
+    ],
+)
+
 tools = [
-    tool("gcc", min = "9"),
-    tool("g++", min = "9"),
     tool("make", min = "4.0"),
     tool("perl", min = "5.20"),
     tool("m4", min = "1.4"),
     tool("pkg-config", min = "0.29"),
+    tool("patchelf", min = "0.13"),
 ]
 ```
 
-选 builder 的条件就是这些 `min` 的并集，再加一项现在没有的。它和 `tools` 并列，
-写在 `product_profile(...)` 里：
-
-```python
-libc = ">= 2.39"
-```
-
-`libc` 的语义是**对 builder 的最低要求**，不是产物要跑在哪。不写表示不限制。
-第一版不承诺「产物能在老系统跑」——产物的 glibc 下限由所选 builder 决定，
-要老系统就显式选老线，跨发行版的兼容矩阵不在这一版。
-
-`tool()` 暂不加 `max`。如果实测 PHP 7.4 在新 gcc 上编不过，再加，并按
-[ADD-RECIPE.md](ADD-RECIPE.md) 的规矩写明原因。
+- gcc / g++（`gxx`）只写在 `toolchain`，不再写在 `tools`（见 [TOOLS.md](TOOLS.md)）。
+- **不声明 glibc**。glibc 与编译无关，只决定产物能不能在目标系统上跑；
+  它的值来自所选镜像的 catalog 条目，选镜像时展示给用户。
+- dep / component 默认不声明 gcc；确实有已知不兼容时再写一条收窄约束，
+  只求交、不带 flags（TOOLS.md §4.2）。
+- `toolchain_range` 只管 gcc / gxx；`tool()` 的 `max` 是给 autoconf 这类工具版本
+  用的，两者不混用。
 
 ### 3.3 bundle 默认
 
@@ -101,7 +158,7 @@ libc = ">= 2.39"
 
 ```toml
 [image]
-toolchain = "fedora-43"
+line = "fedora43"
 ```
 
 放在 `[image]` 表里，不占 bundle 顶层：顶层裸键已经用来写有独立版本线的组件，
@@ -112,53 +169,49 @@ toolchain = "fedora-43"
 安装成功后记录实际选择：
 
 ```json
-"toolchain": {
-  "line": "fedora-43",
-  "image": "registry.fedoraproject.org/fedora:43",
-  "digest": "sha256:..."
+"image": {
+  "line": "debian12",
+  "image": "docker.io/library/debian:12",
+  "digest": "sha256:...",
+  "gcc": "12.2",
+  "glibc": "2.36"
 }
 ```
 
 - 新增可选字段，旧 state 没有时按 bundle 默认处理，schema 版本不升。
-- 构建签名新增两项：toolchain 的 **digest** 和 `build_backend`。
-  用 digest 不用线名，因为同一行的 tag 会漂。
+- 构建签名新增两项：镜像的 **digest** 和 `build_backend`。
+  用 digest 不用线名，因为同一行的 tag 会漂；glibc 不单独进签名，digest 已经覆盖。
 - 影响：签名输入变了，已有安装树在升级后会判定签名变化并重编一次。
   这是必要的一次性成本，切换后端却不重编会拿到另一套 libc 编出来的产物。
-- `--lock` 复用 state 里的 toolchain digest。该 digest 在 catalog 里查不到时报错，
+- `--lock` 复用 state 里的镜像 digest。该 digest 在 catalog 里查不到时报错，
   不偷偷换回当前线，规则同 [LOCK.md](LOCK.md)。
 
 ### 3.5 求解与优先级
 
 和现有五层优先级一致：catalog < recipe < bundle < state < CLI。
 
-1. **默认**：bundle 的 `[image].toolchain`。
-2. **指定**：`--builder <值>`。一个参数，判定顺序是：
-   - 命中 `toolchains.toml` 的线名 → 用那条线；
-   - 否则当成镜像名，`inspect` 得到 digest 后走探针；
-   - 两边都不成立时报错，同时列出 catalog 候选和镜像获取失败的原因。
-3. **放开校验**：第 2 种不满足声明时加 `--force`。
+1. **默认**：宿主构建（`build_backend = "local"`），不选镜像。
+   `build_backend = "container"` 或给了 `--image` 时进入镜像模式。
+2. **指定**：`--image <线名>`。只查 `recipes/images.toml`；查不到就报错，
+   并提示 `phprt list_oci_images`。
+3. **`build` 出镜像**：没给 `--image` 就用 bundle 的 `[image].line`；
+   没有默认线时报错。
+4. **gcc 匹配**：产品声明了 `toolchain` 时，用镜像条目的 `gcc` 匹配区间：
+   - 匹配：继续，按选中档位合并 CFLAGS；
+   - 不匹配：报错，写清镜像 gcc、产品要求的区间，并列出 catalog 里满足的线。
 
-「否则当成镜像名」这条要写进 CLI 文档。代价是本地镜像如果起了个和线名一样的名字，
-会优先按线名解释；这种重名由用户避免，不额外加 `--builder-image` 之类的第二个参数。
+   产品没有 `toolchain` 声明时跳过这一条。
+5. **glibc 只提示**：
 
-第 2 种的后半段就是「用户已经装好配置好一个镜像，直接用这个名字」。处理流程：
+   ```text
+   镜像 debian12：gcc 12.2，glibc 2.36
+   产物要求运行系统 glibc >= 2.36
+   ```
 
-1. `inspect` 拿 digest（本地镜像用 image id）；
-2. 起容器探针：`gcc -dumpfullversion`、`ldd --version`、`cat /etc/os-release`；
-3. 按 digest 缓存到 `.phprt/toolchains/<digest>.json`，同一镜像不重复探；
-4. 拿实际版本和产品声明比对。
+   不阻塞、不需要 `--force`。用户选这个镜像就代表接受这个运行下限。
 
-**不满足时默认报错**，不静默继续。理由：静默跑下去会挂在链接阶段或运行阶段，
-错误信息和根因无关，比直接拒绝更难查。错误里写清哪条不满足、探针到的实际值：
-
-```text
-error: builder 镜像不满足 php@8.5 的要求
-  libc 要求 >= 2.39，镜像实测 2.28
-  （registry.internal/php-builder:1.2，digest sha256:...）
-  确认要继续请加 --force
-```
-
-`--force` 继续跑，后果由用户承担——这就是「用户自己处理」。
+第一版不做“拿任意镜像名直接构建”的兜底，也不做自动挑线；`--image` 只认 catalog
+里的线名。将来要自动选时，仍然用同一套 gcc 区间当筛选条件。
 
 ## 4. 容器化构建
 
@@ -188,14 +241,30 @@ container_runtime = "podman"      # 不写时自动探测 podman → docker
   root 拥有的文件，下一次本地构建就动不了。
 - `tools` 检查照旧在容器内执行。缺 gcc 就报缺 gcc，不跳过。
 
-### 4.3 builder 镜像内容
+### 4.3 builder 镜像内容：从 recipe 自动装依赖
 
-仓库维护一份固定的 builder 定义（发行版基础镜像 + 工具链包），**不从 `tools`
-自动推导包列表**。
+镜像本身只保证有基础系统；构建工具按 recipe 自动安装，不再维护一份固定的
+builder 包清单。
 
-理由：`tool("gcc", min="9")` 到发行版包名之间要一张映射表，这张表会随发行版
-改名、拆包、EOL 持续腐化；猜错的表现为构建到一半缺头文件，比「镜像里没装」
-更难查。固定维护 + 容器内继续做工具检查，错了立刻报错、报错里说清该补什么。
+1. **收集工具名**：`toolchain` 的 `gcc` / `gxx`，加上产品 profile 和各节点
+   `tools` 里的全部名字（make、perl、m4、pkg-config、patchelf、autoconf…）。
+   同名去重。
+2. **映射包名**：用镜像条目的 `pm` 选 `[package_maps.<pm>]`；没有映射的名字
+   认为基础镜像自带，不安装。
+3. **安装**：起容器后先执行一次
+   - apt：`apt-get update && apt-get install -y --no-install-recommends <包...>`
+   - dnf：`dnf install -y <包...>`
+4. **照常检查**：装完继续跑现有 `tools` 检查。**版本是否满足不由包管理器保证**：
+   发行版自带的版本可能低于 `tool.min`，这时按现有逻辑报错，用户换镜像或自己处理。
+   不自动降级/升级，也不猜包版本。
+
+- 第一版每次起容器安装一次；按「base digest + 包列表」缓存派生镜像属于后续优化，
+  不影响语义。
+- 包名映射会随发行版改名、拆包、EOL 腐化，这是数据问题：改
+  `recipes/images.toml`，不改 Rust。映射写错的表现为装不上或装完检查失败，
+  错误里带包名。
+- 镜像里没有对应包、也不自带某个工具：`tools` 检查会报缺什么；用户补映射
+  或换镜像，不静默跳过。
 
 ### 4.4 运行时依赖
 
@@ -216,7 +285,7 @@ error: build_backend = "container" 需要 podman 或 docker
 
 - 宿主和 builder 同发行版同代际：本地 `myphp` 照常用；
 - 宿主比 builder 旧：产物只当镜像素材，本地跑不了；
-- 要在旧宿主上跑：用和宿主同代或更旧的 `--builder`。
+- 要在旧宿主上跑：用和宿主同代或更旧的 `--image`。
 
 这条要写进 `build` 的说明和报错，否则用户会以为是构建坏了。
 
@@ -250,8 +319,9 @@ PROFILE = product_profile(
 
 几个产品的 entrypoint：
 
-- PHP CLI：`["{tree}/bin/php"]`，没有端口，不生成 compose；
-- PHP-FPM（将来加）：`["{tree}/sbin/php-fpm", "-F"]`，`ports = ["9000:9000"]`；
+- PHP CLI（选中 `cli` target）：`["{tree}/bin/php"]`，没有端口，不生成 compose；
+- PHP-FPM（选中 `fpm` target；镜像支持待实施）：`["{tree}/sbin/php-fpm", "-F"]`，
+  `ports = ["9000:9000"]`；
 - nginx：`["{tree}/sbin/nginx", "-p", "{tree}", "-c", "{tree}/etc/nginx.conf",
   "-g", "daemon off;"]`；
 - MySQL：`["{tree}/bin/mysqld"]`；
@@ -261,8 +331,8 @@ PROFILE = product_profile(
 一样），解释器由同一个 recipe 声明带进镜像。带不带 shell 是 recipe 的选择，
 工具不替它决定。
 
-注意区分两个「入口」：profile 的 `entry` / `entry_template` 是**宿主上的开发入口**
-（`myphp`），不进镜像；`image.entrypoint` 是镜像的入口。
+注意区分两个「入口」：产品 profile 或选中 target 的 `entry` / `entry_template` 是
+**宿主上的开发入口**（`myphp`），不进镜像；`image.entrypoint` 是镜像的入口。
 
 ### 5.2 配置：树内默认 + 镜像覆盖层
 
@@ -402,8 +472,8 @@ manifest 同时做三件事：决定镜像里放什么；校验（对每个 ELF 
 runtime base 比它旧，二进制直接起不来。
 
 所以默认路径是：**从同一个 builder 镜像裁 runtime base**，只留 glibc 家族、
-CA 证书、`/etc/passwd` 之类。裁剪清单向容器里的包管理器要一次（`rpm -ql glibc`），
-按 digest 缓存到 `.phprt/toolchains/<digest>.base/`，不手写文件列表；缓存之后
+CA 证书、`/etc/passwd` 之类。裁剪清单向容器里的包管理器要一次（`rpm -ql glibc` / `dpkg -L libc6`），
+按 digest 缓存到 `.phprt/images/<digest>.base/`，不手写文件列表；缓存之后
 出镜像不需要再访问镜像。
 
 不要另找小镜像：alpine 是 musl，distroless 的 glibc 版本和你的 builder 无关，
@@ -446,7 +516,7 @@ runtime base 因此可以不带 shell。
   descriptor 的 digest 按**压缩后**的 blob 算；
 - **外层 `image.tar` 不再压缩**：层已经压过，再压一层几乎不变小，只会让 `load`
   多一次解压；
-- 产物 digest、toolchain digest 写进镜像 config 的 label（`org.phprt.*`），
+- 产物 digest、镜像 digest 写进镜像 config 的 label（`org.phprt.*`），
   不往镜像里塞文件；
 - `--load` 才导入 docker / podman；默认只出 tar。
 
@@ -496,6 +566,11 @@ build 的终点不是「产出 tar」，是「用户马上能跑」。所以 bui
 - 声明了 `ports` → 生成 `compose.yml`；
 - 没有端口（PHP CLI）→ 不生成，只给 `docker run`。
 
+PHP 的 `image` 入口随构建目标（`--targets`）变化：只选 `cli` 时没有端口，不生成
+compose；选中 `fpm` 时入口是 `php-fpm`、声明 `ports = ["9000:9000"]`，才生成 compose。
+`image` 声明仍由产品 recipe 决定，Rust 只读最终的 `ports`，不在代码里判断产品名或
+target 名。
+
 理由是 PHP CLI 不是长期服务，硬塞 compose 进去，`up` 要么立刻退出，要么卡在
 交互式 REPL。等 php-fpm 加进来，它的 `image` 声明里有 `ports = ["9000:9000"]`，
 compose 自然就有了。
@@ -533,29 +608,37 @@ services:
 ## 7. 命令与输出
 
 ```bash
+phprt list_oci_images
 phprt build php@8.5
+phprt install php@8.4 --image debian12
 ```
 
+- `list_oci_images` 只读 `recipes/images.toml`，不联网、不拉镜像；输出见 §3.1。
+- `install --image <线名>` 用该镜像的容器做构建；镜像的 `gcc` 必须落在产品
+  `toolchain` 的区间里，`glibc` 只打印提示。
 - `build` 内部走完整安装流程：已装且签名一致就跳过编译，直接出镜像；
   所以没装过的机器上这一条命令就够。
-- 给了 `--builder` 就按 container 后端跑；没给就按 `phprt.toml` 的 `build_backend`。
-  显式指定镜像却继续用宿主工具链会让人误解，所以不做「静默忽略」。
-- `--builder`、`--force` 对 `install` 和 `build` 都生效（容器化构建对两者都适用）；
+- 给了 `--image` 就按 container 后端跑；没给就按 `phprt.toml` 的
+  `build_backend`。显式指定镜像却继续用宿主工具链会让人误解，所以不做「静默忽略」。
+- `--image`、`--force` 对 `install` 和 `build` 都生效（容器化构建对两者都适用）；
   `--runtime-base`、`--load`、`--tag` 只对 `build` 生效。
 - base 和 manifest 都命中缓存时，出镜像不需要网络，也不需要起容器。
 - 默认 tag 是 `<产品>:<补丁>`，例如 `php:8.5.12`；`--tag` 覆盖。
 - 不加 `phprt image` / `phprt export` / `phprt run` 之类的第二条命令。
 
-`plan --json` 新增 `image` 段：toolchain 的线和 digest、base 裁剪出的文件数、
-manifest、估算大小、入口、会不会生成 compose。agent 在真跑之前就能核对。
+`plan --json` 新增 `image` 段：镜像线、digest、gcc、glibc、自动安装的包列表、
+base 裁剪出的文件数、manifest、估算大小、入口、会不会生成 compose。
+agent 在真跑之前就能核对。
 
 ## 8. 失败模式
 
-- `--builder` 的值既不在 catalog 里、也拿不到镜像：报错，同时列 catalog 候选和镜像获取失败的原因。
-- catalog 里没有满足声明要求的线：报错，列出每条线缺哪一项。
-- catalog 声明和探针不一致：报错，提示 tag 可能漂了或条目写错。
-- 不满足产品声明：报错并给出实际值，加 `--force` 可继续（见第 3.5 节）。
-- 镜像里没有包管理器：报错要求 `--runtime-base`。
+- `--image` 的值不在 catalog 里：报错，并提示 `phprt list_oci_images`。
+- catalog 里没有满足产品 gcc 区间的线：报错，列出每条线的 gcc 和产品要求的区间。
+- catalog 声明和探针不一致（gcc / glibc）：报错，提示 tag 可能漂了或条目写错。
+- glibc 比目标系统新：**不报错**，只在选镜像和 `plan` 时提示运行下限。
+- 镜像里没有包管理器：`pm` 写错或镜像不对，报错。
+- 包映射缺失、包名写错：安装失败或装完 `tools` 检查报缺工具，错误里带包名；
+  用户补 `package_maps` 或换镜像。
 - runtime base 的 libc 比 builder 旧：报错。
 - manifest 校验缺 soname：报错，写清缺哪个、被谁需要。
 - 没有容器运行时：下载源码之前报错。
@@ -564,7 +647,7 @@ manifest、估算大小、入口、会不会生成 compose。agent 在真跑之�
 
 ## 9. 不变量
 
-1. 产品 recipe 不写镜像名、base、toolchain 线；只声明要求、入口和配置。
+1. 产品 recipe 不写镜像名、base、镜像线；只声明 gcc 要求、入口和配置。
 2. 镜像里不放 phprt、不放工具链、不放源码、不放头文件。
 3. 镜像 digest 只由输入决定，不由时间、宿主路径、umask 决定。
 4. 执行后端只换环境，不改语义；切后端必须重编（签名含 digest）。
@@ -572,6 +655,7 @@ manifest、估算大小、入口、会不会生成 compose。agent 在真跑之�
 6. 镜像文件集合由 manifest 决定，不由人肉列表决定。
 7. 镜像配置覆盖只作用于镜像，不改变宿主安装树。
 8. `compose.yml` 是生成物，不手写维护；重新 build 覆盖。
+9. glibc 不参与构建判断；它只说明产物的运行下限。
 
 ## 10. 不在范围
 
@@ -579,7 +663,7 @@ manifest、估算大小、入口、会不会生成 compose。agent 在真跑之�
 - 多架构、交叉编译（与 DESIGN.md 的非目标一致）；
 - 生成 Dockerfile；
 - 镜像分层缓存优化（先正确，层共享是后面的事）；
-- Debian / Ubuntu toolchain（要先做包管理器抽象）；
+- 派生 builder 镜像的缓存（第一版每次起容器装包，后续再优化）；
 - 「产物能在老系统跑」的兼容矩阵；
 - `cmd` / `stopsignal` / `healthcheck` 等镜像字段；
 - 非 root 运行和 `--read-only` 的属主处理；
@@ -591,11 +675,12 @@ manifest、估算大小、入口、会不会生成 compose。agent 在真跑之�
 
 每步独立验收，都不依赖下一步：
 
-1. **toolchain catalog + 声明 + 求解**。纯数据处理，不碰容器。验收：`php@8.5`
-   选到默认线、catalog 里的线都不满足声明时报错并列出缺项、`--builder` 的值
-   既不是线也不是镜像时报错并列两边原因。
-2. **执行后端 + 探针**。容器跑通一个产品，签名带上 digest。验收：产物和
-   `local` 后端都能跑，切后端触发重编。
+1. **image catalog + 声明 + 求解**。纯数据处理，不碰容器。验收：
+   `phprt list_oci_images` 输出表格、`php@8.5` 用默认线、catalog 里没有满足
+   gcc 区间的线时报错并列出缺项、`--image no-such-line` 报错并提示命令。
+2. **执行后端 + 探针 + 自动装包**。容器跑通一个产品，签名带上 digest。验收：
+   镜像里缺 make/perl 时自动装上，tools 检查通过；包版本低于 `min` 时按现有
+   逻辑报错；产物和 `local` 后端都能跑，切后端触发重编。
 3. **manifest + 配置覆盖 + 静态校验**。纯宿主侧。验收：缺文件时报错而不是生成
    坏镜像；`image.config` 只改镜像不改树。
 4. **OCI tar 输出**。验收：`podman load` 后能跑，两次构建字节一致，层是 gzip。
@@ -610,22 +695,22 @@ manifest、估算大小、入口、会不会生成 compose。agent 在真跑之�
 
 | 文件 | 改动 |
 | --- | --- |
-| `recipes/toolchains.toml` | 新增：toolchain catalog（第 3.1 节） |
-| `src/toolchain.rs` | 新增：读 catalog、求解、探针结果缓存 |
+| `recipes/images.toml` | 新增：镜像 catalog + `[package_maps.apt]` / `[package_maps.dnf]`（第 3.1 节） |
+| `src/toolchain.rs` | 新增：读镜像 catalog、按 gcc 区间选线、探针结果缓存 |
 | `src/config.rs` | `build_backend` / `container_runtime`，校验文案对齐 `rpath_backend` |
-| `src/state.rs` | `toolchain` 可选字段 |
-| `src/build.rs` | 签名加入 toolchain digest 与后端；命令执行走执行后端 |
+| `src/state.rs` | `image` 可选字段 |
+| `src/build.rs` | 签名加入镜像 digest 与后端；命令执行走执行后端 |
 | `crates/build/` | 加 `exec` 模块：`Local` / `Container` 两个执行后端 |
 | `crates/image/` | 新增：manifest、ELF `NEEDED` 解析、base 裁剪、gzip 层、OCI 写出 |
 | `src/image.rs` | 新增：从 profile 的 `image` 声明生成 OCI config 和文件覆盖 |
 | `src/compose.rs` | 新增：按 `ports` 生成 `compose.yml` 和运行提示 |
-| `src/main.rs` | `build` 子命令、`--builder` / `--runtime-base` / `--load` / `--tag` |
+| `src/main.rs` | `build` 子命令、`list_oci_images` 子命令、`--image` / `--runtime-base` / `--load` / `--tag` |
 | `src/render.rs` | `plan --json` 的 `image` 段 |
-| `recipes/products/*/_profile.star` | `libc`、`image(...)` |
+| `recipes/products/*/_profile.star` | `toolchain(...)`、`image(...)`（不再写 `libc`） |
 | `recipes/products/*/*.image.conf` / `*.ini` | 镜像配置模板（5.2） |
-| `recipes/bundles/*/<系列>.toml` | `[image].toolchain` |
+| `recipes/bundles/*/<系列>.toml` | `[image].line` |
 | `Cargo.toml` | `oci-spec`、`tar`、`flate2`、`sha2` |
-| 文档 | 本文；DESIGN.md §14；CLI.md 的 `build`、`--builder`、退出码；BUILD.md 加「构建环境」一节；CONTRACT.md 的 profile 字段与 bundle `[image]`；README「目标」一节改成已实现 |
+| 文档 | 本文；DESIGN.md §14；CLI.md 的 `build`、`list_oci_images`、`--image`、退出码；BUILD.md 加「构建环境」一节；CONTRACT.md 的 `toolchain` / `image` 字段与 bundle `[image].line`；PRODUCT.md 的 toolchain 说明；README「目标」一节改成已实现 |
 
 ## 13. 验收（实施后）
 
@@ -668,11 +753,16 @@ curl -fsS http://127.0.0.1:8081/ >/dev/null
 podman logs phprt-nginx | grep -q 'GET /'
 podman stop phprt-nginx
 
-# toolchain 选择
-cargo run -- build php@8.5 --builder fedora-42
-cargo run -- build php@8.5 --builder no-such-line      # 报错：既不是线，也不是能获取的镜像
-cargo run -- build php@8.5 --builder registry.example/php-builder:1.0
-cargo run -- build php@8.5 --builder registry.example/php-builder:1.0 --force
+# 镜像目录
+cargo run -- list_oci_images
+
+# 镜像选择
+cargo run -- build php@8.5 --image fedora43
+cargo run -- install php@7.4 --image debian12    # gcc 12.2 落在 4.8..13 档
+cargo run -- install php@7.4 --image fedora43    # gcc 15.3.1 落在 >=14 档
+cargo run -- build php@8.5 --image no-such-line  # 报错：不在 catalog，提示 list_oci_images
+# 临时把 7.4 的 toolchain 改成 gcc >= 16，再试：
+cargo run -- install php@7.4 --image fedora43    # 报错：gcc 15.3.1 不满足 >=16，列出满足的线
 
 # 计划可校验
 cargo run -- plan php@8.5 --json | jq .image
@@ -688,5 +778,6 @@ cargo run -- install php@8.5
   非目标以主文档为准。
 - [BUILD.md](BUILD.md) 讲现有构建；容器化只是换执行环境，顺序和签名规则不变。
 - [RPATH.md](RPATH.md) 的 `$ORIGIN` 相对 rpath 是镜像里整树平移、不进 bash 算路径的前提。
-- [CONTRACT.md](CONTRACT.md) 的 profile 字段表要加 `libc`、`image`；
-  bundle 要加 `[image]` 表。
+- [CONTRACT.md](CONTRACT.md) 的 profile 字段表要加 `toolchain`、`image`；
+  bundle 要加 `[image].line`。
+- [TOOLS.md](TOOLS.md) 定义 `toolchain` 只声明 gcc / g++，以及 recipe 级约束的规则。

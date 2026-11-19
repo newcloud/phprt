@@ -167,8 +167,12 @@ profile 里的那一条。
 `PHP_AUTOCONF` 只进 phpize 类组件，nginx 不会拿到 PHP 专用变量。`runtime.lib_dir`
 同时作为构建时 `LD_LIBRARY_PATH` 的首项和运行时收库目录。
 
+Tool 迁移后 `PHP_AUTOCONF` / `PHP_AUTOHEADER` 删除：phpize 直接从 PATH 找
+`autoconf` / `autoheader`，工具 bin 由执行器按节点前置（见 [TOOLS.md](TOOLS.md) §3.4）。
+
 最低版本只用于“明显编不了”的检查；编译器太新带来的行为变化（例如 GCC 15 默认
-`gnu23`）必须由系列 recipe 的 `env` / `configure` 显式处理，不能根据版本号自动推导。
+`gnu23`）必须由 recipe 显式处理，不能根据版本号自动推导。当前写法是系列 recipe 的
+`env` / `configure`；toolchain 实施后改由 §4.3 的档位声明。
 
 ## 4. 工具声明
 
@@ -245,6 +249,62 @@ dep(
 
 被选中 feature 的 `requires.commands` 由选择阶段检查，不进入这个集合。
 
+## 4.3 编译器版本与 toolchain（待实施）
+
+代码尚未实现；完整机制见 [TOOLS.md](TOOLS.md) 第 4 节。实施前 gcc / g++ 仍写在
+`profile.tools`，实施后从 `tools` 删除，只保留在 `toolchain`。
+
+产品在系列 recipe 里声明编译器区间和兼容参数档位：
+
+```python
+TOOLCHAIN = toolchain(
+    gcc = [
+        toolchain_range(min = "4.8", max = "13"),
+        toolchain_range(
+            min = "14",
+            cflags = "-std=gnu17 -Wno-error=incompatible-pointer-types",
+        ),
+    ],
+    gxx = [
+        toolchain_range(min = "4.8", max = "13"),
+        toolchain_range(min = "14"),
+    ],
+)
+
+TARGET = product(
+    ...,
+    toolchain = TOOLCHAIN,
+)
+```
+
+- 只声明 `gcc` / `gxx`；**不声明 glibc / ld / binutils**。它们跟随 gcc 所在的
+  系统或镜像，只影响产物能否在目标系统运行。
+- 宿主构建：探测实际编译器（`env.CC` / `CXX`，缺省 gcc / g++），不满足区间就报错；
+  不下载、不安装、不回退。
+- 镜像构建：用镜像 catalog 里的 `gcc` 匹配同一套区间；`glibc` 只提示运行下限，
+  不参与构建判断。详见 [IMAGE.md](IMAGE.md)。
+- 编译器太新带来的 flags 只写在档位里，Rust 不按版本号推导。
+- dep / component 默认不写 gcc；确实有已知不兼容时写一条只收窄的约束，
+  只求交、不带 flags。
+
+## 4.4 构建目标（targets）
+
+产品可以在系列 recipe 的 `product(targets = ...)` 里声明构建目标，例如 PHP 的
+`cli` / `fpm` / `cgi`。声明写在各系列自己的文件里，不写进 `_profile.star`；版本差异
+直接在该系列覆盖。
+
+产品声明了 targets 时，以下字段由选中的 target 提供，profile 里的同名字段只作为
+没有 targets 时的普通路径：
+
+| 内容 | 来源 |
+| --- | --- |
+| artifacts | 产品 `artifacts` + 选中 target 的 `artifacts` |
+| post_install | profile 的 `post_install` + 选中 target 的 `post_install` |
+| verify / verify_modules | 每个选中 target 的 `verify` / `verify_modules` |
+| entry / entry_template | 选中 target 里声明了 `entry` 的那一个 |
+
+多个选中 target 同时声明 `entry` 时构建报错。完整规则见 [TARGETS.md](TARGETS.md)。
+
 ## 5. 安装后动作
 
 `post_install` 是动作列表，只允许以下四类：
@@ -298,6 +358,9 @@ backup = backup(
   或 `--backup-dir` 整体覆盖（可绝对或相对）。
 
 ## 6. 入口模板
+
+没有 targets 的产品由 profile 声明；有 targets 的产品把
+`entry` / `entry_template` 写在选中的 target 里（见 [TARGETS.md](TARGETS.md)）。
 
 产品 profile 声明：
 

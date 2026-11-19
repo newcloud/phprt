@@ -103,9 +103,9 @@ patchelf 是多年生产验证的工具。保留双后端 = 风险对冲：默�
 
 GreatSQL 的做法：下载固定版本 patchelf 源码包，在编译环境里自己
 `configure && make && make install`，不依赖系统包。对我们而言这能把
-「patchelf 后端」从「要求宿主机已安装」升级为「phprt 自带构建」，但要新
-建第一条「宿主机工具源码构建」管线（现有 tools / host_tools 模型只管检查
-宿主机命令，不管构建），还要接 downloads/ 缓存、sha256 校验、多架构编译。
+「patchelf 后端」从「要求宿主机已安装」升级为「phprt 自带构建」。工具源码
+构建管线已由 [TOOLS.md](TOOLS.md) 设计（待实施），但 patchelf 的源码 recipe
+不在那次的第一个真实用户里；还要接 downloads/ 缓存、sha256 校验、多架构编译。
 当前双后端已覆盖风险（oxipatch 默认 + 系统 patchelf 可选回退），方案 C 只
 在「oxipatch 出现修不好的边界问题且宿主机不允许装 patchelf」时才有价值，
 属于投机性管线，不建；真需要时它是同一个 `set_rpath` 接口下的第三个

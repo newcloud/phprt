@@ -14,6 +14,7 @@ phprt [-c <配置>] [--recipes <目录>] [--root <目录>] [--global --prefix <�
 | `--build-dir` | 无 | 覆盖 `local_build_dir`（本地）/ `global_build_dir`（全局）；可绝对或相对 |
 | `--backup-dir` | 无 | 覆盖 `local_backup_dir`（本地）/ `global_backup_dir`（全局）；可绝对或相对 |
 | `--download-dir` | 无 | 覆盖 `phprt.toml` 的 `download_dir`；两种模式都可用 |
+| `--parallel` | CPU 数 - 1 | 编译并发数（`make -j` / cmake 并行度）；覆盖 `phprt.toml` 的 `parallel`。所有子命令都接受。shell 里 export 的 `MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 不起作用 |
 | `--global` | 关 | 全局模式：产品直接装到 `--prefix`，不生成项目安装树和入口 |
 | `--prefix` | 无 | 全局模式的安装目录；`--global` 时必填，如 `/usr/local/php` |
 
@@ -47,14 +48,20 @@ local_backup_dir = ""
 global_build_dir = ""
 global_backup_dir = ""
 
+# ---- 编译 ----
+# 编译并发数（make -j / cmake 并行度）；不写用 CPU 数 - 1，最少 1。--parallel 优先。
+# parallel = 8
+
 # 下载镜像，见 DOWNLOAD.md。
 enable_github_proxy_download = "enable"
 proxy_urls = ["https://gh-proxy.com/"]
 ```
 
+并发数不进构建签名：改配置、加 `--parallel`、换一台核数不同的机器，都不会触发重编。
+
 优先级：命令行参数 > `phprt.toml` > 默认值。对应关系：
 `--recipes`/`recipes`、`--internal-dir`/`local_internal_dir`、`--build-dir`/`local_build_dir`、
-`--download-dir`/`download_dir`、`--backup-dir`/`local_backup_dir`；
+`--download-dir`/`download_dir`、`--backup-dir`/`local_backup_dir`、`--parallel`/`parallel`；
 全局模式对应 `--build-dir`/`global_build_dir`、`--backup-dir`/`global_backup_dir`。本地模式的相对路径按项目根解析；
 全局模式的相对路径按 `$HOME` 解析。
 
@@ -63,8 +70,11 @@ proxy_urls = ["https://gh-proxy.com/"]
 把产品装到项目外的目录（如 `/opt`），状态和完成标记放在 prefix 里；不生成项目入口：
 
 ```bash
-phprt --global --prefix /usr/local/php install php@8.5
+phprt --global --prefix /usr/local/php install php@8.5 --targets="cli"
 /usr/local/php/bin/php -v
+
+phprt --global --prefix /usr/local/php install php@8.5 --targets="cli,fpm"
+/usr/local/php/sbin/php-fpm -v
 
 phprt --global --prefix /usr/local/php add    php@8.5 swoole
 phprt --global --prefix /usr/local/php remove php@8.5 swoole
@@ -125,16 +135,21 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `add <产品>@<系列> <组件> [--force] [--lock]` | 把组件加入方案并立即增量构建 | 是 |
 | `remove <产品>@<系列> <组件> [--force] [--lock]` | 移出方案并删掉产物；静态组件重编 | 是 |
 | `audit <产品>@<系列> [--json]` | 对照上游选项清单检查 recipe 的处置 | 否 |
+| `list_oci_images` | 打印镜像 catalog：线名、镜像、GCC、glibc、包管理器（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
+| `build <产品>@<系列> [--image <线名>]` | 构建并输出 OCI 镜像（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
 
-`install` / `update` / `plan` 另外支持：
+`install` / `update` / `plan` / `build` 另外支持：
 
 | 参数 | 说明 |
 | --- | --- |
 | `--component <SPEC>` | 本次临时选择组件；可重复。不写进状态 |
 | `--dep <NAME=LINE>` | 绑定依赖库版本线；可重复 |
 | `--disable-default-component <NAME>` | 禁用该产品系列的默认组件；可重复 |
+| `--targets <SPEC>` | 产品构建目标；如 `cli`、`cli,fpm=user:www-data,group:www-data`。见 [TARGETS.md](TARGETS.md) |
+| `--image <线名>` | 用镜像 catalog 里的镜像做容器构建（待实施，见 [IMAGE.md](IMAGE.md)）；`install` / `build` / `plan` |
 
 持久化组件方案用 `add` / `remove`；`install --component` 只影响这一次构建。
+`--targets` 在 `install` / `update` / `plan` 上接收；`add` / `remove` 沿用 state 里的选择。
 
 `install` / `plan` / `add` / `remove` 还支持 `--lock`：按 state 记录的实际补丁解析当前方案，
 只锁当前闭包里的节点，不写状态。CLI 显式选择会整体覆盖版本线 + 补丁；`update` 不接受
@@ -199,6 +214,18 @@ phprt install php@8.5 --component 'openssl=feature:[argon2]'
 phprt add nginx@1.29 lua-nginx-module
 phprt install nginx@1.29
 ```
+
+## 构建目标
+
+```bash
+phprt install php@8.5 --targets="cli"
+phprt install php@8.5 --targets="cli,fpm=user:www-data,group:www-data"
+phprt plan php@8.5 --targets="fpm"
+```
+
+优先级：CLI `--targets` > `state.targets` > bundle 的 `[targets] default`。
+语法复用 `--component` 的逗号/`[...]` 切分规则；target 名、配置项名排序后参与构建身份。
+细节见 [TARGETS.md](TARGETS.md)。
 
 ## 构建方案
 
@@ -336,7 +363,7 @@ $ phprt add php@8.5 xdebug --force        # 手改过 30-xdebug.ini
 $ phprt install php@8.4.14
 error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案一致
   要重新安装，任选其一：
-    phprt install php@8.4.14 --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
+    phprt install php@8.4.14 --targets 'cli' --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
     rm -rf .phprt/php-8.4.14             # 确认不再需要这个版本，删掉后再装
 ```
 
@@ -357,10 +384,10 @@ error: php 8.4.12 已安装（.phprt/php-8.4.12），编译配置一致，但解
 ```text
 $ phprt install php@8.4 'swoole=mode:shared,xdebug=mode:shared'
 error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案不一致
-  已装方案: phprt install php@8.4 'swoole=mode:shared'
-  本次方案: phprt install php@8.4 'swoole=mode:shared,xdebug=mode:shared'
+  已装方案: phprt install php@8.4 'swoole=mode:shared' --targets 'cli'
+  本次方案: phprt install php@8.4 'swoole=mode:shared,xdebug=mode:shared' --targets 'cli'
   要重新安装，任选其一：
-    phprt install php@8.4.14 --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
+    phprt install php@8.4.14 --targets 'cli' --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
     rm -rf .phprt/php-8.4.14             # 确认不再需要这个版本，删掉后再装
 ```
 
@@ -378,21 +405,22 @@ error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案
 
 ```text
 $ phprt scheme php@8.5
-phprt install php@8.5 'curl=mode:static,dep:libcurl[ssl],gd=mode:static,feature:[jpeg],swoole=mode:shared,xdebug=mode:shared'
+phprt install php@8.5 'curl=mode:static,dep:libcurl[ssl],gd=mode:static,feature:[jpeg],swoole=mode:shared,xdebug=mode:shared' --targets 'cli'
 ```
 
 导出内容：
 
 - 完整组件列表（含当时生效的默认组件）；
 - 每个组件的 `mode`、自己的 `feature`、依赖转授、用户钉的版本线；
+- 有效构建目标，写成 `--targets '...'`；产品没有 targets 时不写；
 - 用户用 `--dep` 钉的依赖线，写成命令行上的 `--dep NAME=LINE`；
-- **不含**补丁号、解析出的依赖线交集、feature 并集、configure 参数；要连补丁一起复制用
-  `scheme --lock`。
+- **不含**补丁号、解析出的依赖线交集、feature 并集、展开后的 configure 参数
+  （targets 只导出选择，不展开 flags）；要连补丁一起复制用 `scheme --lock`。
 
-导入就是 `install` 的第二个位置参数：
+导入就是 `install` 的第二个位置参数，并带同样的 `--targets`：
 
 ```bash
-phprt install php@8.5 'curl=mode:static,swoole=mode:shared,xdebug=mode:shared'
+phprt install php@8.5 'curl=mode:static,swoole=mode:shared,xdebug=mode:shared' --targets 'cli'
 ```
 
 - 列表是**完整方案**：直接替换，不与 bundle 默认集合并。
@@ -401,6 +429,7 @@ phprt install php@8.5 'curl=mode:static,swoole=mode:shared,xdebug=mode:shared'
   （`当前没有构建过 php 8.2`），不会凭空展示默认集。
 - 同一份列表在别的机器上得到相同方案；补丁跟随 catalog。
 - 方案列表不能和 `--component` / `--disable-default-component` 一起用。
+- 方案列表可以带 `--targets`，和导出的命令一致。
 - 空列表 `''` 表示一个组件都不选。
 - 粘贴执行后如果和已装树一致，会按「重复安装与中断」拒绝并说明配置一致。
 
@@ -411,10 +440,11 @@ phprt scheme php@8.5 --lock
 ```
 
 ```text
-phprt install php@8.5.12 'curl=mode:static,dep:libcurl[ssl],swoole=mode:shared,version:6.2.5' --dep libcurl=8.23.0 --dep openssl=3.5.9
+phprt install php@8.5.12 'curl=mode:static,dep:libcurl[ssl],swoole=mode:shared,version:6.2.5' --targets 'cli' --dep libcurl=8.23.0 --dep openssl=3.5.9
 ```
 
 - 目标写成 `产品@补丁`；
+- 构建目标写成 `--targets '...'`；
 - 有自己版本线的外部组件写 `version:<补丁>`，bundled 组件不写；
 - 依赖库写 `--dep NAME=<补丁>`；
 - 只导出当前闭包里的节点，已删除组件的历史依赖不写进命令；
@@ -472,19 +502,42 @@ phprt install nginx@1.29 --downloads --offline
 解压之后按构建顺序编译，日志在 `<root>/build/logs/`：
 
 ```bash
-phprt install php@8.5
+phprt install php@8.5 --targets="cli"
 ./myphp-8.5 -v
 
+phprt install php@8.5 --targets="cli,fpm"
 phprt install php@8.5 --component swoole
 phprt install nginx@1.29
 ```
 
 - 每个节点按签名跳过；签名变化先 `make distclean`。
 - 依赖库收进 `.phprt/<产品>-<版本>/lib/phprt`，用 `$ORIGIN` rpath。
-- PHP 成功后写项目根 `myphp-<系列>`；项目里只有一个 PHP 系列时再写 `myphp`。
-  nginx 不生成入口。
+- PHP 选中 `cli` target 后写项目根 `myphp-<系列>`；项目里只有一个 PHP 系列时再写
+  `myphp`。只选 `fpm` / `cgi` 时不生成入口；nginx 不生成入口。
 - 需要系统 gcc / g++ / make / binutils / pkg-config / patchelf / m4 / perl；
-  autoconf 和缺的纯 Perl 模块由 phprt 自己准备。
+  autoconf 和缺的纯 Perl 模块由 phprt 自己准备。镜像构建时这些工具按
+  [IMAGE.md](IMAGE.md) 的包名映射在容器里自动安装。
+
+## 镜像（待实施）
+
+镜像 catalog、执行后端和 OCI 产出的完整方案见 [IMAGE.md](IMAGE.md)。命令只加两个：
+
+```bash
+phprt list_oci_images
+phprt install php@8.4 --image debian12
+phprt build php@8.5 --image fedora43
+```
+
+- `list_oci_images` 读 `recipes/images.toml`，打印线名、镜像、GCC、glibc、包管理器；
+  不联网、不拉镜像。
+- `--image <线名>` 只接受 catalog 里的线名；查不到时报错并提示 `list_oci_images`。
+- 产品声明了 `toolchain` 时，镜像条目的 `gcc` 必须落在声明的区间内；不满足直接报错，
+  并列出 catalog 里满足的线。产品没有 `toolchain` 时跳过这一条。
+- `glibc` 只打印“产物要求运行系统 glibc >= X”的提示，不做构建判断。
+- 镜像里缺的 make / perl / patchelf 等按 `[package_maps.<pm>]` 自动安装；装完照常
+  做工具版本检查，版本不满足按现有规则报错，交给用户换镜像或自己处理。
+- `--image` 对 `install` 和 `build` 都生效；`plan --json` 的 `image` 段给出线、
+  digest、gcc、glibc 和将要安装的包。
 
 ## audit
 

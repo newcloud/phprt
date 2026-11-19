@@ -59,10 +59,15 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 | --- | --- | --- |
 | catalog | `recipes/catalog.toml` | 这条线当前是哪个补丁、从哪下载 |
 | recipe | `recipes/products/**`、`components/**`、`dep/**` | 怎么编译、允许哪些线、需要哪些依赖 |
-| bundle | `recipes/bundles/<产品>/<系列>.toml` | 默认用哪条线、默认装哪些组件 |
+| bundle | `recipes/bundles/<产品>/<系列>.toml` | 默认用哪条线、默认装哪些组件、默认选哪些 target |
 | state | `.phprt/<产品>-<系列>/state.json`（工具目录在项目根下，默认 `.phprt`，可配置） | 本机这次实际选了什么、装到哪一步 |
 
 优先级从低到高：catalog < recipe < bundle < state < CLI。
+
+Tool / Toolchain 不新增层：Tool 的 recipe 在 `recipes/tools/`、源码版本仍走
+`catalog.toml`；Toolchain 是产品 recipe 的字段。镜像线单独放在
+`recipes/images.toml`，只服务镜像模式，不改变这四层，见 [TOOLS.md](TOOLS.md) 和
+[IMAGE.md](IMAGE.md)（均待实施）。
 
 ## 4. 三个核心概念
 
@@ -97,23 +102,52 @@ libcurl = 8.23
 
 绑定不写进 recipe；安装成功后把用户显式指定的部分写进 `state.bindings`。
 
+### 4.4 构建目标（targets）
+
+线 / 补丁决定“用哪个版本”，feature 决定“组件内部怎么编”，targets 决定“产品本次生成
+哪些目标”：
+
+```text
+PHP:   cli / fpm / cgi
+```
+
+- target 名、configure 参数、产物和可选配置项由产品系列自己的 recipe 声明；
+  Rust 不硬编码产品名或 target 名。
+- 默认选择只在 bundle 的 `[targets] default`；产品 recipe 不写默认值。
+- 实际选择按 `CLI --targets > state.targets > bundle 默认值` 决定；三者都没有时
+  报错，不擅自挑一个。
+- 选中的 target 应用 `flags` 和 `artifacts`，允许自己的 `config`；未选中的 target
+  应用 `disable_flags`，不接受配置。
+- 目标声明逐系列写完整，不放进 `_profile.star`，也不做共享常量；版本差异直接暴露在
+  对应系列文件里。
+- targets 参与 state、scheme、方案指纹和 plan 输出，规则见 [TARGETS.md](TARGETS.md)。
+
 ## 5. 求解流程
 
 ### 5.1 确定产品和系列
 
 ```bash
-phprt install php@8.5
+phprt install php@8.5 --targets="cli"
 ```
 
 产品、系列都来自命令行的唯一目标。没有默认产品，也没有“当前产品”。
+`--targets` 只决定构建目标，不改变产品 / 系列。
 
 ### 5.2 建立初始选择
+
+组件和依赖线的版本选择：
 
 ```text
 CLI --component version: / --dep
   > state.bindings
   > bundle 默认线（组件写顶层，依赖库写 [deps]）
   > 组件只有一条线时直接用
+```
+
+构建目标独立选择：
+
+```text
+CLI --targets > state.targets > bundle 的 [targets] default
 ```
 
 ### 5.3 校验并求约束交集
@@ -127,7 +161,8 @@ CLI --component version: / --dep
 ### 5.4 注入上下文并构造目标
 
 Rust 把产品名、系列、补丁、绑定和依赖记录注入 `ctx`，调用 recipe 的 `target(ctx)`；
-产品 recipe 的版本和下载地址直接由 catalog 注入。
+产品 recipe 的版本和下载地址直接由 catalog 注入。构建目标的选择在 recipe 求值之后
+注入 Registry，不进入 `ctx`，recipe 只声明 target 本身。
 
 ### 5.5 依赖闭包与拓扑
 
@@ -152,6 +187,8 @@ bundled 组件不单独下载，源码在产品 tarball 里。
 ### 5.8 编译与安装
 
 按拓扑序执行 recipe / profile 生成的步骤；每个节点一份日志、一份签名。
+产品的 configure 参数包含选中 target 的 `flags` 和配置项，未选中 target 的
+`disable_flags`；产物、校验和入口只取选中的 target。
 安装树是 `.phprt/<产品>-<版本>/`；依赖库装在自己的 `deps/<名字>-<版本>/`。
 全局模式（`--global --prefix <目录>`）下安装树就是 prefix，状态和完成标记也放在里面。
 
@@ -170,12 +207,14 @@ bundled 组件不单独下载，源码在产品 tarball 里。
   "version": 3,
   "product": "php",
   "series": "8.5",
+  "targets": { "cli": {}, "fpm": {} },
   "components": { "swoole": { "line": "6.2", "mode": "shared", "installed": true } },
   "deps": { "openssl": { "line": "3.5", "version": "3.5.9" } }
 }
 ```
 
 - `state.components` 是权威方案；`plan` / `install` 都从它出发。
+- `state.targets` 保存实际构建目标；为空时沿用 bundle 的 `[targets] default`。
 - 版本线记录在 state，补丁号记录实际装过的版本。
 - 已装版本是否复用、`--lock` 与 catalog 旧补丁保留见 [LOCK.md](LOCK.md)；
   state 是版本来源，不新增 lock 文件。
@@ -188,9 +227,10 @@ bundled 组件不单独下载，源码在产品 tarball 里。
 2. 组件 spec 一次只写一个组件；多个组件分多条命令。
 3. 补丁号只出现在 catalog。
 4. 默认线只出现在 bundle；显式线来自 state / CLI。
-5. 同一个产品的多个系列并存，互不影响；不同产品不共享安装树。
-6. 失败不写 state；写入是最后一步。
-7. 产品 profile 只声明步骤模板、路径和验证命令，不写条件分支。
+5. 默认构建目标只出现在 bundle 的 `[targets] default`；target 声明在产品系列 recipe。
+6. 同一个产品的多个系列并存，互不影响；不同产品不共享安装树。
+7. 失败不写 state；写入是最后一步。
+8. 产品 profile 只声明步骤模板、路径和验证命令，不写条件分支。
 
 ## 9. 演进成本
 
@@ -199,13 +239,14 @@ bundled 组件不单独下载，源码在产品 tarball 里。
 | 升补丁 | catalog 一行 |
 | 换默认线 | bundle 一行 |
 | 加组件 | `components/<产品>/<名字>.star` + 需要时 catalog |
+| 加构建目标 | 各系列产品 recipe 的 `targets` + bundle 默认值 + 该版本 configure 参数核对 |
 | 加产品系列 | 产品 recipe + bundle + catalog |
 | 加产品 | 产品 recipe + bundle + catalog + 需要时新 dep |
 | 加依赖线 | catalog + 消费方的约束 |
 
 ## 10. 失败模式：宁可报错，不猜
 
-- 未知产品 / 系列 / 组件 / 依赖：直接报错并列出候选。
+- 未知产品 / 系列 / 组件 / 依赖 / target：直接报错并列出候选。
 - 裸名有多个候选：要求写 `kind:name`，产品节点写 `product:<名字>@<版本>`。
 - 约束冲突：报冲突的线、可用线，不自动降级。
 - 组件契约不支持某个 mode：报支持列表。
@@ -219,6 +260,7 @@ src/
 ├── main.rs       CLI、命令分派、状态读写
 ├── catalog.rs    catalog.toml
 ├── recipe.rs     两阶段加载、契约校验、Registry、Selection
+├── targets.rs    --targets 解析、选择、校验、规范化、scheme/指纹文本
 ├── bundle.rs     bundles/<产品>/<系列>.toml
 ├── bind.rs       版本线求解
 ├── plan.rs       依赖边与拓扑
@@ -267,6 +309,7 @@ recipes/
 bundle：php/8.5.toml 的 [deps].openssl = 3.5
 state：没有显式 binding
 catalog：openssl 3.5 → 3.5.9
+构建目标：bundle 的 [targets] default = ["cli"]（与选线无关）
 ```
 
 组件 `openssl` 的 `PRODUCT_LINES["8.5"]` 包含 3.5，所以 3.5 合法；补丁 3.5.9 来自 catalog。
@@ -285,8 +328,10 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | 文档 | 内容 |
 | --- | --- |
 | [CLI.md](CLI.md) | 子命令、`产品@系列`、`--component`、`--dep`、错误与退出码 |
-| [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle |
+| [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle、targets |
 | [PRODUCT.md](PRODUCT.md) | 产品共享 profile、工具最低版本、安装后动作、入口模板 |
+| [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / build/tools、同名工具多版本、tool-sig、toolchain 档位与镜像筛选（待实施，代码未实现） |
+| [TARGETS.md](TARGETS.md) | `--targets`、target 声明、默认值、state/scheme 与构建身份 |
 | [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、feature 并集 |
 | [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |
 | [STATE.md](STATE.md) | state.json、bindings、line/version |
@@ -295,11 +340,12 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |
-| [IMAGE.md](IMAGE.md) | 容器化构建（toolchain 线、执行后端）、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）（待实施，代码未实现） |
+| [IMAGE.md](IMAGE.md) | 镜像线（`recipes/images.toml`、gcc/glibc facts、包名映射、`--image`）、容器化构建、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）（待实施，代码未实现） |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
 | [FLOW.md](FLOW.md) | install / add / remove / scheme 的流程、判定矩阵、交互、`--force`、ini 备份 |
+| [GLOSSARY.md](GLOSSARY.md) | 名词字典：三层对象、line/补丁、mode / fold / standalone、闭包、state 与标记 |
 | [GENERIC.md](GENERIC.md) | 通用化设计的完整走查；与本文冲突时以本文和 CONTRACT.md 为准 |
 
 ## 15. 验收
@@ -309,9 +355,11 @@ cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets
 
-cargo run -- install php@8.5
+cargo run -- install php@8.5 --targets="cli"
 ./myphp-8.5 -v
-cargo run -- plan php@8.5 --json
+cargo run -- plan php@8.5 --targets="cli,fpm" --json
+cargo run -- install php@8.5 --targets="cli,fpm" --force --offline
+./.phprt/php-8.5.12/sbin/php-fpm -v
 
 cargo run -- install nginx@1.29
 ./.phprt/nginx-1.29.8/sbin/nginx -V

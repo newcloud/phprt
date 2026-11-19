@@ -347,6 +347,7 @@ phprt install php@8.5.12 \
 | bundled 组件 | 不写 `version:`，源码在产品 tarball 里 |
 | 依赖库 | `--dep 名字=<补丁>` |
 | mode / feature / dep 转授 | 和普通 `scheme` 一样 |
+| 构建目标 | `--targets '...'`，来自 state.targets 或 bundle 默认值 |
 
 - 只导出当前闭包里的节点：已删除组件留在 `state.deps` / `state.bindings` 的历史记录
   不写进命令；`bindings` 在渲染前按闭包过滤；
@@ -500,6 +501,7 @@ resolution=...
 scheme_cmd=...
 ```
 
+`scheme` 指纹包含组件选择、版本绑定和构建目标；`--targets` 或配置变化会改变指纹。
 `install` 判定“配置一致”时同时比较 `scheme` 和 `resolution`：
 
 - 两个都相同：一致；
@@ -512,7 +514,9 @@ scheme_cmd=...
 不改 schema 版本，仍是 version 3；现有 state 不需要迁移。字段语义变化：
 
 - `components.<名字>.version` / `deps.<名字>.version` 是 `--lock` 的精确版本来源；
-- `bindings` 仍然只保存用户显式钉的线，不把 state 的 line 写进去。
+- `bindings` 仍然只保存用户显式钉的线，不把 state 的 line 写进去；
+- `targets` 是新增可选字段，参与方案指纹和 `scheme --lock` 的 `--targets` 导出，
+  不参与版本选线。
 
 ## 11. 测试
 

@@ -1,5 +1,9 @@
 # 扩展与依赖的 feature
 
+> 产品构建目标（PHP 的 cli / fpm / cgi）不是 feature，见 [TARGETS.md](TARGETS.md)。
+> feature 是组件 / 依赖库内部的编译开关；target 是产品本次要生成的目标，
+> 用 `--targets` 选择，默认值在 bundle 的 `[targets] default`。
+
 本文件是新增或修改 recipe 时必须走的流程。目标只有一条：**上游有哪些开关，是 agent 主动盘点并逐个处置的，不是等人来提醒。**
 
 处置只有三种，都要在 recipe 里留下痕迹：

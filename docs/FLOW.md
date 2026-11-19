@@ -18,18 +18,31 @@
 | `remove <产品>@<系列> <组件>` | 删组件 → 删产物 / 必要时重编 | 是 |
 | `scheme <产品>@<系列>` | 导出可复制的重建命令 | 否 |
 
+`install` / `update` / `plan` 还接受 `--targets`，选择本次要生成的构建目标（如 PHP 的
+`cli` / `fpm` / `cgi`）：
+
 ```bash
-phprt install php@8.5                       # 首次安装，按 bundle 默认集
+phprt install php@8.5 --targets="cli"                       # 只装 CLI
+phprt install php@8.5 --targets="cli,fpm"                   # CLI + FPM
+phprt install php@8.5 --targets="cli,fpm=user:www-data,group:www-data"
+phprt plan    php@8.5 --targets="fpm"
+```
+
+`add` / `remove` 不接受 `--targets`，沿用 state 里的选择。规则见 [TARGETS.md](TARGETS.md)。
+
+```bash
+phprt install php@8.5                       # 首次安装，按 bundle 默认集和默认 targets
 phprt add php@8.5 'swoole'                  # pecl 扩展：默认 shared，只编 .so
 phprt add php@8.5 'gd=mode:shared'          # 内置扩展：必须显式写 mode
 phprt remove php@8.5 swoole                 # 删 ini + .so，不重编
 phprt remove php@8.5 gd                     # 静态：确认后重编 PHP
-phprt scheme php@8.5                        # 打印一条 install 命令
+phprt scheme php@8.5                        # 打印一条 install 命令（含 --targets）
 ```
 
 两种安装模式：
 
-- **本地（默认）**：安装树、状态、入口都在项目里（`<root>/.phprt`、`<root>/myphp-<系列>`）。
+- **本地（默认）**：安装树、状态、入口都在项目里（`<root>/.phprt`；PHP 选中 `cli`
+  target 时还有 `<root>/myphp-<系列>`）。
 - **全局（`--global --prefix <目录>`）**：安装树就是 prefix，状态和完成标记在 prefix 里，
   不生成项目入口；下载、解压、备份默认在 `~/phprtdownloads`、`~/phprtbuild`、`~/phprtbackup`。
   判定逻辑相同，提示里用绝对路径并带上 `--global --prefix`。
@@ -45,7 +58,9 @@ phprt scheme php@8.5                        # 打印一条 install 命令
 | 已装 8.5.12、完整，依赖补丁已前进 | `install php@8.5` | **拒绝**：提示“编译配置一致，但解析出的版本与本次不同” |
 | 已装 8.5.12、完整 | `update php@8.5` | 解析到 8.5.13 并构建，成功后 state 记录 8.5.13 |
 | 已装 8.5.12、完整 | `install php@8.5.12` | **拒绝**：说明编译配置一致 / 不一致 |
-| 已装 8.5.12、完整 | `install php@8.5.12 --force` | 下载、解压成功后旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
+| 已装 8.5.12、完整 | `install php@8.5.12 --targets 'cli' --force` | 下载、解压成功后旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
+| 已装 8.5.12、完整，本次 `--targets` 不同 | `install php@8.5 --targets='cli,fpm'` | **拒绝**：编译配置与已装方案不一致，提示加 `--force` |
+| 已装 8.5.12、完整，只调整 target 配置或顺序 | `install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'` | 顺序不同不影响身份；配置值不同则拒绝并提示 `--force` |
 | 已装 8.5.12（无完成标记） | 任意 | 视为中断，继续安装 |
 | 已装 8.5.12、完整 | `install php@8.5.13` | 升级：构建新树 → 成功后才写 state |
 | 已装 8.5.13 | `install php@8.5.12` | 降级：重新走流水线，签名一致的节点跳过编译 |
@@ -57,7 +72,7 @@ phprt scheme php@8.5                        # 打印一条 install 命令
 $ phprt install php@8.5.12
 error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置与本次方案一致
   要重新安装，任选其一：
-    phprt install php@8.5.12 --force     # 现有树改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
+    phprt install php@8.5.12 --targets 'cli' --force     # 现有树改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
     rm -rf .phprt/php-8.5.12             # 确认不再需要这个版本，删掉后再装
 ```
 
@@ -65,7 +80,7 @@ error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置与本次方案
 $ phprt install php@8.5            # 已装 8.5.12，catalog 的依赖补丁已前进
 error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置一致，但解析出的版本与本次不同
   要重新安装，任选其一：
-    phprt install php@8.5.12 --force     # 已装版本改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
+    phprt install php@8.5.12 --targets 'cli' --force     # 已装版本改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
     rm -rf .phprt/php-8.5.12             # 确认不再需要这个版本，删掉后再装
 ```
 
@@ -87,6 +102,30 @@ catalog 里的补丁号只代表“本次解析到的目标”，文案里不出
 | 有 | 无 | 空 | 首次安装没收尾 |
 | 无 | 无 | 8.5.12 | 树被删过，直接装 |
 | 有 | 有 | 其他版本 | 旧版本残留；重新 `install` 旧补丁可切回（签名一致跳过编译），或手工清理 |
+
+### 2.4 构建目标
+
+`--targets` 的效果：
+
+```text
+CLI --targets > state.targets > bundle 的 [targets] default
+```
+
+- 选中的 target 应用它的 `flags`，允许它的 `config`；
+- 未选中的 target 应用 `disable_flags`，不接受 `config`；
+- 没有 `disable_flags` 的 target 不自动生成禁用参数；
+- target 的 `artifacts` / `verify` / `entry` / `post_install` 只在该 target 选中时生效。
+
+`install` 判定重复安装时比较方案指纹；targets 或配置变化会被视为“编译配置不一致”，
+需要 `--force`。target 名和配置名按字典序规范化，列表值保留元素顺序，所以下面两条
+构建身份相同：
+
+```bash
+phprt install php@8.5 --targets='cli,fpm=user:www-data,group:www-data'
+phprt install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'
+```
+
+`add` / `remove` 沿用 state 里的 targets；要改目标用 `install --targets`。
 
 ## 3. add
 
@@ -187,18 +226,20 @@ $ phprt remove php@8.5 swoole
 
 ```text
 $ phprt scheme php@8.5
-phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,zip=dep:libzip[encryption]'
+phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,zip=dep:libzip[encryption]' --targets 'cli'
 ```
 
 导出内容：
 
 - 完整组件列表（含当时生效的默认组件）；
 - `mode`、用户显式的 `feature` / `dep`、用户钉的版本线；
-- **不含**补丁号、解析出的依赖线交集、feature 并集、configure 参数。
+- 有效构建目标，写成 `--targets '...'`；产品没有 targets 时不写；
+- **不含**补丁号、解析出的依赖线交集、feature 并集、configure 参数（target 选择本身除外）。
 
 导入规则：
 
 - `install <产品>@<系列> '列表'` 的列表是**完整方案**，直接替换，不与 bundle 默认集合并；
+- 导出的命令带同样的 `--targets '...'`；只在当前机器继续用已有选择时可以省略。
 - 列表里有 recipe 已删除的组件 → 报错并指出名字；
 - 同一份列表在别的机器上得到相同方案；补丁跟随 catalog，要连补丁一起复制用
   `scheme --lock`（只导出当前闭包，缺旧补丁时报错）；
@@ -212,12 +253,13 @@ phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,zip=dep:libzip[enc
 state 记两类数据，解析结果每次重算（完整字段见 [STATE.md](STATE.md#2-格式)）：
 
 ```text
-方案（输入，可手改）  components + 每项的 line / mode / deps / features，以及 bindings
+方案（输入，可手改）  components + 每项的 line / mode / deps / features，bindings，targets
 安装事实（工具写）    installed_version + 每个组件的 installed 标记
 ```
 
 - `components` 是权威方案，`plan` / `install` 都从它出发；
 - `bindings` 只保存用户显式钉的版本线，bundle 解析出的默认线不写；
+- `targets` 保存实际选择的构建目标；为空时沿用 bundle 的 `[targets] default`；
 - 版本线从 state 复用；补丁默认跟随 catalog，`--lock` 时改用 `state.*.version`
   （只覆盖当前闭包，见 [LOCK.md](LOCK.md)）；
 - `update` 成功后才覆盖 `deps.*.version`；`remove` 不重编时只收窄 feature、删闭包外的 dep；
@@ -228,6 +270,7 @@ state 记两类数据，解析结果每次重算（完整字段见 [STATE.md](ST
 - 只跳过一致性检查、覆盖确认、重复安装限制；
 - `install --force` 在“目标补丁已经装过”时，等下载和解压成功后把现有树改名
   `<产品>-<补丁>-backup-<日期>`（重名加 `-2`），再全新安装；补丁不同时不改名；
+- targets 或 target 配置与已装方案不同时，同样要 `--force` 才能重建；
 - 不忽略下载失败、编译错误、校验失败；
 - 不替代 ini 备份（备份仍需 `--no-backup-php-ext-ini` 才跳过）；
 - 非 TTY 下所有需要确认的操作都必须靠它放行。
@@ -244,18 +287,19 @@ state 记两类数据，解析结果每次重算（完整字段见 [STATE.md](ST
 ## 10. 验收
 
 ```bash
-phprt install php@8.5.12                  # 第二次：拒绝
-phprt install php@8.5.12 --force          # 允许重装
+phprt install php@8.5.12 --targets 'cli'  # 第二次：拒绝
+phprt install php@8.5.12 --targets 'cli' --force   # 允许重装
+phprt install php@8.5 --targets 'cli,fpm' # targets 变了：拒绝并提示 --force
 phprt install php@8.5                     # catalog 更新后：拒绝并提示 update
 
 phprt add php@8.5 gd                      # 拒绝：内置扩展必须写 mode
 phprt add php@8.5 'gd=mode:shared'        # 只编 gd，PHP 不动
 phprt add php@8.5 'gd=mode:static'        # 提示备份已装版本，确认后重编
-phprt add php@8.5 swoole                  # pecl：默认 shared
+phprt add php@8.5 swoole                  # pecl：默认 shared；沿用 state targets
 phprt remove php@8.5 swoole               # 备份 ini → 删 ini + .so
 phprt remove php@8.5 swoole --no-backup-php-ext-ini
 phprt remove php@8.5 gd                   # 静态：确认 + 重编
 
-phprt scheme php@8.5                      # 输出可直接执行的 install 命令
-phprt install php@8.5 '…'                 # 按导出命令重建
+phprt scheme php@8.5                      # 输出可直接执行的 install 命令（含 --targets）
+phprt install php@8.5 '…' --targets 'cli' # 按导出命令重建
 ```

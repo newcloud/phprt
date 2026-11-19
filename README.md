@@ -31,6 +31,10 @@ phprt -c ~/myphprt.toml install php@8.5
 | `local_backup_dir` | `local_internal_dir/backup` | ini 备份目录 |
 | `global_build_dir` | `~/phprtbuild` | 全局模式的解压目录 |
 | `global_backup_dir` | `~/phprtbackup` | 全局模式的备份目录 |
+| `parallel` | CPU 数 - 1（最少 1） | 编译并发数（`make -j` / cmake 并行度） |
+
+并发数只从这里和 `--parallel` 取；shell 里 `export MAKEFLAGS` 或
+`export CMAKE_BUILD_PARALLEL_LEVEL` 不会生效。
 
 本地模式的相对路径按项目根解析；命令行参数优先于配置。
 
@@ -53,14 +57,32 @@ phprt() { command phprt --recipes /path/to/phprtv3/recipes "$@"; }
 ### 第一次安装
 
 ```bash
-phprt install php@8.5          # 装 PHP 8.5 和默认扩展
+phprt install php@8.5          # 装 PHP 8.5、默认扩展和默认目标 cli
 ./myphp-8.5 -v                 # 项目自己的 PHP
 ./myphp-8.5 -m                 # 已加载的扩展
 ```
 
 - 源码下载到 `.phprt/downloads/`，解压到 `build/`，装到 `.phprt/php-8.5.12/`；
-- 项目里只有一个 PHP 系列时，另外生成 `./myphp`；
+- 默认构建目标来自 bundle 的 `[targets] default`，PHP 是 `cli`；
+- 入口由选中的 target 生成：选 `cli` 才有 `./myphp-8.5`（项目里只有一个 PHP 系列时
+  还生成 `./myphp`），只选 `fpm` 时不生成；
 - 中途失败或中断，把同一条命令再跑一次会接着装。
+
+### 构建目标（CLI / FPM）
+
+默认只选 `cli`；需要 FPM 时用 `--targets`：
+
+```bash
+phprt install php@8.5 --targets="cli,fpm"
+phprt install php@8.5 --targets="cli,fpm=user:www-data,group:www-data"
+./.phprt/php-8.5.12/sbin/php-fpm -v
+```
+
+- 选择会写进 `state.json`，之后不传 `--targets` 也沿用；
+- `scheme` / `scheme --lock` 会带上 `--targets '...'`；
+- 改目标或配置后重装需要 `--force`；顺序和配置写法不影响构建身份；
+- `add` / `remove` 不接收 `--targets`，沿用 state 里的选择；
+- 产品没有声明 targets 时，`--targets` 直接报错；细节见 `docs/TARGETS.md`。
 
 ### 查看
 
@@ -145,7 +167,7 @@ phprt remove php@8.5 swoole
 phprt update php@8.5            # 跟随 catalog 升到 8.5 线最新补丁
 phprt install php@8.5.13        # 指定补丁
 phprt install php@8.5.12        # 已装同一补丁：拒绝，并提示怎么重装
-phprt install php@8.5.12 --force
+phprt install php@8.5.12 --targets 'cli' --force
 ```
 
 `--force` 会把现有安装树改名成 `.phprt/php-8.5.12-backup-<日期>`，再全新安装。
@@ -154,17 +176,18 @@ phprt install php@8.5.12 --force
 
 ```text
 $ phprt scheme php@8.5
-phprt install php@8.5 'curl=mode:static,gd=mode:shared,swoole,xdebug=mode:shared'
+phprt install php@8.5 'curl=mode:static,gd=mode:shared,swoole,xdebug=mode:shared' --targets 'cli'
 ```
 
-把输出里的命令拿到另一台机器（或另一个项目目录）执行，就得到同一套组件和编译方式。
+把输出里的命令拿到另一台机器（或另一个项目目录）执行，就得到同一套组件、编译方式和
+构建目标。产品没有声明 targets 时，导出命令里不会出现 `--targets`。
 
 补丁默认跟随当时的 catalog。catalog 会保留旧补丁，所以 `phprt install php@8.5.12`
 这类显式旧补丁一直能装。要把补丁也一起复现：
 
 ```bash
 phprt scheme php@8.5 --lock
-# phprt install php@8.5.12 '…' --dep openssl=3.5.9 --dep zlib=1.3.2
+# phprt install php@8.5.12 '…' --targets 'cli' --dep openssl=3.5.9 --dep zlib=1.3.2
 ```
 
 把输出拿到另一台机器执行即可。本机增量操作要保持已有补丁不变时加 `--lock`：
@@ -182,7 +205,7 @@ phprt remove  php@8.5 swoole --lock
 反过来也可以直接给 `install` 一份完整列表（替换当前方案）：
 
 ```bash
-phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,redis'
+phprt install php@8.5 'curl=mode:shared,gd=mode:shared,swoole,redis' --targets 'cli'
 ```
 
 ### 只下载、离线、代理
@@ -200,6 +223,7 @@ phprt install php@8.5 --download-jobs 10 --download-host-jobs 2 --connections 4 
 
 ```bash
 phprt install php@8.5 \
+  --targets="cli" \
   --disable-default-component openssl \
   --disable-default-component curl \
   --disable-default-component libxml
@@ -210,8 +234,11 @@ phprt install php@8.5 \
 把产品直接装到项目外的目录，比如 `/opt`、`/usr/local/php`：
 
 ```bash
-phprt --global --prefix /usr/local/php install php@8.5
+phprt --global --prefix /usr/local/php install php@8.5 --targets="cli"
 /usr/local/php/bin/php -v
+
+phprt --global --prefix /usr/local/php install php@8.5 --targets="cli,fpm"
+/usr/local/php/sbin/php-fpm -v
 
 phprt --global --prefix /usr/local/php add    php@8.5 swoole
 phprt --global --prefix /usr/local/php remove php@8.5 swoole
@@ -222,7 +249,8 @@ phprt --global --prefix /usr/local/php scheme php@8.5
 和项目模式的区别只有这几点：
 
 - 安装树就是 `--prefix`；状态和完成标记在 `<prefix>/.phprt-state.json`、`<prefix>/.phprt-installed`；
-- 不生成项目入口，直接用 `<prefix>/bin/php`；
+- 不生成项目入口；可执行文件按选中的 target 落在 `<prefix>/bin/php`、
+  `<prefix>/sbin/php-fpm`、`<prefix>/bin/php-cgi`；
 - 解压、下载、备份默认在 `~/phprtbuild`、`~/phprtdownloads`、`~/phprtbackup`；
   用 `global_build_dir`、`global_backup_dir`、`download_dir` 或对应的 `--build-dir` /
   `--backup-dir` / `--download-dir` 改；
@@ -261,7 +289,7 @@ nginx 不生成 `myphp` 之类的入口，直接用安装树里的二进制。
 .phprt/backup/                删除前的 ini 备份（local_backup_dir 可改）
 .phprt/php-8.5.12-backup-*    install --force 留下的旧安装树
 build/                        解压后的源码（local_build_dir 可改）
-myphp-8.5                     项目入口
+myphp-8.5                     项目入口（选中 cli target 时生成）
 ```
 
 全局模式：
@@ -270,7 +298,8 @@ myphp-8.5                     项目入口
 /usr/local/php/                       安装树（--prefix）
 /usr/local/php/.phprt-state.json      方案
 /usr/local/php/.phprt-installed       完成标记
-/usr/local/php/bin/php                产品入口
+/usr/local/php/bin/php                产品入口（选中 cli target 时）
+/usr/local/php/sbin/php-fpm           FPM（选中 fpm target 时）
 ~/phprtbuild/                         解压后的源码
 ~/phprtdownloads/                     源码缓存
 ~/phprtbackup/                        ini 备份

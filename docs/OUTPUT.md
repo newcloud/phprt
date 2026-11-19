@@ -5,13 +5,14 @@
 `plan` 的输出是 `Sim`：
 
 ```text
-Sim { root, tree, order: [Node] }
+Sim { root, tree, targets, order: [Node] }
 ```
 
 | 字段 | 说明 |
 | --- | --- |
 | `root` | `--root` 的展示值 |
 | `tree` | `.phprt/<产品>-<产品版本>` |
+| `targets` | 本次构建目标：target 名 → 配置名 → 值；没有 targets 的产品为空对象 |
 | `order` | 拓扑序节点数组 |
 
 `Node` 字段：
@@ -46,7 +47,7 @@ Sim { root, tree, order: [Node] }
 | 对象 | 值 |
 | --- | --- |
 | 安装树 | `.phprt/<产品>-<产品版本>` |
-| 项目入口（PHP） | `<root>/myphp-<系列>`；只有一个 PHP 系列时额外写 `<root>/myphp` |
+| 项目入口（PHP） | 选中 `cli` target 时写 `<root>/myphp-<系列>`；只有一个 PHP 系列时额外写 `<root>/myphp` |
 | 依赖库 | `{tree}/<产品 profile 的 runtime.lib_dir>`；PHP / nginx 当前是 `{tree}/lib/phprt` |
 | dep 前缀 | `{tree}/deps/<name>-<version>` |
 | 源码缓存 | `<root>/.phprt/downloads/<URL 最后一段>` |
@@ -67,8 +68,9 @@ Sim { root, tree, order: [Node] }
 
 ```text
 phprt plan
-  root   /home/z/project
-  tree   .phprt/php-8.5.12
+  root    /home/z/project
+  tree    .phprt/php-8.5.12
+  targets cli
 
 build order
    1. dep:openssl               3.5.9
@@ -122,6 +124,9 @@ build order
 {
   "root": ".",
   "tree": ".phprt/php-8.5.12",
+  "targets": {
+    "cli": {}
+  },
   "order": [
     {
       "id": "component:curl",
@@ -179,14 +184,16 @@ xdebug           external  shared             3.5.3      available
 ```text
 源码缓存: .phprt/downloads
 并发: 10 个文件（每站点 2），单文件分片 4（≥8 MB 才启用）
-  [product] php 8.5.12             [██████████░░░░]  72%  10.1 MB / 13.9 MB  3.4 MB/s
-  [deps] openssl 3.5.9             ⠹ 1.2 MB
+  [product] php 8.5.12             [██████████████████░░░░░░░░░░]  72%  10.04 MiB/13.94 MiB  3.41 MiB/s
+  [deps] openssl 3.5.9             ⠹ 1.20 MiB
   [component] lua-nginx-module 0.10.31  ⠸ 等待
   [product] php 8.5.12             ✓ 完成（13.9 MB）
 下载完成: 1 个，已存在 0 个
 ```
 
 - 进度框只在终端里启用；其他情况逐行输出。
+- 还没轮到的行显示 `⠸ 等待`，不转圈，免得看起来在跑。
+- 长度未知的文件显示转圈和已下载字节数。
 - 缓存命中显示 `✓ 已存在（大小）`。
 - 单个文件失败显示 `✗ 失败: 原因`，末尾再汇总。
 - 失败汇总见 [DOWNLOAD.md](DOWNLOAD.md)。
@@ -209,7 +216,21 @@ xdebug           external  shared             3.5.3      available
 
 ## 7. 编译输出
 
-解压之后按拓扑序编译，和下载/解压共用进度框；`--ui plain` 时逐行输出：
+解压之后按拓扑序编译，和下载/解压共用进度框。终端里是这样：
+
+```text
+编译并安装（按构建顺序，9 个）
+  [deps] openssl 3.5.9             ✓ 已构建
+  [deps] libcurl 8.23.0            ✓ 已构建
+  [product] php 8.5.12 make        ⠹ 1m 20s
+  [component] swoole 6.2.5         ⠸ 等待
+```
+
+- 正在执行的节点显示转圈和这个节点的已用时间；时间在走，说明没卡住。
+- 同一节点从 `configure` 换到 `make`、`install` 时只换动词，秒表不回零。
+- 还没轮到的节点显示 `⠸ 等待`，不转圈，免得看起来在跑。
+- 已完成的节点显示 `✓ 已构建`，从进度框移出，固定成一行。
+- `--ui plain` 时逐行输出：
 
 ```text
 编译并安装（按构建顺序，9 个）
@@ -221,7 +242,6 @@ xdebug           external  shared             3.5.3      available
 编译完成: 2 个，已构建跳过 7 个
 ```
 
-- 已完成的节点显示 `✓ 已构建`。
 - 失败显示 `✗ 失败`，末尾打印日志路径和末尾 40 行，退出码 1，不写 state。
 - 细节见 [BUILD.md](BUILD.md)。
 

@@ -173,6 +173,39 @@ TARGET = product(
   写哪些文件、复制 CA、写组件 ini。
 - 产品自己的 `LINES[系列]` 可以约束依赖线。
 
+#### 构建目标 targets
+
+产品有多个构建目标（如 PHP 的 cli / fpm / cgi）时，在**每个系列自己的** recipe 里写
+完整的 `targets = {...}`，不要放进 `_profile.star`，也不要做共享常量。版本差异直接
+在该文件里体现；重复是允许的。
+
+```python
+TARGETS = {
+    "cli": {
+        "flags": ["--enable-cli"],
+        "disable_flags": ["--disable-cli"],
+        "artifacts": ["bin/php"],
+    },
+    "fpm": {
+        "flags": ["--enable-fpm"],
+        "disable_flags": [],   # 上游没有该参数时不要写
+        "artifacts": ["sbin/php-fpm"],
+        "config": {
+            "user": {"type": "string", "flags": "--with-fpm-user={value}"},
+        },
+    },
+}
+TARGET = product(..., targets = TARGETS)
+```
+
+- 每个 target 至少写 `flags`；`disable_flags`、`config` 按实际上游能力写。
+- 不要根据 `--enable-*` 推断存在 `--disable-*`。必须查该版本的 `configure --help`
+  或 `configure.ac`；不支持的禁用参数就不写，未选中时不生成。
+- 默认选择写在 `bundles/<产品>/<系列>.toml` 的 `[targets] default`，recipe 不写默认。
+- 新增系列时同步检查：该系列声明的 target、bundle 默认值、target 的 configure 参数
+  三者一致。`plan <产品>@<系列>` 和真实构建各跑一次。
+- 规则见 [TARGETS.md](TARGETS.md)。
+
 ### 7.2 组件 recipe
 
 路径是 `recipes/components/<产品>/<名字>.star`：

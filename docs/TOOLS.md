@@ -8,8 +8,9 @@
 
 - **Tool**：patchelf、cmake、nasm、autoconf、bison、re2c 这类独立构建辅助程序。
   优先用宿主机；宿主不满足时从 catalog 取源码构建，装到 `build/tools/`。
-- **Toolchain**：gcc / g++ / glibc / binutils 这类基础编译环境。产品声明版本档位，
-  每档可以带兼容 CFLAGS；Rust 只探测、选档、记录，不下载 gcc/glibc，也不启动容器。
+- **Toolchain**：gcc / g++ 这类基础编译环境。产品声明版本档位，每档可以带兼容
+  CFLAGS；Rust 只探测、选档、记录，不下载 gcc，也不启动容器。glibc / ld / binutils
+  不声明。
 
 两者都不新建一套平行的构建管线：Tool 复用现有 dep 节点的下载、解压、构建、日志、
 签名和跳过逻辑；Toolchain 只做环境探测和参数合并。
@@ -43,7 +44,7 @@ Toolchain 方面，现状是：
 - gcc / g++ / make / perl / m4 / pkg-config / patchelf 都写在产品 profile 的 `tools`
   里，只检查最低版本；
 - 编译器太新带来的兼容参数写在系列 recipe 的 `env.CFLAGS` 里，**无条件应用**；
-- 没有 glibc / ld / target triple 的记录，也没有按编译器版本分档的机制。
+- 没有按编译器版本分档的机制；glibc / ld 只影响运行，不影响构建，不需要声明。
 
 当前 `recipes/products/php/7.4.star` 和 `8.0.star` 已经有：
 
@@ -65,16 +66,18 @@ env = {
 | 库依赖（dep） | openssl、libxml2、libzip | `recipes/dep/` | 是 | 随产品收库 |
 | 组件（component） | PHP 扩展、nginx 模块 | `recipes/components/` | 是 | 是 |
 | **Tool** | autoconf、cmake、nasm、patchelf | `recipes/tools/` | 宿主不满足时编译 | 否 |
-| **Toolchain** | gcc、g++、glibc、ld | 产品 `toolchain(...)` | 不编译 | 否 |
+| **Toolchain** | gcc、g++ | 产品 `toolchain(...)` | 不编译 | 否 |
 
 判定规则：
 
 - 只要它**会被构建命令执行**、且不是链接进产物的库，就是 Tool。
-- 只要它决定**编译器和基础运行库**，就是 Toolchain。
+- 只要它决定**编译器**，就是 Toolchain。glibc / ld / binutils 不声明：它们跟随
+  所选 gcc 所在的系统或镜像，不单独做版本判断。
 - 不要只凭名字判断：`cmake` 是 Tool，`libcmake` 若是库则仍是 dep；`autoconf` 是
   Tool，`m4` 也是 Tool，但 `libxml2` 不是。
-- Toolchain 不下沉到 dep / component。产品声明的 gcc 范围覆盖整次构建；依赖库在
-  这个范围里编不过，是 bundle / recipe 的问题，不是给单个库再声明一套 toolchain。
+- Toolchain 默认不下沉到 dep / component。产品声明的 gcc 范围覆盖整次构建；
+  确实存在已知不兼容时，dep / component 可以声明一条只收窄的 gcc 约束，
+  只做断言、不带 flags（见 §4.2）。
 
 ---
 
@@ -153,7 +156,6 @@ build/
 ```python
 # 产品 profile
 tools = [
-    tool("gcc", min = "9"),
     tool("make", min = "4.0"),
     tool("patchelf", min = "0.13"),
     "ar",
@@ -165,6 +167,11 @@ tools = [tool("autoconf", min = "2.68")]
 # dep
 tools = [tool("nasm", min = "2.13"), "cmake"]
 ```
+
+- gcc / g++ 不写在这里，由产品的 `toolchain(...)` 声明；它们也永远不会从
+  Tool catalog 解析，避免出现“下载 gcc”的第二条路径。
+- `tool(name, min = "", max = "", probe = ["--version"])`：`max` 是可选上界，
+  语义与 `toolchain_range` 一致（按写出的段数比较）；不写表示不限制。
 
 - `tool(name, min = "", probe = ["--version"])` 保留；字符串缩写只检查存在。
 - `Target.tools` 类型从 `Vec<String>` 改成 `Vec<ToolSpec>`；`Profile.tools` 类型不变。
@@ -181,53 +188,55 @@ tools = [tool("nasm", min = "2.13"), "cmake"]
   `build/tools/autoconf-2.72`；
 - **host**：跳过该 env 项，让宿主的 `PATH` 自己找到命令。
 
-这样：
+它用于“上游不接受 PATH、必须用环境变量指定工具路径”的少数场景。
 
-```python
-env = {
-    "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
-    "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
-}
-```
-
-- 用宿主 autoconf 时，这两个变量不注入，`phpize` / `buildconf` 从 PATH 找；
-- 用构建的 autoconf 时，变量指向 `build/tools/autoconf-2.72/bin/...`。
+PHP 不再用它：`PHP_AUTOCONF` / `PHP_AUTOHEADER` 删除。phpize 的 `autoconf` /
+`autoheader` 直接走 PATH，而消费节点的 PATH 已经由执行器前置本节点解析到的
+built 工具 `bin`；host 情况由宿主 PATH 兜底。工具 bin 的 PATH 前置不需要写在
+recipe 的 `env` 里。
 
 宿主路径和版本因此不会进入环境，也不会进入签名。
 
 ### 3.5 解析
 
-解析发生在下载源码之前，按**节点**进行：
+解析发生在下载源码之前，按**节点**进行；同一名字允许解析出多个版本：
 
 ```text
-对每个节点的 tools：
-  host 探测通过（存在且满足 min）     -> Host
-  已有 build/tools 版本满足 min      -> Store（复用）
-  catalog 有满足 min 的版本          -> Store（需要构建）
-  都没有                             -> 报错
+对每个节点，先合并 profile.tools 与节点 tools（同名求交：min 取大、max 取小）：
+  host 探测通过（存在且满足区间） -> Host
+  已有 build/tools 版本满足区间   -> Store（复用）
+  catalog 有满足区间的最高版本    -> Store（需要构建）
+  都没有                         -> 报错
 ```
 
-- 产品 profile 的 `tools` 对整次构建生效（所有节点共享）；节点的 `tools` 只对该
-  节点生效。两处的同名工具取最严的 `min`。
-- 同一节点的同名工具取最严的 `min`；不同节点可以解析到不同 provider。
-- 一次构建里同名工具最多构建一个版本；多个节点需要不同版本时，按节点分别解析，
-  但 `build/tools` 允许版本目录并存。
-- 工具依赖工具时，先解析依赖工具，再解析消费工具；有环直接报错。
-- catalog 选版本时取满足 `min` 的最高版本，结果确定。
+- 产品 profile 的 `tools` 是**每个节点的基线要求**，不是“整次构建只解析一次”；
+  不同节点可以因此落到不同版本。例如节点 A 需要 autoconf `<= 2.69`，节点 B 需要
+  `>= 2.70`，同一次构建会产出两个 autoconf，各自用在自己的编译命令里。
+- 同一节点的同名工具只取一个版本；不同节点可以解析到不同 provider
+  （host / store），同一次构建里可以混用。
+- 一次构建允许同名工具多个版本：`build/tools/<name>-<version>` 并存，按
+  `(name, version)` 去重。
+- 工具依赖工具时递归解析，同样允许多版本；有环直接报错。
+- 同名约束求交为空时报错，并点名是哪个节点的哪条约束冲突。
+- catalog 选版本时取满足区间的最高版本，结果确定。
+- catalog 必须保留旧工具版本：升级某条线时把旧版本留在文件里，`--lock` /
+  显式区间只从 catalog 取，取不到就报错。
 - 报错要区分：
   - `宿主 autoconf 2.60 不满足 >= 2.68，catalog 也没有可用版本`
   - `宿主缺少 nasm，catalog 没有 nasm 的构建 recipe`
   - `catalog 里 nasm 最高 2.16.03，不满足 >= 2.17`
+  - `节点 openssl 要求 autoconf <= 2.69，Profile 要求 >= 2.70，交集为空`
 
 ### 3.6 构建
 
-- 工具步骤排在所有消费节点之前；多工具按依赖拓扑排序。
+- 工具步骤排在所有消费节点之前；多工具按依赖拓扑排序；同名多版本各自有独立步骤。
 - UI 标签 `[tools] autoconf 2.72`；日志 `build/logs/tool-autoconf-2.72.log`。
-- 工具节点的 `PATH` 前置已构建的工具依赖；消费节点的 `PATH` 前置本节点解析到的
-  built 工具 `bin`。
+- 工具节点的 `PATH` 前置它自己依赖的工具 `bin`；消费节点的 `PATH` 前置**本节点
+  解析到的那一版** built 工具 `bin`。
 - 工具产物检查、`.phprt-sig`、失败日志复用现有 `phprt_build`。
-- 工具安装前缀写 `.phprt-installed`（或复用现有 marker 格式），记录版本和工具签名；
-  它不是产品 state，也不是第二套状态系统。
+- `build/tools/<name>-<version>/.phprt-installed` 只是**安装完成标记 + tool-sig**，
+  用来判断这个前缀和当前 recipe / 编译器是否匹配。它是可重建缓存的清单，
+  不进产品 marker，也不进 state 的产品身份。
 - 工具不参与链接闭包、不参与 runtime 收库、不参与 rpath。
 
 ### 3.7 签名
@@ -238,29 +247,56 @@ env = {
   tool=autoconf provider=store:2.72 sig=<tool-sig>
   ```
 
+- `tool-sig` 只算和工具产物有关的输入：
+
+  ```text
+  id=tool:<name>
+  version=<catalog 版本>
+  url=<源码地址>
+  sha256=<源码 sha256>
+  compiler=<实际编译器> <版本> triple=<triple>
+  command=<configure 全部展开后的程序 + 参数>
+  command=<make / install / prepare 命令>
+  env=CFLAGS=... CXXFLAGS=...        # 只放编译相关，白名单
+  tool-dep=<name> <version> sig=<依赖工具 sig>
+  ```
+
+- 以下输入**不进** tool-sig：`PATH`、`PKG_CONFIG_PATH`、`LD_LIBRARY_PATH`、
+  `PERL5LIB`、`MAKEFLAGS`、`CMAKE_BUILD_PARALLEL_LEVEL`，以及宿主执行时才追加的
+  `CFLAGS` / `CPPFLAGS` / `LDFLAGS`。理由：工具没有 `needs`，库路径只可能来自
+  内部依赖或宿主；内部依赖已经由 `tool-dep` 的 sig 覆盖。
 - 宿主工具不写版本/路径，也不改 env；所以宿主机 autoconf 升级不会触发重编。
-- built 工具变化（版本、recipe、flags）只重编实际使用它的节点，不影响无关节点。
+- built 工具变化（版本、recipe、命令、编译 env、依赖工具）只重编实际使用它的
+  节点，不影响无关节点。
+- `compiler` 取**实际编译工具的编译器**（产品 `CC` / `CXX`，缺省 `gcc` / `g++`），
+  不能固定探测 `gcc`。
+- 宿主模式下就是宿主编译器版本；容器化后是所选镜像的 facts。工具目录跨产品共享，
+  不同编译器版本会触发工具重编；要避免抖动就把目录按 toolchain key 分开，
+  这件事留到容器方案落地时定。
 - Tool 不进入 `resolution_digest`；它不是版本解析的一部分。
 - Tool 不进入 scheme digest；它不是用户选择。
 
 ### 3.8 state / lock / plan / downloads
 
-- `state.json` 加可选 `tools`：
+- `state.json` 加可选 `tools`，按版本列，不按名字做 key：
 
   ```json
-  "tools": {
-    "autoconf": { "provider": "store", "version": "2.72" },
-    "cmake": { "provider": "host", "version": "4.3.2" }
-  }
+  "tools": [
+    { "name": "autoconf", "version": "2.72", "provider": "store" },
+    { "name": "autoconf", "version": "2.69", "provider": "store" },
+    { "name": "cmake", "version": "4.3.2", "provider": "host" }
+  ]
   ```
 
-  只记录解析结果，不写进 `components` / `bindings`，不参与 scheme。
-- `--lock` 复用 `state.tools` 里的 built 工具版本；host 工具不锁版本，换机器时重新
-  探测。工具不在 catalog 时报错，不静默回退。
-- `plan` 增加 `tools` 段，文本输出增加“构建工具”一节；`plan` 不因工具缺失而失败，
-  只显示将用 host / 将构建 / 无法解析。
-- `--downloads` 把本次闭包里声明、且 catalog 有源码的工具全部加入下载；它保持
-  “不检查、不构建”的语义，方便离线预取。真正 `install` 仍然 host-first。
+  只记录解析结果，不写进 `components` / `bindings`，不参与 scheme；产品 marker
+  不写工具版本。
+- `--lock` 复用 `state.tools` 里的 built 工具版本集合；同一节点有多个锁定版本
+  同时满足时，取满足区间的最高版本，保证结果确定。host 工具不锁版本，换机器时
+  重新探测。工具不在 catalog 时报错，不静默回退。
+- `plan` 增加 `tools` 段，文本输出增加“构建工具”一节；同名多版本分别列出。
+  `plan` 不因工具缺失而失败，只显示将用 host / 将构建 / 无法解析。
+- `--downloads` 把本次闭包里声明、且 catalog 有源码的工具全部加入下载（含多版本）；
+  它保持“不检查、不构建”的语义，方便离线预取。真正 `install` 仍然 host-first。
 - `audit` 显示实际使用的工具 provider 和版本。
 
 ---
@@ -269,25 +305,30 @@ env = {
 
 ### 4.1 为什么单独一层
 
-gcc / g++ / glibc 不是 Tool：
+gcc / g++ 不是 Tool：
 
 - 不能像 patchelf 一样下载一个可执行文件替换；
-- 它们决定 ABI、C 标准默认值、glibc 符号版本；
+- 它们决定 ABI、C 标准默认值；
 - 它们的作用范围是整次构建，不是单个节点；
-- 未来容器化要按它们选择完整构建环境。
+- 容器化时要按它们选择完整构建环境。
 
-因此 Toolchain 的交付物是：
+glibc / ld / binutils **不声明**：它们跟随 gcc 所在的系统或镜像，版本一致兼容；
+它们只影响编译出的程序能否在目标系统上运行，不影响能不能编。
 
-- 探测宿主机实际环境；
-- 按产品声明的版本档位选择一档；
+因此 Toolchain 现在的交付物是：
+
+- 探测宿主实际编译器（只探测声明了的项）；
+- 按产品声明的版本档位选一档；
 - 把该档的兼容 CFLAGS/CXXFLAGS 合入构建环境；
 - 记录实际环境；
-- 不满足声明时报错；
-- 为未来容器 catalog 留出同一份 `ToolchainFacts`。
+- 不满足声明时报错（不下载、不安装、不回退）；
+- 为未来镜像 catalog 提供同一份 `ToolchainFacts`，作为镜像筛选条件。
+
+Toolchain 不提供可执行文件，不进 PATH，不参与安装。
 
 ### 4.2 声明
 
-只在产品级声明，不下沉到 dep / component：
+只在产品级声明；默认不下沉到 dep / component：
 
 ```python
 TOOLCHAIN = toolchain(
@@ -300,9 +341,8 @@ TOOLCHAIN = toolchain(
     ],
     gxx = [
         toolchain_range(min = "4.8", max = "13"),
-        toolchain_range(min = "14", cxxflags = "-std=gnu++17"),
+        toolchain_range(min = "14"),
     ],
-    glibc = toolchain_range(min = "2.17"),
 )
 
 TARGET = product(
@@ -315,13 +355,20 @@ TARGET = product(
 
 规则：
 
-- `min` 包含；`max` 按写出的段数包含：`max = "13"` 允许 13.x、拒绝 14.0；
-  `max = "2.40"` 允许 2.40.x、拒绝 2.41。
+- 只有 `gcc` / `gxx` 两项；没有 `glibc` / `ld` / `binutils`。
+- `min` 包含；`max` 按写出的段数包含：`max = "13"` 允许 13.x、拒绝 14.0。
+  具体比较语义和 `tool(max = ...)` 共用一份实现。
 - 不写 `max` 表示开放上界；GCC 15、16 都会落到这一档，直到 recipe 再加更细的档。
 - 一档都匹配不上时报环境不匹配，错误信息列出声明的区间和实际版本。
-- 档位不能重叠；加载时校验，按 `min` 排序。
-- `cflags` 只作用于 C，`cxxflags` 只作用于 C++；`glibc` 不带 flags。
+- 同一声明项里的档位不能重叠；加载时校验。因此不存在“多项同时匹配”，
+  选了哪一档是确定的。
+- `cflags` 只作用于 C，`cxxflags` 只作用于 C++。
 - Rust 不根据版本号推导任何 flag；flag 永远是 recipe 数据。
+- **recipe 级收窄**：dep / component 默认不写 gcc。确实有已知不兼容时，可以写
+  一条只收窄的约束（例如 `gcc = toolchain_range(min = "4.8", max = "13")`）：
+  - 与产品区间求交集；交集为空时报错，并点出节点和两条约束；
+  - 只做断言，**不提供 cflags**；flags 始终只来自产品档位；
+  - 修改时要写明不兼容的原因。
 
 ### 4.3 探测与选档
 
@@ -329,21 +376,19 @@ TARGET = product(
 
 | 项 | 命令 |
 | --- | --- |
-| gcc | `gcc --version` |
-| g++ | `g++ --version` |
-| glibc | `ldd --version`（GNU libc 行） |
-| ld | `ld --version` |
-| triple | `gcc -dumpmachine` |
-| arch | `uname -m` |
+| gcc | `$CC --version`（默认 `gcc --version`） |
+| g++ | `$CXX --version`（默认 `g++ --version`） |
+| triple | 实际编译器 `-dumpmachine`（只记录） |
+| arch | `uname -m`（只记录） |
 
 记录结构：
 
 ```text
 ToolchainFacts {
+    cc: "gcc",
     gcc: "15.3.1",
+    cxx: "g++",
     gxx: "15.3.1",
-    glibc: "2.42",
-    ld: "2.45.1",
     triple: "x86_64-linux-gnu",
     arch: "x86_64",
 }
@@ -351,10 +396,11 @@ ToolchainFacts {
 
 选档：
 
-- 对每个声明的项，选包含实际版本的档；多项同时匹配时取 `min` 最大的那一档。
+- 只探测声明了的项；没声明 `gxx` 时不检查 g++，也不加 CXXFLAGS。
+- 对每个声明的项，找包含实际版本的档。
 - 选中的档提供 `cflags` / `cxxflags`。
-- 没声明 `gxx` 时不检查 g++，也不加 CXXFLAGS。
 - 探测失败（命令不存在、输出解析不出）直接报错，不猜版本。
+- 宿主模式没有候选列表：不满足声明就是环境不可用，不下载、不安装。
 
 ### 4.4 CFLAGS 合并
 
@@ -366,12 +412,15 @@ CXXFLAGS = -O2
 ```
 
 如果 recipe 的 `env` 覆盖了 `CFLAGS` / `CXXFLAGS`，以 recipe 的值为基础，再追加
-选中档的 flags：
+选中档的 flags。最终顺序固定为：
 
 ```text
-CFLAGS   = <基础 CFLAGS>   + " " + <选中档 cflags>
-CXXFLAGS = <基础 CXXFLAGS> + " " + <选中档 cxxflags>
+宿主 CFLAGS  ->  recipe/env CFLAGS  ->  选中档 cflags
 ```
+
+即**档位 flags 永远在最后**。原因：GCC 15 默认 `gnu23`，档位里的 `-std=gnu17`
+如果被宿主 `CFLAGS="-std=gnu23"` 顶掉，PHP 7.4 会重新编不过。宿主 CFLAGS 仍然
+只用于执行、不进签名；档位 flags 在它之后追加，保证兼容参数不会被覆盖。
 
 作用范围：
 
@@ -379,6 +428,10 @@ CXXFLAGS = <基础 CXXFLAGS> + " " + <选中档 cxxflags>
 - **不作用到 Tool 节点**：工具跨产品共享，不能带某个产品的兼容参数；
 - folded 组件跟随产品节点，自然继承；
 - standalone 组件（phpize）通过 `CFLAGS` 环境继承。
+
+实现注意：现有 `build.rs` 对 dep 节点跳过 `profile.env`，档位 flags 不能只挂在
+`profile.env` 上；必须单独注入 dep / component / product 节点的 env，否则依赖库
+拿不到 `-std=gnu17` 之类的参数。
 
 迁移时把 7.4 / 8.0 现有的 `env.CFLAGS` 移到 `gcc >= 14` 档：
 
@@ -392,22 +445,29 @@ toolchain = TOOLCHAIN,
 ### 4.5 签名
 
 - 选中档的 `cflags` / `cxxflags` 进入 `env`，因此进入相关节点签名。
-- **gcc / g++ / glibc 的原始版本号不进签名**。
+- **gcc / g++ 的原始版本号不进节点签名**。
 - 同一档位内换编译器（14.1 → 14.2）不重编；跨档导致 flags 变化才重编。
 - Toolchain facts 写进产品 marker，供 `plan` / `audit` 展示，不参与 scheme 和
   `resolution_digest`。
-- 未来容器 digest 是否进签名，等容器方案落地时单独定；本文不预埋。
+- 工具的签名另行处理：`tool-sig` 包含实际编译器版本，见 §3.7。
+- 容器化后镜像 digest 进节点签名，规则见 [IMAGE.md](IMAGE.md) 第 3.4 节。
 
-### 4.6 bundle 与容器
+### 4.6 镜像模式
 
+- 宿主模式：只做断言和选档；不满足就报错。
+- 镜像模式：从镜像 catalog 的条目取 `gcc`，用它匹配同一套档位区间。
+  匹配就继续，不匹配就报错并列出 catalog 里满足的线。
+- **glibc 不参与判断**：镜像条目里的 glibc 只在选镜像和 `plan` 时提示
+  “产物要求运行系统 glibc >= X”。用户选这个镜像就代表接受这个运行下限。
+- 镜像里缺 make / perl / patchelf 等工具时，按镜像 catalog 的包名映射自动安装；
+  装完照常跑 `tools` 检查，版本不满足按现有逻辑报错。细节见
+  [IMAGE.md](IMAGE.md) 第 4.3 节。
 - bundle 继续只约束依赖版本线，不声明 toolchain。
-- 产品声明的 gcc / glibc 范围覆盖整次构建；bundle 里选的依赖线必须在这个范围内
-  可编，这是 recipe / bundle 的验收责任，不做节点级 toolchain 合并。
-- 未来容器化时，容器 catalog 的每个条目提供同一套 `ToolchainFacts`（gcc、glibc、
-  triple 等）；Rust 按产品声明的档位筛选，必要时由 CLI 指定容器条目。
-- 只有一份 `ToolchainFacts`，不引入 `ContainerToolchain` 类型。构建执行器接收
-  “环境”，本机还是容器对构建逻辑透明。
-- 本文不实现容器 catalog、不引入 Docker/podman 依赖、不下载 gcc/glibc。
+- 产品声明的 gcc 范围覆盖整次构建；bundle 里选的依赖线必须在这个范围内可编，
+  这是 recipe / bundle 的验收责任。
+- 容器条目提供同一套 `ToolchainFacts`（gcc、triple 等）；不引入
+  `ContainerToolchain` 类型。构建执行器接收“环境”，本机还是容器对构建逻辑透明。
+- 本文不实现镜像执行、不引入 Docker/podman 依赖、不下载 gcc。
 
 ---
 
@@ -426,7 +486,7 @@ toolchain = TOOLCHAIN,
 | `docs/OUTPUT.md` | `plan --json` 的 `tools` / `toolchain` 字段 |
 | `docs/FLOW.md` | 下载前解析工具；工具构建失败不写 state；add/remove 不接收工具参数 |
 | `docs/DESIGN.md` | 第 14 节登记本文；四层数据补充 Tool / Toolchain |
-| `docs/IMAGE.md` | 第 3 节的 toolchain catalog 与本文对齐：产品声明档位，容器条目提供 facts；旧的 `toolchain = "fedora-43"` 只作为容器选择的实现细节，不替代产品声明 |
+| `docs/IMAGE.md` | 第 3 节改为 `recipes/images.toml`：条目字段 `image` / `digest` / `pm` / `gcc` / `glibc`；gcc 是唯一构建筛选条件，glibc 只提示运行下限；新增 `[package_maps.apt]` / `[package_maps.dnf]`、`phprt list_oci_images`、`--image <线名>`；删除 `libc` 声明和 `--builder` |
 | `docs/ADD-RECIPE.md` | 新增 Tool recipe、添加 toolchain 档位的步骤 |
 | `AGENTS.md` / `README.md` | 简要说明 `recipes/tools/`、`build/tools/`、host-first、toolchain 档位 |
 
@@ -445,8 +505,8 @@ toolchain = TOOLCHAIN,
 5. 构建：工具步骤、PATH、`{tool:}`、签名、日志、marker。
 6. state / lock / plan / downloads / audit。
 7. 迁移 autoconf：`recipes/dep/autoconf.star` → `recipes/tools/autoconf.star`；
-   catalog `[autoconf]` 保留；组件 `tools` 改为 `tool(...)`；`PHP_AUTOCONF` 的
-   host 情况跳过。
+   catalog `[autoconf]` 保留；组件 `tools` 改为 `tool(...)`；删除
+   `PHP_AUTOCONF` / `PHP_AUTOHEADER`，phpize 从 PATH 找 autoconf。
 8. 测试和文档。
 
 ### Phase 2：Toolchain
@@ -459,10 +519,10 @@ toolchain = TOOLCHAIN,
 
 ### 不在本文范围
 
-- 容器化构建、容器 catalog、OCI 镜像；
-- 下载或编译 gcc / glibc / binutils；
+- 容器化构建、镜像 catalog、OCI 镜像；
+- 下载或编译 gcc；
 - cmake / nasm / patchelf 的源码 recipe（本次只把机制做出来，autoconf 是第一个真实用户）；
-- 节点级 toolchain 声明和区间求交；
+- 节点级 CFLAGS 档位；节点级 gcc 约束只做断言，不带 flags；
 - 由 Rust 自动推导兼容 flags。
 
 ---
@@ -563,4 +623,5 @@ phprt audit php@8.5
   重新探测。
 - Tool store 是否提供清理命令：当前不做 `phprt clean`，用户删 `build/` 即可。
 - patchelf 的源码 recipe：本次不写；等 rpath 后端确定后再决定是否需要。
-- 容器 catalog 的 `ToolchainFacts` 字段和 digest 是否进签名，留给容器方案文档。
+- 镜像 catalog 的包名映射会随发行版漂移：只维护验证过的条目，映射错了由工具检查
+  兜底，详见 [IMAGE.md](IMAGE.md)。

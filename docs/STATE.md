@@ -23,7 +23,7 @@
 
 ## 2. 格式
 
-状态 schema 是版本 3：
+状态 schema 是版本 3；`targets` 是新增的可选字段，旧文件没有它时沿用 bundle 默认值：
 
 ```json
 {
@@ -34,6 +34,13 @@
   "installed_version": "8.5.12",
   "bindings": {
     "swoole": "6.2"
+  },
+  "targets": {
+    "cli": {},
+    "fpm": {
+      "user": "www-data",
+      "group": "www-data"
+    }
   },
   "components": {
     "swoole": {
@@ -70,6 +77,7 @@
 | `product` / `series` | 这份状态所属的产品和系列 |
 | `installed_version` | 最近一次成功安装的产品补丁版本；默认解析沿用它，`update` 才前进 |
 | `bindings` | 用户显式指定的版本线；bundle 解析出来的默认线不写在这里 |
+| `targets` | 产品构建目标：target 名 → 配置名 → 值；空/缺失表示沿用 bundle 的 `[targets] default` |
 | `components.<名字>.line` | 实际使用的版本线，如 6.2；bundled 组件为空 |
 | `components.<名字>.version` | 实际补丁，如 6.2.5；`--lock` 把它当作精确版本 |
 | `components.<名字>.mode` | 当前挂载方式，如 static / shared / dynamic |
@@ -102,6 +110,12 @@ CLI 显式 --component ...=version:线 / --dep NAME=线
   > state.bindings
   > bundle 默认线（组件写顶层，依赖库写 [deps]）
   > 组件只有一条线时直接用
+```
+
+构建目标的优先级独立于版本线：
+
+```text
+CLI --targets > state.targets > bundle 的 [targets] default
 ```
 
 如果某个依赖被多个组件或产品约束，取所有约束的交集：
@@ -198,7 +212,7 @@ seed 进 state。
 version=8.5.12
 scheme=a348356a…（sha256，方案指纹）
 resolution=5d1c9e47…（sha256，产品补丁 + 各节点版本）
-scheme_cmd=phprt install php@8.5 'curl=mode:static,swoole=mode:shared'（写标记时的方案）
+scheme_cmd=phprt install php@8.5 'curl=mode:static,swoole=mode:shared' --targets 'cli'（写标记时的方案）
 component=swoole mode=shared
 ini=swoole etc/conf.d/27-swoole.ini
 ini_hash=swoole 7397bc9b…（sha256）
