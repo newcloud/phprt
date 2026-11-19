@@ -26,7 +26,7 @@ def target(ctx):
         modules = ["gd"],
         modes = ["static", "shared"],
         needs = ["libpng"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         # jpeg 由 format feature 条件引入；这里只打开依赖 feature 的转发。
         dep_configure = {"jpeg": []},
         features = {

@@ -11,12 +11,14 @@ use starlark::syntax::{AstModule, Dialect};
 use crate::catalog::Catalog;
 
 /// 三层目标：产品、组件、依赖库。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
+    #[default]
     Dep,
     Component,
     Product,
+    Tool,
 }
 
 impl Kind {
@@ -25,6 +27,7 @@ impl Kind {
             Kind::Dep => "dep",
             Kind::Component => "component",
             Kind::Product => "product",
+            Kind::Tool => "tool",
         }
     }
 }
@@ -190,12 +193,14 @@ pub struct Profile {
     pub audit: String,
 }
 
-/// 一个宿主机工具要求：字符串缩写只检查存在，带 min 时检查版本。
+/// 一个宿主机工具要求：字符串缩写只检查存在，带 min / max 时检查版本区间。
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolSpec {
     pub name: String,
     #[serde(default)]
     pub min: String,
+    #[serde(default)]
+    pub max: String,
     #[serde(default = "default_probe")]
     pub probe: Vec<String>,
 }
@@ -217,6 +222,8 @@ impl<'de> Deserialize<'de> for ToolSpec {
                 name: String,
                 #[serde(default)]
                 min: String,
+                #[serde(default)]
+                max: String,
                 #[serde(default = "default_probe")]
                 probe: Vec<String>,
             },
@@ -225,11 +232,121 @@ impl<'de> Deserialize<'de> for ToolSpec {
             Raw::Name(name) => Ok(Self {
                 name,
                 min: String::new(),
+                max: String::new(),
                 probe: default_probe(),
             }),
-            Raw::Spec { name, min, probe } => Ok(Self { name, min, probe }),
+            Raw::Spec {
+                name,
+                min,
+                max,
+                probe,
+            } => Ok(Self {
+                name,
+                min,
+                max,
+                probe,
+            }),
         }
     }
+}
+
+/// 产品的编译器版本档位。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Toolchain {
+    #[serde(default)]
+    pub gcc: Vec<ToolchainRange>,
+    #[serde(default)]
+    pub gxx: Vec<ToolchainRange>,
+}
+
+/// 一个编译器档位：版本区间 + 该档追加的编译参数。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolchainRange {
+    #[serde(default)]
+    pub min: String,
+    #[serde(default)]
+    pub max: String,
+    #[serde(default)]
+    pub cflags: String,
+    #[serde(default)]
+    pub cxxflags: String,
+}
+
+impl Toolchain {
+    fn validate(&self, at: &str) -> Result<()> {
+        if self.gcc.is_empty() && self.gxx.is_empty() {
+            bail!("{at}: toolchain 至少要声明 gcc 或 gxx 中的一项");
+        }
+        validate_ranges(&self.gcc, "gcc", "cflags", at)?;
+        validate_ranges(&self.gxx, "gxx", "cxxflags", at)?;
+        Ok(())
+    }
+}
+
+fn validate_ranges(
+    ranges: &[ToolchainRange],
+    item: &str,
+    flag_field: &str,
+    at: &str,
+) -> Result<()> {
+    let other = if flag_field == "cflags" {
+        "cxxflags"
+    } else {
+        "cflags"
+    };
+    for range in ranges {
+        for (field, value) in [("min", &range.min), ("max", &range.max)] {
+            if !value.is_empty() && !is_version_text(value) {
+                bail!("{at}: toolchain.{item} 的 {field}={value} 不是数字点分版本");
+            }
+        }
+        if range.min.is_empty() && range.max.is_empty() {
+            bail!("{at}: toolchain.{item} 的档位必须有 min 或 max");
+        }
+        let wrong = if flag_field == "cflags" {
+            &range.cxxflags
+        } else {
+            &range.cflags
+        };
+        if !wrong.trim().is_empty() {
+            bail!("{at}: toolchain.{item} 的档位只能写 {flag_field}，不能写 {other}");
+        }
+    }
+    // 同一项里的档位不能重叠，保证“选了哪一档”是确定的。
+    for (index, left) in ranges.iter().enumerate() {
+        for right in &ranges[index + 1..] {
+            if crate::version::ranges_overlap(
+                (left.min.as_str(), left.max.as_str()),
+                (right.min.as_str(), right.max.as_str()),
+            ) {
+                bail!(
+                    "{at}: toolchain.{item} 的档位重叠：[{}, {}] 与 [{}, {}]",
+                    display_bound(&left.min, "-∞"),
+                    display_bound(&left.max, "+∞"),
+                    display_bound(&right.min, "-∞"),
+                    display_bound(&right.max, "+∞")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn display_bound(value: &str, empty: &str) -> String {
+    if value.is_empty() {
+        empty.to_owned()
+    } else {
+        value.to_owned()
+    }
+}
+
+pub(crate) fn is_version_text(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// 安装后动作；只允许固定原语，不执行任意 shell。
@@ -303,21 +420,31 @@ fn validate_tools(tools: &[ToolSpec], at: &str) -> Result<()> {
         if tool.name.is_empty() {
             bail!("{at}: tools 里有空名字");
         }
-        if !tool.min.is_empty() {
-            if tool.probe.is_empty() {
-                bail!("{at}: tool {} 设置了 min，但 probe 为空", tool.name);
+        for (field, value) in [("min", &tool.min), ("max", &tool.max)] {
+            if value.is_empty() {
+                continue;
             }
-            if tool
-                .min
-                .split('.')
-                .any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()))
-            {
+            if tool.probe.is_empty() {
+                bail!("{at}: tool {} 设置了 {field}，但 probe 为空", tool.name);
+            }
+            if !is_version_text(value) {
                 bail!(
-                    "{at}: tool {} 的 min={} 不是数字点分版本",
+                    "{at}: tool {} 的 {field}={} 不是数字点分版本",
                     tool.name,
-                    tool.min
+                    value
                 );
             }
+        }
+        if !tool.min.is_empty()
+            && !tool.max.is_empty()
+            && crate::version::compare_to_bound(&tool.min, &tool.max) == std::cmp::Ordering::Greater
+        {
+            bail!(
+                "{at}: tool {} 的 min={} 大于 max={}",
+                tool.name,
+                tool.min,
+                tool.max
+            );
         }
         for arg in &tool.probe {
             if arg.is_empty() {
@@ -525,7 +652,7 @@ pub enum TargetValue {
 /// 规范化后的 target 选择：target 名/配置名按 BTreeMap 排序，列表保留元素顺序。
 pub type TargetSelection = BTreeMap<String, BTreeMap<String, TargetValue>>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Target {
     pub kind: Kind,
     pub name: String,
@@ -537,12 +664,12 @@ pub struct Target {
     pub sha256: String,
     #[serde(default)]
     pub needs: Vec<String>,
-    /// 构建期工具依赖（dep）；参与构建顺序和 PATH，不参与链接。
+    /// 构建期工具要求（dep / component / tool）；参与构建顺序和 PATH，不参与链接。
     #[serde(default)]
-    pub tools: Vec<String>,
-    /// 构建期宿主机命令要求（dep / component 使用）。
+    pub tools: Vec<ToolSpec>,
+    /// 产品：编译器版本档位；只做探测、选档和参数合并。
     #[serde(default)]
-    pub host_tools: Vec<ToolSpec>,
+    pub toolchain: Option<Toolchain>,
     /// 产品：源码包内自带的组件名。
     #[serde(default)]
     pub bundled: Vec<String>,
@@ -622,6 +749,7 @@ impl Target {
     pub fn id(&self) -> String {
         match self.kind {
             Kind::Product => format!("product:{}@{}", self.name, self.version),
+            Kind::Tool => format!("tool:{}@{}", self.name, self.version),
             _ => format!("{}:{}", self.kind.as_str(), self.name),
         }
     }
@@ -640,7 +768,7 @@ impl Target {
                     bail!("{at}: dep:{} 缺少 url", self.name);
                 }
                 self.reject_product_fields(&at)?;
-                validate_tools(&self.host_tools, &at.to_string())?;
+                validate_tools(&self.tools, &at.to_string())?;
                 if !self.dep_configure.is_empty() {
                     bail!("{at}: dep:{} 不允许 dep_configure", self.name);
                 }
@@ -707,12 +835,7 @@ impl Target {
                 {
                     bail!("{at}: component:{} 不允许产品字段", self.name);
                 }
-                validate_tools(&self.host_tools, &at.to_string())?;
-                for tool in &self.tools {
-                    if tool.is_empty() {
-                        bail!("{at}: component:{} 的 tools 里有空名字", self.name);
-                    }
-                }
+                validate_tools(&self.tools, &at.to_string())?;
                 for (dep, flags) in &self.dep_configure {
                     if dep.is_empty() {
                         bail!("{at}: component:{} 的 dep_configure 里有空名字", self.name);
@@ -807,6 +930,40 @@ impl Target {
                     }
                 }
             }
+            Kind::Tool => {
+                if self.version.is_empty() {
+                    bail!("{at}: tool:{} 缺少 version", self.name);
+                }
+                if self.url.is_empty() {
+                    bail!("{at}: tool:{} 缺少 url", self.name);
+                }
+                self.reject_product_fields(&at)?;
+                if !self.needs.is_empty() {
+                    bail!(
+                        "{at}: tool:{} 不允许 needs（工具不能依赖库，只能依赖工具）",
+                        self.name
+                    );
+                }
+                if !self.deps.is_empty()
+                    || !self.components.is_empty()
+                    || !self.modes.is_empty()
+                    || !self.source.is_empty()
+                    || !self.series.is_empty()
+                {
+                    bail!("{at}: tool:{} 不允许产品 / 组件字段", self.name);
+                }
+                if !self.prepare.is_empty()
+                    || !self.features.is_empty()
+                    || !self.dep_configure.is_empty()
+                    || !self.ignored.is_empty()
+                {
+                    bail!(
+                        "{at}: tool:{} 只允许 tools / configure / make / artifacts 这些构建字段",
+                        self.name
+                    );
+                }
+                validate_tools(&self.tools, &at.to_string())?;
+            }
             Kind::Product => {
                 if !self.prepare.is_empty() {
                     bail!("{at}: product:{} 不允许 prepare", self.name);
@@ -834,11 +991,8 @@ impl Target {
                 if self.url.is_empty() {
                     bail!("{at}: product:{} 缺少 url", self.name);
                 }
-                if !self.host_tools.is_empty() {
-                    bail!(
-                        "{at}: product:{} 不允许 host_tools（用 profile.tools）",
-                        self.name
-                    );
+                if let Some(toolchain) = &self.toolchain {
+                    toolchain.validate(&at.to_string())?;
                 }
                 self.profile.validate(&at.to_string())?;
                 if self.profile.modes.is_empty() {
@@ -933,17 +1087,24 @@ impl Target {
     }
 
     fn reject_product_fields(&self, at: &std::path::Display<'_>) -> Result<()> {
+        let kind = self.kind.as_str();
         if !self.bundled.is_empty() || !self.bundled_disable.is_empty() {
-            bail!("{at}: dep:{} 不允许 bundled/bundled_disable", self.name);
+            bail!("{at}: {kind}:{} 不允许 bundled/bundled_disable", self.name);
         }
         if !self.components.is_empty() || !self.profile.is_empty() {
-            bail!("{at}: dep:{} 不允许产品字段", self.name);
+            bail!("{at}: {kind}:{} 不允许产品字段", self.name);
         }
         if !self.modes.is_empty() || !self.source.is_empty() || !self.product.is_empty() {
-            bail!("{at}: dep:{} 不允许组件字段", self.name);
+            bail!("{at}: {kind}:{} 不允许组件字段", self.name);
         }
         if !self.targets.is_empty() {
-            bail!("{at}: dep:{} 不允许 targets", self.name);
+            bail!("{at}: {kind}:{} 不允许 targets", self.name);
+        }
+        if self.toolchain.is_some() {
+            bail!(
+                "{at}: {kind}:{} 不允许 toolchain（只写在产品 recipe）",
+                self.name
+            );
         }
         Ok(())
     }
@@ -1596,9 +1757,8 @@ impl Registry {
                 }
             }
             for tool in &t.tools {
-                let id = format!("dep:{tool}");
-                if !self.targets.contains_key(&id) {
-                    bail!("{} 的 tools 指向不存在的依赖 {id}", t.id());
+                if tool.name.is_empty() {
+                    bail!("{} 的 tools 里有空名字", t.id());
                 }
             }
             for (name, f) in &t.features {
@@ -1658,6 +1818,11 @@ impl Registry {
                     }
                 }
                 Kind::Dep => {}
+                Kind::Tool => {
+                    if t.needs.iter().any(|need| !need.is_empty()) {
+                        bail!("{} 不允许 needs", t.id());
+                    }
+                }
             }
         }
         Ok(())
@@ -1698,10 +1863,13 @@ pub fn load_meta(dir: &Path, catalog: &Catalog) -> Result<Vec<RecipeMeta>> {
                 .with_context(|| format!("{}: PRODUCT_DEP_LINES 不合法", file.path.display()))?,
             None => BTreeMap::new(),
         };
-        if file.kind == Kind::Dep && (!lines.is_empty() || !product_lines.is_empty()) {
+        if matches!(file.kind, Kind::Dep | Kind::Tool)
+            && (!lines.is_empty() || !product_lines.is_empty())
+        {
             bail!(
-                "{}: dep recipe 不能声明 LINES/PRODUCT_LINES（库与产品无关）",
-                file.path.display()
+                "{}: {} recipe 不能声明 LINES/PRODUCT_LINES",
+                file.path.display(),
+                file.kind.as_str()
             );
         }
         if file.kind != Kind::Component && !product_dep_lines.is_empty() {
@@ -1899,6 +2067,73 @@ pub fn load_targets(
         targets.push(target);
     }
 
+    // 工具不绑定在产品闭包里：catalog 里每条线都是一个可构建的版本。
+    for file in files.iter().filter(|file| file.kind == Kind::Tool) {
+        let Some(lines) = catalog.lines(&file.name) else {
+            continue;
+        };
+        let src = fs::read_to_string(&file.path)
+            .with_context(|| format!("读不到 {}", file.path.display()))?;
+        let prelude = read_prelude(&file.path)?;
+        // 一条线里的当前补丁和 patches 都是可选版本；工具没有“产品系列”，
+        // 每个版本各自成节点。
+        let mut versions: Vec<(String, String, String, String)> = Vec::new();
+        for (line, artifact) in lines {
+            versions.push((
+                line.clone(),
+                artifact.version.clone(),
+                artifact.url.clone(),
+                artifact.sha256.clone(),
+            ));
+            for patch in &artifact.patches {
+                versions.push((
+                    line.clone(),
+                    patch.version.clone(),
+                    patch.url.clone(),
+                    patch.sha256.clone(),
+                ));
+            }
+        }
+        for (line, version, url, sha256) in versions {
+            let mut ctx = base_ctx.clone();
+            ctx["is_bundled"] = serde_json::Value::Bool(false);
+            ctx["self"] = serde_json::json!({
+                "version": version,
+                "url": url,
+                "sha256": sha256,
+                "line": line,
+            });
+            let json = eval_target(
+                &file.path,
+                &defs,
+                prelude.as_deref(),
+                &src,
+                &globals,
+                &dialect,
+                &ctx,
+            )?;
+            let mut target: Target = serde_json::from_value(json)
+                .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
+            if target.kind != Kind::Tool {
+                bail!("{}: TARGET.kind 与目录不一致", file.path.display());
+            }
+            if target.name != file.name {
+                bail!(
+                    "{}: TARGET.name={} 与文件名 {} 不一致",
+                    file.path.display(),
+                    target.name,
+                    file.name
+                );
+            }
+            target.version = version;
+            target.url = url;
+            target.sha256 = sha256;
+            target.line = line;
+            target.validate(&file.path)?;
+            targets.push(target);
+        }
+    }
+
     for file in files.iter().filter(|file| {
         file.kind == Kind::Component && file.product.as_deref() == Some(product_name)
     }) {
@@ -2028,6 +2263,9 @@ fn recipe_files(dir: &Path) -> Result<Vec<RecipeFile>> {
     for file in star_files(&dir.join("dep"))? {
         files.push(classify(&file)?);
     }
+    for file in star_files(&dir.join("tools"))? {
+        files.push(classify(&file)?);
+    }
     for (sub, kind) in [("components", Kind::Component), ("products", Kind::Product)] {
         let root = dir.join(sub);
         if !root.is_dir() {
@@ -2103,6 +2341,15 @@ fn classify(path: &Path) -> Result<RecipeFile> {
             series: None,
         });
     }
+    if parent == "tools" {
+        return Ok(RecipeFile {
+            path: path.to_path_buf(),
+            kind: Kind::Tool,
+            name: stem.to_owned(),
+            product: None,
+            series: None,
+        });
+    }
     match grand {
         "components" => Ok(RecipeFile {
             path: path.to_path_buf(),
@@ -2119,7 +2366,7 @@ fn classify(path: &Path) -> Result<RecipeFile> {
             series: Some(stem.to_owned()),
         }),
         _ => bail!(
-            "{}: recipe 必须放在 dep/、components/<产品>/ 或 products/<产品>/ 下",
+            "{}: recipe 必须放在 dep/、tools/、components/<产品>/ 或 products/<产品>/ 下",
             path.display()
         ),
     }
@@ -2424,6 +2671,11 @@ fn validate_meta_catalog(metas: &[RecipeMeta], catalog: &Catalog) -> Result<()> 
                     .iter()
                     .find(|m| m.kind == Kind::Component && &m.name == name)
             })
+            .or_else(|| {
+                metas
+                    .iter()
+                    .find(|m| m.kind == Kind::Tool && &m.name == name)
+            })
             .ok_or_else(|| anyhow!("catalog 里的 {name} 没有 recipe"))?;
         if !meta.lines.is_empty() {
             let recipe_lines: BTreeSet<&String> = meta.lines.keys().collect();
@@ -2664,7 +2916,10 @@ mod tests {
     fn php_profile_is_shared_and_series_can_extend_it() {
         let (reg, _) = load("8.5", &[], &[]).unwrap();
         let product = reg.product_any().unwrap();
-        assert!(product.profile.tools.iter().any(|tool| tool.name == "gcc"));
+        assert!(!product.profile.tools.iter().any(|tool| tool.name == "gcc"));
+        let toolchain = product.toolchain.as_ref().expect("8.5 要声明 toolchain");
+        assert_eq!(toolchain.gcc.len(), 1);
+        assert_eq!(toolchain.gcc[0].min, "9");
         assert!(!product.profile.post_install.is_empty());
         assert_eq!(product.profile.entry_template, "entry.sh");
         assert_eq!(product.profile.env["CC"], "gcc");
@@ -2673,11 +2928,12 @@ mod tests {
 
         let (reg, _) = load("8.0", &[], &[]).unwrap();
         let product = reg.product_any().unwrap();
-        assert_eq!(
-            product.profile.env.get("CFLAGS").map(String::as_str),
-            Some("-O2 -std=gnu17 -Wno-error=incompatible-pointer-types")
-        );
         assert_eq!(product.profile.env["CC"], "gcc");
+        let toolchain = product.toolchain.as_ref().expect("8.0 要声明 toolchain");
+        assert_eq!(
+            toolchain.gcc.last().unwrap().cflags,
+            "-std=gnu17 -Wno-error=incompatible-pointer-types"
+        );
     }
 
     #[test]
@@ -2789,10 +3045,11 @@ mod tests {
             }
         }
 
-        // PHP profile 反过来要有 phpize 步骤和 PHP_AUTOCONF。
+        // PHP profile 反过来要有 phpize 步骤；autoconf 走 PATH，不用环境变量。
         let (reg, _) = load("8.5", &[], &[]).unwrap();
         let product = reg.product_any().unwrap();
-        assert!(product.profile.env.contains_key("PHP_AUTOCONF"));
+        assert!(!product.profile.env.contains_key("PHP_AUTOCONF"));
+        assert!(product.profile.tools.iter().any(|tool| tool.name == "m4"));
         let shared = product.profile.modes.get("shared").unwrap();
         assert!(shared.steps.iter().any(|step| step.contains("phpize")));
 

@@ -167,6 +167,16 @@ fn build_dir_with(base: &str, name: &str, url: &str) -> String {
     format!("{base}/{name}/{stem}")
 }
 
+/// 构建期工具的安装根：`<build-dir>/tools`。
+pub fn tools_dir(root: &Path) -> PathBuf {
+    root.join(build_dir_name()).join("tools")
+}
+
+/// 一个工具版本的安装前缀：`<build-dir>/tools/<name>-<version>`。
+pub fn tool_prefix(tools_dir: &Path, name: &str, version: &str) -> PathBuf {
+    tools_dir.join(format!("{name}-{version}"))
+}
+
 pub fn build_dir_of(target: &Target) -> String {
     build_dir(&target.name, &target.url)
 }
@@ -177,13 +187,14 @@ pub fn label(kind: Kind) -> &'static str {
         Kind::Product => "product",
         Kind::Dep => "deps",
         Kind::Component => "component",
+        Kind::Tool => "tools",
     }
 }
 
-/// 下载/解压清单只关心产品本体、依赖库和外部组件。
+/// 下载/解压清单只关心产品本体、依赖库、外部组件和工具源码。
 pub fn downloadable(target: &Target) -> bool {
     match target.kind {
-        Kind::Product | Kind::Dep => true,
+        Kind::Product | Kind::Dep | Kind::Tool => true,
         Kind::Component => target.source == "external",
     }
 }

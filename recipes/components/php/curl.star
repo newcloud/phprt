@@ -23,7 +23,7 @@ def target(ctx):
         modules = ["curl"],
         modes = ["static", "shared"],
         needs = ["libcurl"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         dep_configure = {"libcurl": []},
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],

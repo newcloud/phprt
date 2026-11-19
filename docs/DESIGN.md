@@ -58,16 +58,17 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 | 层 | 文件 | 只回答 |
 | --- | --- | --- |
 | catalog | `recipes/catalog.toml` | 这条线当前是哪个补丁、从哪下载 |
-| recipe | `recipes/products/**`、`components/**`、`dep/**` | 怎么编译、允许哪些线、需要哪些依赖 |
+| recipe | `recipes/products/**`、`components/**`、`dep/**`、`tools/**` | 怎么编译、允许哪些线、需要哪些依赖和构建期工具 |
 | bundle | `recipes/bundles/<产品>/<系列>.toml` | 默认用哪条线、默认装哪些组件、默认选哪些 target |
 | state | `.phprt/<产品>-<系列>/state.json`（工具目录在项目根下，默认 `.phprt`，可配置） | 本机这次实际选了什么、装到哪一步 |
 
 优先级从低到高：catalog < recipe < bundle < state < CLI。
 
 Tool / Toolchain 不新增层：Tool 的 recipe 在 `recipes/tools/`、源码版本仍走
-`catalog.toml`；Toolchain 是产品 recipe 的字段。镜像线单独放在
+`catalog.toml`，构建产物放在 `build/tools/`（可重建缓存，不进 state 的产品身份）；
+Toolchain 是产品 recipe 的字段，只探测和合并参数。镜像线单独放在
 `recipes/images.toml`，只服务镜像模式，不改变这四层，见 [TOOLS.md](TOOLS.md) 和
-[IMAGE.md](IMAGE.md)（均待实施）。
+[IMAGE.md](IMAGE.md)（镜像部分待实施）。
 
 ## 4. 三个核心概念
 
@@ -270,6 +271,9 @@ src/
 ├── manage.rs     add / remove 的现场检查、确认交互、ini 备份、产物删除
 ├── audit.rs      上游选项盘点
 ├── state.rs      state.json
+├── tools.rs      构建期工具解析（宿主 / build/tools / catalog）、版本探测
+├── toolchain.rs  编译器探测、档位选择、CFLAGS 合并
+├── version.rs    版本区间比较（tool / toolchain 共用）
 ├── layout.rs     源码 / 安装路径
 ├── sources.rs    下载清单
 └── config.rs     下载 / rpath 配置
@@ -286,6 +290,7 @@ recipes/
 ├── products/<产品>/<系列>.star
 ├── components/<产品>/<名字>.star
 ├── dep/<名字>.star
+├── tools/<名字>.star
 ├── bundles/<产品>/<系列>.toml
 ├── catalog.toml
 └── defs.star
@@ -329,8 +334,8 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | --- | --- |
 | [CLI.md](CLI.md) | 子命令、`产品@系列`、`--component`、`--dep`、错误与退出码 |
 | [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle、targets |
-| [PRODUCT.md](PRODUCT.md) | 产品共享 profile、工具最低版本、安装后动作、入口模板 |
-| [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / build/tools、同名工具多版本、tool-sig、toolchain 档位与镜像筛选（待实施，代码未实现） |
+| [PRODUCT.md](PRODUCT.md) | 产品共享 profile、工具版本区间、toolchain 档位、安装后动作、入口模板 |
+| [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / build/tools、同名工具多版本、tool-sig、toolchain 档位与镜像筛选 |
 | [TARGETS.md](TARGETS.md) | `--targets`、target 声明、默认值、state/scheme 与构建身份 |
 | [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、feature 并集 |
 | [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |

@@ -307,18 +307,22 @@ myphp-8.5                     项目入口（选中 cli target 时生成）
 
 ## 构建工具
 
-编译前检查宿主机命令；下列是产品至少需要的：
+编译前按节点解析宿主机工具；宿主满足就用宿主，否则从 `recipes/tools/` 构建到
+`build/tools/`，跨产品复用。下列是产品至少需要的：
 
 | 产品 | 命令 |
 | --- | --- |
 | php | `gcc` ≥ 9、`g++` ≥ 9、`make` ≥ 4.0、`pkg-config` ≥ 0.29、`perl` ≥ 5.20、`m4` ≥ 1.4、`patchelf` ≥ 0.13、`ar`、`ranlib`、`sh` |
 | nginx | `gcc` ≥ 8、`make` ≥ 4.0、`perl` ≥ 5.20、`patchelf` ≥ 0.13、`ar`、`ranlib`、`sh` |
 
-个别依赖还会用到 `cmake`、`nasm` 等，缺了会在下载前报出来：
+gcc / g++ 由产品 recipe 的 `toolchain` 声明档位：落在档位里就继续，太新但有兼容
+参数时用该档的 `cflags`，不在任何档位才报错。个别依赖还会用到 `cmake`、`nasm`，
+缺了会在下载前报出来：
 
 ```text
-error: 需要 gcc >= 9，当前 1.0.0
-error: 缺少构建工具: patchelf
+error: 宿主缺少 nasm，catalog 没有 nasm 的构建 recipe
+error: 宿主 make 3.8 不满足 >= 4.0，catalog 也没有可用版本
+error: 产品 php 声明 gcc 档位 >= 16，实际 gcc 15.3.1 不在任何一档里
 ```
 
 ## 可装的产品

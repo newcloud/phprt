@@ -69,7 +69,7 @@ configure 参数变了 → PHP 整个重编。`shared` → standalone → 只多
 
 | 词 | 意思 |
 | --- | --- |
-| 闭包（desired closure） | `plan::resolve` 从产品出发按 `needs` / feature / tools 展开出来的全部节点；只有闭包里的名字才可能成为 pin |
+| 闭包（desired closure） | `plan::resolve` 从产品出发按 `needs` / feature 展开出来的全部节点；构建期工具在下载前按节点单独解析，只有闭包里的名字才可能成为 pin |
 | order | 闭包的拓扑构建顺序；产品在前，standalone 组件在产品之后 |
 | bindings | `state.bindings`，用户显式钉过的版本线；不含 bundle 默认线 |
 | Effective Pins | 闭包 ∩ state 生成的 `lines` + `versions`，是 resolver 的锁定输入 |

@@ -256,8 +256,9 @@ TARGET = target
 - `version` / `url` / `sha256` 由 ctx 注入。
 - 安装前缀是 `.phprt/<产品>-<产品版本>/deps/<name>-<version>`。
 - 禁止产品 / 组件字段。
-- `host_tools` 是这个依赖构建时需要的宿主机命令，如 `["cmake"]` 或
-  `[tool("nasm", min = "2.13")]`；只在本次闭包包含它时检查。
+- `tools` 是这个依赖构建时需要的工具，如 `["cmake"]` 或
+  `[tool("nasm", min = "2.13")]`；宿主满足就用宿主，否则从 catalog 构建到
+  `build/tools/`。`host_tools` 已删除。
 - `features` 由组件的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
   `disable` 参数（用来关掉上游的自动探测），没有 `disable` 就不传。
 - dep 的 feature 允许写 `requires.commands`（宿主机命令）；不允许 `requires.product` /
@@ -294,7 +295,7 @@ def target(ctx):
         sha256=self["sha256"],
         modules=["swoole"],
         needs=["libcurl", "openssl"],
-        tools=["autoconf"],
+        tools=[tool("autoconf", min = "2.68")],
         dep_configure={"libcurl": ["--enable-swoole-curl"]},
         configure=["--enable-swoole", "--with-openssl-dir={dep:openssl}"],
         ini="27-swoole.ini",
@@ -314,9 +315,10 @@ TARGET = target
 - `modes` 非空，值由产品 profile 定义；默认挂载方式由 profile 的 `defaults` 按 source 推导。
 - `modules` 是产品启动后应看到的模块名，由产品 profile 的 `verify_modules` 使用。
 - `ini` / `ini_lines` 是安装后的登记文件，只有 profile 的 `register` 动作为 `php-ini` 时使用。
-- `tools` 是构建期工具依赖：参与构建顺序和 `PATH`，不参与 include/lib，
-  也不进入产品运行时库收集；每个名字必须是 `dep/*.star` 里的目标。
-- `host_tools` 是构建期宿主机命令要求，如 `["cmake"]` / `[tool("nasm", min = "2.13")]`。
+- `tools` 是构建期工具要求：宿主满足就用宿主，否则从 `recipes/tools/` 构建到
+  `build/tools/<name>-<version>`；参与构建顺序和 `PATH`，不参与 include/lib，
+  也不进入产品运行时库收集。只有 standalone 组件解析自己的 `tools`。
+- `host_tools` 已删除，构建期工具统一写在 `tools`。
 - `prepare` 是在 standalone 构建之前于源码目录执行的 shell 命令列表，用来给上游源码
   打兼容补丁（如删除已移除头文件的 include），也可以做显式的源码文件准备，例如把只有
   `config0.m4` 的 PHP 扩展准备成 `config.m4`。命令写进构建签名，变化会触发重编。
@@ -363,6 +365,37 @@ TARGET = target
 - `ignored` 记录看过但不暴露的上游选项，值为理由（不能为空）；`audit` 会对照上游清单
   检查遗漏和拼写错误。取舍规则见 [FEATURES.md](FEATURES.md)。
 - 版本线通过 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 声明，不在 recipe 里写死。
+
+## 5.1 tool
+
+```python
+def target(ctx):
+    self = ctx["self"]
+    return tool_target(
+        name="autoconf",
+        version=self["version"],
+        url=self["url"],
+        sha256=self["sha256"],
+        tools=[tool("m4", min="1.4")],
+        configure=["./configure", "--prefix={prefix}"],
+        make=["make", "make install"],
+        artifacts=["bin/autoconf"],
+        desc="构建期工具：phpize 需要 autoconf",
+    )
+
+TARGET = target
+```
+
+规则：
+
+- 路径是 `recipes/tools/<名字>.star`，节点 id 是 `tool:<名字>@<版本>`。
+- 版本、url、sha256 由 catalog 注入；catalog 里每条线（含 `patches`）都是一个可选版本。
+- 安装前缀是 `build/tools/<名字>-<版本>`，源码目录仍是 `build/<名字>/<stem>`。
+- 不能声明 `needs`（工具不能依赖库），只能声明 `tools`（工具依赖工具）。
+- 不允许产品 / 组件字段：`product` / `series` / `source` / `modes` / `bundled` /
+  `components` / `targets` / `prepare` / `features` / `ignored`。
+- 工具按 `--prefix={prefix}` 安装；`artifacts` 相对安装前缀检查。
+- 工具节点不继承产品 profile 的 `tools`，也不带产品的 toolchain 兼容参数。
 
 ## 6. product 和 profile
 
@@ -421,12 +454,15 @@ TARGETS = {
 - `needs` / `deps`：产品链接和运行时需要的依赖库，以及要转给它们的 feature。
 - `bundled`：该产品源码包内自带的组件名，和是否有 recipe 无关；不要求非空。
 - `bundled_disable`：bundled 组件名 → 单个关闭参数；key 必须在 `bundled` 里。
+- `toolchain` 是 `toolchain(gcc=[...], gxx=[...])`，声明编译器版本档位和每档的
+  兼容参数；不写就不检查、不加参数。只有 `gcc` / `gxx` 两项，档位不能重叠，
+  `gcc` 档位只写 `cflags`，`gxx` 档位只写 `cxxflags`。详见 [TOOLS.md](TOOLS.md) §4。
 - `profile` 是 `product_profile(...)`，同产品的系列共用
   `products/<产品>/_profile.star` 里的 `PROFILE`：
 
   ```python
   PROFILE = product_profile(
-      tools = [tool("gcc", min = "9"), "sh"],
+      tools = [tool("make", min = "4.0"), tool("patchelf", min = "0.13"), "sh"],
       modes = {
           "static": mode(strategy="fold"),
           "shared": mode(
@@ -454,7 +490,7 @@ TARGETS = {
 
 | 字段 | 说明 |
 | --- | --- |
-| `tools` | 产品总是需要的宿主机命令；`tool(name, min, probe)` 或字符串，详见 [PRODUCT.md](PRODUCT.md) |
+| `tools` | 产品总是需要的构建期工具；`tool(name, min, max, probe)` 或字符串，宿主优先、否则从 catalog 构建，详见 [PRODUCT.md](PRODUCT.md) 与 [TOOLS.md](TOOLS.md) |
 | `modes` | 挂载方式 → `mode(strategy, steps, artifacts, configure)` |
 | `defaults` | 组件来源（bundled / external）→ 默认挂载方式 |
 | `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |
@@ -482,7 +518,7 @@ TARGETS = {
 
 | 动作 | 声明位置 | 职责 | 执行顺序 | 变量解析 | 签名规则 |
 | --- | --- | --- | --- | --- | --- |
-| `env`（profile） | `product_profile(env=...)` | 产品专用环境变量，如 PHP 的 `CC` / `PHP_AUTOCONF` | 构建节点环境的一部分，先于命令执行 | `{tree}` / `{tool:<dep>}`；`{tool:}` 只在节点 `tools` 含该 dep 时展开，否则跳过 | 展开后的值进签名 |
+| `env`（profile） | `product_profile(env=...)` | 产品专用环境变量，如 PHP 的 `CC` / `CXX` | 构建节点环境的一部分，先于命令执行 | `{tree}` / `{tool:NAME}`；只有节点 `tools` 含该工具且解析到 built 版本时展开，宿主提供时跳过该项 | 展开后的值进签名 |
 | `env`（component） | `component(env=...)` | 组件专用环境变量 | 在 profile env 之后合并 | `{tree}` / `{dep:}` / `{source:}` 等占位符 | 展开后的值进签名 |
 | `prepare` | `component(prepare=[...])` | 源码准备，如把 `config0.m4` 准备成 `config.m4`、打兼容补丁 | standalone 构建之前、源码拷贝之后、profile steps 之前 | 同 component env | 命令原文进签名 |
 | `configure` | `dep` / `component` / `product` 的 `configure` | 生成构建文件 | prepare 之后、make 之前 | 占位符展开；dep 追加 feature 参数 | 展开后的全部参数进签名 |
@@ -510,6 +546,7 @@ TARGETS = {
 | `{dep:名字}` | `{tree}/deps/<名字>-<版本>` |
 | `{source:名字}` | 对应 dep / component 的解压源码根 |
 | `{component_source}` | 仅 fold 模板：组件源码根 |
+| `{tool:名字}` | built 工具的安装前缀 `build/tools/<名字>-<版本>`；宿主提供时不生成该 env 项 |
 
 未知占位符在渲染阶段报错。`{source:名字}` 先找 dep，再找 component；找不到直接报错。
 
@@ -522,23 +559,25 @@ TARGETS = {
 3. component 的 `product`、`source`、`modes`、默认 mode；external 必须有 version/url；
    component 不允许产品字段。
 4. `needs` 指向的 `dep:*` 存在。
-5. `tools` 指向的 `dep:*` 存在。
+5. `tools` 每项名字非空；工具在解析阶段按 catalog 选择版本，不要求 registry 里已有同名目标。
 6. `features.*.needs` 指向的 `dep:*` 存在。
 7. `dep_configure` 的 key 在 `needs` 或某个 feature 的 `needs` 里；component 的
    `features.*.requires.dep` 的 key 也在 `needs` 里。`requires.commands` 每项非空；
    dep 的 feature 只允许 `commands` 条件。`ignored` 只能出现在 dep / component 上，
    key 是 `--...` 选项，理由非空。
-8. product 的 `targets` 名字、配置项名、类型、`{value}` 模板必须合法；声明了 targets
+8. product 的 `toolchain` 至少要声明 `gcc` / `gxx` 之一；每个档位必须有 min 或 max，
+   同一项里的档位不能重叠，`gcc` 档位不能写 `cxxflags`、`gxx` 档位不能写 `cflags`。
+9. product 的 `targets` 名字、配置项名、类型、`{value}` 模板必须合法；声明了 targets
    时，cli / state / bundle 里的未知 target 或未知配置项都直接报错，不静默丢弃。
-9. component 的 `modes` 必须在产品 profile 的 `modes` 里；默认 mode 也必须在 `modes` 里。
-10. product 的 `bundled` 无重复；`bundled_disable` 的 key 是其子集，值是单个
+10. component 的 `modes` 必须在产品 profile 的 `modes` 里；默认 mode 也必须在 `modes` 里。
+11. product 的 `bundled` 无重复；`bundled_disable` 的 key 是其子集，值是单个
    `--without-*` / `--disable-*`；profile 的 `modes` 非空、`strategy` 合法。
-11. catalog 的产品系列与 product recipe 集合一致。
-12. catalog 里每个组件都有同名 recipe；组件声明 `LINES` 时线集合必须一致。
-13. `LINES` 的每条线对组件必须有非空 `product` 数组；产品可以省略 `product`。
-14. dep recipe 不声明 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`。
-15. `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 只用于 component，引用的系列和线都在 catalog 里。
-16. 既不是当前产品 bundled、也没有 catalog 记录的 component recipe 不加载。
-17. `[component_presets]` 自己不能写 `ref`；`[default_components]` 的 `ref` 必须是
+12. catalog 的产品系列与 product recipe 集合一致。
+13. catalog 里每个组件（含 tool）都有同名 recipe；组件声明 `LINES` 时线集合必须一致。
+14. `LINES` 的每条线对组件必须有非空 `product` 数组；产品可以省略 `product`。
+15. dep / tool recipe 不声明 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`。
+16. `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 只用于 component，引用的系列和线都在 catalog 里。
+17. 既不是当前产品 bundled、也没有 catalog 记录的 component recipe 不加载。
+18. `[component_presets]` 自己不能写 `ref`；`[default_components]` 的 `ref` 必须是
     `"component_presets.<同名组件>"`，指向存在的 preset，且不能和本地 `features`/`deps`
     同时写。

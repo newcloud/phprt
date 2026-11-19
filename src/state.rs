@@ -46,6 +46,16 @@ pub struct DepState {
     pub features: Vec<String>,
 }
 
+/// 一次构建实际解析到的工具；只记录，不参与方案。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolState {
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    /// `host` 或 `store`。
+    pub provider: String,
+}
+
 /// `.phprt/<产品>-<系列>/state.json`：当前构建方案和已编译产物的状态。
 ///
 /// 解析时它是 `--lock` 的版本来源：line 默认复用，`--lock` 再复用 version；
@@ -73,6 +83,9 @@ pub struct ProjectState {
     pub components: BTreeMap<String, ComponentState>,
     #[serde(default)]
     pub deps: BTreeMap<String, DepState>,
+    /// 上次构建实际用到的工具；`--lock` 复用其中的 built 版本。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolState>,
 }
 
 impl Default for ProjectState {
@@ -87,6 +100,7 @@ impl Default for ProjectState {
             targets: TargetSelection::new(),
             components: BTreeMap::new(),
             deps: BTreeMap::new(),
+            tools: Vec::new(),
         }
     }
 }
@@ -434,8 +448,33 @@ impl ProjectState {
             .collect();
     }
 
-    /// 不重编的 remove：保留已记录的 line / version，只收窄 feature、删掉闭包外的 dep。
-    ///
+    /// 记录本次实际解析到的工具（host + built），按名字 / 版本排序。
+    pub fn set_tools(&mut self, resolution: &crate::tools::Resolution) {
+        self.tools = resolution
+            .report()
+            .into_iter()
+            .map(|tool| ToolState {
+                name: tool.name.clone(),
+                version: tool.version.clone(),
+                provider: tool.provider.as_str().to_owned(),
+            })
+            .collect();
+    }
+
+    /// `--lock` 用：state 里记录过的 built 版本，按名字分组。
+    pub fn locked_tools(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for tool in &self.tools {
+            if tool.provider == "store" && !tool.version.is_empty() {
+                out.entry(tool.name.clone())
+                    .or_default()
+                    .push(tool.version.clone());
+            }
+        }
+        out
+    }
+
+    /// 不重编的 remove：保留已记录的 line / version，只收窄 feature、删掉闭包外的 dep。    ///
     /// 当前 catalog 解析出来的版本没有真正编译过，不能覆盖 state。
     pub fn prune_deps(&mut self, order: &[&Target], features: &BTreeMap<String, Vec<String>>) {
         let needed: BTreeSet<&str> = order
@@ -529,7 +568,7 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            host_tools: vec![],
+            toolchain: None,
             bundled: vec![],
             bundled_disable: Default::default(),
             components: vec![],

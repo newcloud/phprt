@@ -169,7 +169,6 @@ PHP 的 `modules` / `ini` / `origin` 不再是通用字段：
 ```python
 PROFILE = product_profile(
     tools = [
-        tool("gcc", min = "9"),
         tool("make", min = "4.0"),
         "ar",
         "ranlib",

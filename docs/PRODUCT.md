@@ -48,8 +48,6 @@ curl.cainfo    = "${SSL_CERT_FILE}"
 
 PROFILE = product_profile(
     tools = [
-        tool("gcc", min = "9"),
-        tool("g++", min = "9"),
         tool("make", min = "4.0"),
         "ar",
         "ranlib",
@@ -105,8 +103,6 @@ PROFILE = product_profile(
     env = {
         "CC": "gcc",
         "CXX": "g++",
-        "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
-        "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
     },
     audit = "php-config-m4",
 )
@@ -128,29 +124,35 @@ TARGET = product(
 )
 ```
 
-## 3. 系列差异：`extend_profile`
+## 3. 系列差异：`extend_profile` 与 `toolchain`
 
-需要按系列改工具或编译参数时，用 `extend_profile(PROFILE, ...)`。例：PHP 8.0 只追加
-`CFLAGS`，其余工具要求沿用共享 profile：
+需要按系列改工具要求或环境变量时，用 `extend_profile(PROFILE, ...)`。
+编译器版本和兼容参数不走 `extend_profile`，写在系列自己的 `TOOLCHAIN` 里：
 
 ```python
 # recipes/products/php/8.0.star
+TOOLCHAIN = toolchain(
+    gcc = [
+        toolchain_range(min = "9", max = "13"),
+        toolchain_range(
+            min = "14",
+            cflags = "-std=gnu17 -Wno-error=incompatible-pointer-types",
+        ),
+    ],
+    gxx = [toolchain_range(min = "9")],
+)
+
 TARGET = product(
     name = "php",
     series = "8.0",
     ...
-    profile = extend_profile(
-        PROFILE,
-        env = {
-            "CFLAGS": "-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
-        },
-    ),
+    profile = PROFILE,
+    toolchain = TOOLCHAIN,
 )
 ```
 
 需要提高工具要求时在同一个调用里加 `tools`，例如
-`tools = [tool("gcc", min = "11"), tool("g++", min = "11")]`；同名的会替换
-profile 里的那一条。
+`tools = [tool("make", min = "4.3")]`；同名的会替换 profile 里的那一条。
 
 合并规则固定：
 
@@ -160,50 +162,53 @@ profile 里的那一条。
 | `env` | 按 key 合并；后面的覆盖前面的 |
 | `modes` / `defaults` / `runtime` / `register` / `post_install` / `verify` / `verify_modules` / `entry` / `entry_template` / `audit` / `bundled_path` | 传了才替换，没传沿用 base |
 
-系列里的 `env` 会覆盖 profile 的 `env`，所以 8.0 可以在共享 `CC` / `CXX` /
-`PHP_AUTOCONF` 的基础上只加 `CFLAGS`。
+系列里的 `env` 会覆盖 profile 的 `env`，所以可以在共享 `CC` / `CXX` 的基础上
+只加该系列需要的变量。`runtime.lib_dir` 同时作为构建时 `LD_LIBRARY_PATH` 的首项
+和运行时收库目录。
 
-`env` 里的 `{tool:NAME}` 只在当前构建节点的 `tools` 含该工具 dep 时展开，所以
-`PHP_AUTOCONF` 只进 phpize 类组件，nginx 不会拿到 PHP 专用变量。`runtime.lib_dir`
-同时作为构建时 `LD_LIBRARY_PATH` 的首项和运行时收库目录。
-
-Tool 迁移后 `PHP_AUTOCONF` / `PHP_AUTOHEADER` 删除：phpize 直接从 PATH 找
-`autoconf` / `autoheader`，工具 bin 由执行器按节点前置（见 [TOOLS.md](TOOLS.md) §3.4）。
+`env` 里的 `{tool:NAME}` 只在当前构建节点的 `tools` 含该工具、且这个工具解析到
+built 版本时展开成 `build/tools/<name>-<version>`；宿主提供的工具跳过这个 env 项，
+让宿主 PATH 自己找到命令（见 [TOOLS.md](TOOLS.md) §3.4）。phpize 的
+`autoconf` / `autoheader` 直接从 PATH 找，不再用 `PHP_AUTOCONF` / `PHP_AUTOHEADER`。
 
 最低版本只用于“明显编不了”的检查；编译器太新带来的行为变化（例如 GCC 15 默认
-`gnu23`）必须由 recipe 显式处理，不能根据版本号自动推导。当前写法是系列 recipe 的
-`env` / `configure`；toolchain 实施后改由 §4.3 的档位声明。
+`gnu23`）必须由 recipe 显式处理，不能根据版本号自动推导；这类参数写在 §4.3 的
+toolchain 档位里。
 
 ## 4. 工具声明
 
 ```python
-tool(name, min = "", probe = ["--version"])
+tool(name, min = "", max = "", probe = ["--version"])
 ```
 
 - 字符串缩写表示只检查存在：`"patchelf"`。
-- `min` 是最低版本，数字点分：`"11"`、`"4.2"`。
+- `min` / `max` 是版本区间，数字点分：`"11"`、`"4.2"`。
+- 按写出的段数比较：`min = "14"` 接受 14.0.1，`max = "13"` 接受 13.9.9、
+  拒绝 14.0；空表示不限。
 - `probe` 是探测命令的参数列表，不经过 shell；默认 `--version`。
 - 版本从 stdout + stderr 里取第一个 `\d+(\.\d+)+` 片段。
 - 探测时设置 `LC_ALL=C`。
-- 比较按数字段逐段进行，缺的段按 0 处理。
 
 示例：
 
 ```python
-tool("gcc", min = "11", probe = ["-dumpfullversion"])
+tool("cmake", min = "3.20", probe = ["--version"])
 tool("nasm", min = "2.13", probe = ["-v"])
 tool("perl", min = "5.20", probe = ["-e", "print $^V"])
 ```
 
-检查失败：
+解析发生在下载源码之前，按节点进行：宿主满足区间就用宿主，否则复用
+`build/tools` 里已有的版本，再否则从 catalog 取满足区间的最高版本源码构建。
+宿主有命令但版本不满足时不会静默回退，错误会写清是哪一种情况：
 
 ```text
-需要 gcc >= 11，当前 9.3.1
-拿不到 gcc 版本（命令: gcc -dumpfullversion）
-缺少构建工具: nasm
+宿主 cmake 3.10 不满足 >= 3.20，catalog 也没有可用版本
+宿主缺少 nasm，catalog 没有 nasm 的构建 recipe
+catalog 里 autoconf 最高 2.72，不满足 >= 9.0
 ```
 
-工具检查在下载源码之前执行；`--downloads` 不做工具检查。
+宿主工具不下载、不安装；built 工具装到 `build/tools/<name>-<version>`，跨产品复用。
+`--downloads` 只下载本次解析到、需要构建的工具源码，不检查、不构建。
 
 ### 4.1 检查的命令要和实际使用的一致
 
@@ -224,7 +229,7 @@ env = {"CC": "gcc", "CXX": "g++"}
 ```python
 dep(
     name = "aom",
-    host_tools = [tool("nasm", min = "2.13")],
+    tools = [tool("nasm", min = "2.13"), "cmake"],
     ...
 )
 ```
@@ -232,27 +237,25 @@ dep(
 ```python
 dep(
     name = "libzip",
-    host_tools = ["cmake"],
+    tools = ["cmake"],
     ...
 )
 ```
 
-最终检查集合：
+`host_tools` 已删除，构建期工具统一写在 `tools`。解析按节点进行：产品 profile 的
+`tools` 是产品 / 依赖 / 组件节点的基线，再并上该节点自己的 `tools`；同名取交集
+（`min` 取大、`max` 取小），交集为空时报错。
 
-```text
-产品 profile.tools
-∪ 本次构建闭包里每个节点的 host_tools
-```
-
-同一个命令出现多次时取最严的一条：有 `min` 的优先，两条都有 `min` 时留更高的；
-`host_tools` 里的 `"nasm"` 不会抹掉别处声明的 `tool("nasm", min = "2.13")`。
+同名工具允许在同一次构建里解析出多个版本：不同节点可以落到不同版本，
+`build/tools/<name>-<version>` 并存。工具节点只用自己的 `tools`，不继承产品
+profile 的基线（否则工具会被绑回某个产品的依赖树，无法跨产品共享）。
 
 被选中 feature 的 `requires.commands` 由选择阶段检查，不进入这个集合。
 
-## 4.3 编译器版本与 toolchain（待实施）
+## 4.3 编译器版本与 toolchain
 
-代码尚未实现；完整机制见 [TOOLS.md](TOOLS.md) 第 4 节。实施前 gcc / g++ 仍写在
-`profile.tools`，实施后从 `tools` 删除，只保留在 `toolchain`。
+gcc / g++ 不写在 `tools` 里，也不从 Tool catalog 解析；产品在系列 recipe 里声明
+编译器区间和兼容参数档位。完整机制见 [TOOLS.md](TOOLS.md) 第 4 节。
 
 产品在系列 recipe 里声明编译器区间和兼容参数档位：
 
@@ -279,13 +282,22 @@ TARGET = product(
 
 - 只声明 `gcc` / `gxx`；**不声明 glibc / ld / binutils**。它们跟随 gcc 所在的
   系统或镜像，只影响产物能否在目标系统运行。
-- 宿主构建：探测实际编译器（`env.CC` / `CXX`，缺省 gcc / g++），不满足区间就报错；
-  不下载、不安装、不回退。
+- 宿主构建：探测实际编译器（`env.CC` / `CXX` 优先，其次进程环境，缺省
+  gcc / g++），不满足区间就报错；不下载、不安装、不回退。
+- 同一项里的档位不能重叠；只探测声明了的项，没声明 `gxx` 就不检查 g++。
+- 选中档的 `cflags` / `cxxflags` 追加到节点的 `CFLAGS` / `CXXFLAGS`，顺序是
+  `宿主 CFLAGS -> recipe/env -> 档位`，保证档位参数最后生效。档位参数作用于产品、
+  依赖和组件节点，不作用于 Tool 节点。
+- **gcc / g++ 的原始版本号不进节点签名**：同一档内换补丁版本不重编，跨档改变
+  flags 才重编。Tool 节点另算：`tool-sig` 记实际编译器版本。
 - 镜像构建：用镜像 catalog 里的 `gcc` 匹配同一套区间；`glibc` 只提示运行下限，
   不参与构建判断。详见 [IMAGE.md](IMAGE.md)。
 - 编译器太新带来的 flags 只写在档位里，Rust 不按版本号推导。
 - dep / component 默认不写 gcc；确实有已知不兼容时写一条只收窄的约束，
   只求交、不带 flags。
+
+7.4 / 8.0 原先写在 `env.CFLAGS` 里的 `-std=gnu17 -Wno-error=...` 已迁到
+`>= 14` 档，和上面一样按 `gcc` / `gxx` 两项声明。
 
 ## 4.4 构建目标（targets）
 
@@ -401,7 +413,6 @@ Rust 中不再出现 `php.ini`、`00-ssl.ini`、CA 候选列表、`myphp` 模板
 # recipes/products/nginx/_profile.star
 PROFILE = product_profile(
     tools = [
-        tool("gcc", min = "8"),
         tool("make", min = "4.0"),
         "ar",
         "ranlib",

@@ -136,8 +136,14 @@ TARGETS = {
     },
 }
 
+TOOLCHAIN = toolchain(
+    gcc = [toolchain_range(min = "9")],
+    gxx = [toolchain_range(min = "9")],
+)
+
 TARGET = product(
     name = "php",
+    toolchain = TOOLCHAIN,
     profile = PROFILE,
     series = "8.4",
     bundled = BUILTIN_EXTS,

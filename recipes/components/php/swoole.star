@@ -63,7 +63,7 @@ def target(ctx):
         modules = ["swoole"],
         modes = ["shared"],
         needs = needs,
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         dep_configure = {"libcurl": ["--enable-swoole-curl"]},
         # 生产环境常用的异步 DNS；只在选中时引入 c-ares。
         features = {

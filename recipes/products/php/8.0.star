@@ -138,17 +138,27 @@ TARGETS = {
     },
 }
 
+# GCC 15 默认 gnu23：() 旧式声明被当成零参数，8.0 的 scanf.c 等旧式 C 编不过；
+# GCC 14 起 incompatible-pointer-types 默认升级为错误，pcntl.c 等旧式声明同样中招。
+# 上游 8.1+ 已修，8.0 分支 EOL 没跟；显式 gnu17 + 降级该警告。
+TOOLCHAIN = toolchain(
+    gcc = [
+        toolchain_range(min = "9", max = "13"),
+        toolchain_range(
+            min = "14",
+            cflags = "-std=gnu17 -Wno-error=incompatible-pointer-types",
+        ),
+    ],
+    gxx = [
+        toolchain_range(min = "9", max = "13"),
+        toolchain_range(min = "14"),
+    ],
+)
+
 TARGET = product(
     name = "php",
-    # GCC 15 默认 gnu23：() 旧式声明被当成零参数，8.0 的 scanf.c 等旧式 C 编不过；
-    # GCC 14 起 incompatible-pointer-types 默认升级为错误，pcntl.c 等旧式声明同样中招。
-    # 上游 8.1+ 已修，8.0 分支 EOL 没跟；显式 gnu17 + 降级该警告。
-    profile = extend_profile(
-        PROFILE,
-        env = {
-            "CFLAGS": "-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
-        },
-    ),
+    profile = PROFILE,
+    toolchain = TOOLCHAIN,
     series = "8.0",
     bundled = BUILTIN_EXTS,
     bundled_disable = BUILTIN_DISABLE,

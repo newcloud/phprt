@@ -12,7 +12,7 @@ def target(ctx):
         name = "redis",
         modules = ["redis"],
         modes = ["shared"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         # 默认沿用 redis 自带的序列化实现；lzf 压缩用扩展自带的 liblzf。
         features = {
             "lzf": feature(configure = ["--enable-redis-lzf"]),

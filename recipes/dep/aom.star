@@ -7,7 +7,7 @@ def target(ctx):
         url = self["url"],
         sha256 = self["sha256"],
         # libaom 的 configure 也接受 yasm，但 yasm 已停止维护；phprt 只检查 nasm。
-        host_tools = [tool("nasm", min = "2.13"), "cmake"],
+        tools = [tool("nasm", min = "2.13"), "cmake"],
         needs = [],
         configure = [
             "cmake",

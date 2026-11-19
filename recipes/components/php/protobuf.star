@@ -12,7 +12,7 @@ def target(ctx):
         name = "protobuf",
         modules = ["protobuf"],
         modes = ["shared"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         # 纯 C 实现，自带精简版 upb，不依赖外部 libprotobuf。
         configure = ["--enable-protobuf"],
         version = ctx["product_version"] if builtin else self["version"],

@@ -15,6 +15,8 @@
 | 新增 bundled 组件事实 | `recipes/products/<产品>/<系列>.star` 的 `bundled` / `bundled_disable` |
 | 默认启用的组件集合 | `recipes/bundles/<产品>/<系列>.toml` 的 `default_components` |
 | 新产品 | `recipes/catalog.toml` + `recipes/products/<产品>/_profile.star` + `recipes/products/<产品>/<系列>.star` + `recipes/bundles/<产品>/<系列>.toml` |
+| 新增 / 升级构建期工具 | `recipes/catalog.toml` + `recipes/tools/<名字>.star` |
+| 编译器版本档位 | 产品系列 recipe 的 `TOOLCHAIN` |
 
 补丁号只写在 `recipes/catalog.toml`。recipe、bundle 不写补丁号；state 只记录实际装过的
 `line` / `version`，作为 `--lock` 的版本来源，源码仍从 catalog 取（见 [LOCK.md](LOCK.md)）。
@@ -169,9 +171,63 @@ TARGET = product(
 - `version` / `url` / `sha256` 由 catalog 注入，不要写死。
 - `bundled` / `bundled_disable` 是“产品源码包里自带哪些组件、没选中时怎么关闭”。
 - `profile` 定义组件怎么挂到产品上，见 [CONTRACT.md](CONTRACT.md) 第 6 节。
-- `_profile.star` 里的 `tools` 声明宿主机命令和最低版本；`post_install` 声明安装后
+- `_profile.star` 里的 `tools` 声明构建期工具和版本区间；gcc / g++ 不在 `tools` 里，
+  系列 recipe 用 `toolchain = TOOLCHAIN` 声明编译器档位。`post_install` 声明安装后
   写哪些文件、复制 CA、写组件 ini。
 - 产品自己的 `LINES[系列]` 可以约束依赖线。
+
+#### 构建期工具 tools
+
+工具分两类：
+
+- 宿主机命令（make / perl / patchelf / m4 / cmake / nasm）：直接用 `tool(...)` 声明，
+  不需要 catalog 记录；
+- 可从源码构建的工具（目前只有 autoconf）：在 `recipes/tools/<名字>.star` 写
+  `tool_target(...)`，并在 `recipes/catalog.toml` 里给同名条目。
+
+```python
+# recipes/tools/autoconf.star
+def target(ctx):
+    self = ctx["self"]
+    return tool_target(
+        name = "autoconf",
+        version = self["version"],
+        url = self["url"],
+        sha256 = self["sha256"],
+        tools = [tool("m4", min = "1.4")],
+        configure = ["./configure", "--prefix={prefix}"],
+        make = ["make", "make install"],
+        artifacts = ["bin/autoconf"],
+        desc = "构建期工具：phpize 需要 autoconf",
+    )
+
+TARGET = target
+```
+
+- 工具装到 `build/tools/<名字>-<版本>`，跨产品复用；删 `build/` 会重编。
+- 工具不能声明 `needs`，只能声明 `tools`（工具依赖工具）。
+- catalog 里保留旧版本；需要精确复现时 `--lock` 从 `state.tools` 取 built 版本。
+- 解析规则、签名和 `--downloads` 行为见 [TOOLS.md](TOOLS.md) 第 3 节。
+
+#### 编译器档位 toolchain
+
+产品需要限制或适配编译器时，在系列 recipe 里写 `TOOLCHAIN`：
+
+```python
+TOOLCHAIN = toolchain(
+    gcc = [
+        toolchain_range(min = "9", max = "13"),
+        toolchain_range(min = "14", cflags = "-std=gnu17 -Wno-error=..."),
+    ],
+    gxx = [toolchain_range(min = "9")],
+)
+
+TARGET = product(name = "php", ..., toolchain = TOOLCHAIN)
+```
+
+- 档位不能重叠；`gcc` 档位只写 `cflags`，`gxx` 档位只写 `cxxflags`。
+- 编译器太新需要兼容参数时加档位，不要用 `max` 把新编译器拒掉。
+- 新系列要自己写完整的 `toolchain`，不要放进 `_profile.star`。
 
 #### 构建目标 targets
 

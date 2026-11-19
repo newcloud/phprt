@@ -13,7 +13,7 @@ def target(ctx):
         modules = ["imagick"],
         modes = ["shared"],
         needs = ["imagemagick"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         # ImageMagick 关掉了 OpenMP，这里也不链接 libgomp；把上游的
         # omp_pause_resource_all 探测固定为 no，避免链接不存在的符号。
         configure = [

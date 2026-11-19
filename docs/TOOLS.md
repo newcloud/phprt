@@ -1,7 +1,7 @@
 # 构建工具与工具链（Tool / Toolchain）
 
-**本文是待实施的开发设计，代码尚未实现。** 本文只定机制、字段和验收；实施时
-另起提交，并按第 7 节同步现有文档。与代码冲突时以代码实际行为为准。
+状态：已实现（Tool 与 Toolchain 的宿主模式；镜像执行仍见 [IMAGE.md](IMAGE.md)）。
+本文定机制、字段和验收，与代码不一致时以代码实际行为为准。
 
 目标是把现在混在 `host_tools`、`profile.tools`、`Target.tools` 和普通 dep 里的
 构建期工具拆清楚：
@@ -17,9 +17,9 @@
 
 ---
 
-## 1. 现状与问题
+## 1. 实施前的现状与问题
 
-先纠正几个容易误解的事实：
+以下保留作为设计背景：
 
 | 现状 | 说明 |
 | --- | --- |
@@ -107,7 +107,8 @@ TARGET = tool_target(
 )
 ```
 
-内部加 `Kind::Tool`，节点 id 为 `tool:<name>`。它复用现有 dep 节点的：
+内部加 `Kind::Tool`，节点 id 带版本：`tool:<name>@<version>`（同名多版本要能并存）。
+它复用现有 dep 节点的：
 
 - catalog 版本选择、下载、sha256 校验、解压；
 - `configure` / `make` / `artifacts` 执行；
@@ -202,15 +203,17 @@ recipe 的 `env` 里。
 解析发生在下载源码之前，按**节点**进行；同一名字允许解析出多个版本：
 
 ```text
-对每个节点，先合并 profile.tools 与节点 tools（同名求交：min 取大、max 取小）：
+对每个节点，先合并 profile.tools 与节点 tools（同名求交：min 取大、max 取小）；
+工具节点例外，只用自己的 tools（见 §3.2）。然后：
   host 探测通过（存在且满足区间） -> Host
   已有 build/tools 版本满足区间   -> Store（复用）
   catalog 有满足区间的最高版本    -> Store（需要构建）
   都没有                         -> 报错
 ```
 
-- 产品 profile 的 `tools` 是**每个节点的基线要求**，不是“整次构建只解析一次”；
-  不同节点可以因此落到不同版本。例如节点 A 需要 autoconf `<= 2.69`，节点 B 需要
+- 产品 profile 的 `tools` 是产品 / 依赖 / 组件节点的基线要求，不是“整次构建只
+  解析一次”；不同节点可以因此落到不同版本。工具节点不继承它：工具要跨产品共享，
+  否则会被绑回某个产品的依赖树。例如节点 A 需要 autoconf `<= 2.69`，节点 B 需要
   `>= 2.70`，同一次构建会产出两个 autoconf，各自用在自己的编译命令里。
 - 同一节点的同名工具只取一个版本；不同节点可以解析到不同 provider
   （host / store），同一次构建里可以混用。
@@ -234,7 +237,8 @@ recipe 的 `env` 里。
 - 工具节点的 `PATH` 前置它自己依赖的工具 `bin`；消费节点的 `PATH` 前置**本节点
   解析到的那一版** built 工具 `bin`。
 - 工具产物检查、`.phprt-sig`、失败日志复用现有 `phprt_build`。
-- `build/tools/<name>-<version>/.phprt-installed` 只是**安装完成标记 + tool-sig**，
+- `build/tools/<name>-<version>/.phprt-installed` 是**安装完成标记 + tool-sig**（构建
+  成功且产物齐全后写入），
   用来判断这个前缀和当前 recipe / 编译器是否匹配。它是可重建缓存的清单，
   不进产品 marker，也不进 state 的产品身份。
 - 工具不参与链接闭包、不参与 runtime 收库、不参与 rpath。
@@ -290,9 +294,10 @@ recipe 的 `env` 里。
 
   只记录解析结果，不写进 `components` / `bindings`，不参与 scheme；产品 marker
   不写工具版本。
-- `--lock` 复用 `state.tools` 里的 built 工具版本集合；同一节点有多个锁定版本
-  同时满足时，取满足区间的最高版本，保证结果确定。host 工具不锁版本，换机器时
-  重新探测。工具不在 catalog 时报错，不静默回退。
+- `--lock` 复用 `state.tools` 里 `provider = "store"` 的 built 工具版本，且优先于
+  宿主；同一节点有多个锁定版本同时满足时，取满足区间的最高版本，保证结果确定。
+  host 工具不锁版本，换机器时重新探测。锁定版本不满足当前区间、或不在 catalog 里
+  时报错，不静默回退。
 - `plan` 增加 `tools` 段，文本输出增加“构建工具”一节；同名多版本分别列出。
   `plan` 不因工具缺失而失败，只显示将用 host / 将构建 / 无法解析。
 - `--downloads` 把本次闭包里声明、且 catalog 有源码的工具全部加入下载（含多版本）；
@@ -473,7 +478,7 @@ toolchain = TOOLCHAIN,
 
 ## 5. 与现有文档的关系
 
-实施时要同步修改：
+实施时已同步修改：
 
 | 文档 | 改动 |
 | --- | --- |
@@ -494,7 +499,7 @@ toolchain = TOOLCHAIN,
 
 ## 6. 迁移与实施顺序
 
-本文不开发，实施分两阶段：
+实施分两阶段（均已完成）：
 
 ### Phase 1：Tool
 
@@ -559,7 +564,7 @@ toolchain = TOOLCHAIN,
 ### 8.1 Tool 真实构建
 
 1. **宿主缺失 → catalog 构建**
-   本机没有 autoconf，catalog 有 2.72。`add php@8.5 'zlib=mode:shared' --offline`
+   本机没有 autoconf，catalog 有 2.72。`install php@7.4 'zlib=mode:shared' --offline`
    应构建 `build/tools/autoconf-2.72`，zlib 成功，`php -m` 有 zlib。
 2. **宿主版本不匹配 → catalog 构建**
    临时在 PATH 前放一个假 `autoconf`，`--version` 报 2.60，其他参数直接失败；
@@ -588,7 +593,8 @@ toolchain = TOOLCHAIN,
 3. **签名**
    同一档位内换 gcc 版本不改变签名；跨档改变 flags 才重编相关节点。
 4. **工具链不影响无关产品**
-   PHP 8.5 没有 toolchain 声明，不受 PHP 7.4 档位影响。
+   PHP 8.1 ~ 8.6 只有基础档（`>= 9`），不受 PHP 7.4 的 `>= 14` 档位参数影响。
+   临时删掉某个系列的 `toolchain`，该系列只跳过编译器版本检查，不加任何参数。
 
 ### 8.3 回归
 

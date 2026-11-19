@@ -84,6 +84,16 @@ pub struct Report {
     pub product: String,
     pub series: String,
     pub components: Vec<Component>,
+    /// 上次构建实际用到的工具，来自 state；只用于展示。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolRow {
+    pub name: String,
+    pub version: String,
+    pub provider: String,
 }
 
 pub struct Options<'a> {
@@ -91,6 +101,7 @@ pub struct Options<'a> {
     pub product: &'a Target,
     pub series: &'a str,
     pub bundle: &'a Bundle,
+    pub tools: &'a [crate::state::ToolState],
 }
 
 impl Report {
@@ -114,7 +125,7 @@ pub fn run(reg: &Registry, opts: &Options<'_>) -> Result<Report> {
     let audit = opts.product.profile.audit.as_str();
     let mut components = Vec::new();
     for target in reg.targets.values() {
-        if target.kind == Kind::Product {
+        if matches!(target.kind, Kind::Product | Kind::Tool) {
             continue;
         }
         let audited = target.kind == Kind::Component && audit != "none" && !audit.is_empty();
@@ -195,6 +206,15 @@ pub fn run(reg: &Registry, opts: &Options<'_>) -> Result<Report> {
         product: opts.product.name.clone(),
         series: opts.series.to_owned(),
         components,
+        tools: opts
+            .tools
+            .iter()
+            .map(|tool| ToolRow {
+                name: tool.name.clone(),
+                version: tool.version.clone(),
+                provider: tool.provider.clone(),
+            })
+            .collect(),
     })
 }
 
@@ -399,6 +419,19 @@ fn describe_requires(def: &crate::recipe::Feature) -> String {
 
 pub fn text(report: &Report) -> String {
     let mut out = format!("audit {}@{}\n", report.product, report.series);
+    if !report.tools.is_empty() {
+        out.push_str("\nbuild tools\n");
+        for tool in &report.tools {
+            if tool.version.is_empty() {
+                out.push_str(&format!("  {} ({})\n", tool.name, tool.provider));
+            } else {
+                out.push_str(&format!(
+                    "  {} {} ({})\n",
+                    tool.name, tool.version, tool.provider
+                ));
+            }
+        }
+    }
     for component in &report.components {
         out.push_str(&format!("\n{}\n", component.id));
         if !component.source.is_empty() {
@@ -532,7 +565,7 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            host_tools: vec![],
+            toolchain: None,
             bundled: vec![],
             bundled_disable: Default::default(),
             components: vec![],

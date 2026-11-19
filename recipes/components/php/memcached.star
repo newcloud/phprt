@@ -17,7 +17,7 @@ def target(ctx):
         modules = ["memcached"],
         modes = ["shared"],
         needs = ["libmemcached", "zlib"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         ignored = {
             "--enable-memcached-igbinary": "少用：需要 igbinary 扩展；序列化用 PHP 自带实现",
             "--enable-memcached-msgpack": "少用：需要 msgpack 扩展；序列化用 PHP 自带实现",

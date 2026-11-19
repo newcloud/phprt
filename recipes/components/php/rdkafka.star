@@ -16,7 +16,7 @@ def target(ctx):
         modules = ["rdkafka"],
         modes = ["shared"],
         needs = ["librdkafka"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         configure = ["--with-rdkafka={dep:librdkafka}"],
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],

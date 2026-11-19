@@ -13,7 +13,7 @@ def target(ctx):
         modules = ["amqp"],
         modes = ["shared"],
         needs = ["rabbitmq-c"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         configure = [
             "--with-amqp",
             "--with-librabbitmq-dir={dep:rabbitmq-c}",

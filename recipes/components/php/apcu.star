@@ -12,7 +12,7 @@ def target(ctx):
         name = "apcu",
         modules = ["apcu"],
         modes = ["shared"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         ignored = {
             "--enable-apcu-debug": "调试用途：输出 APCu 内部调试信息",
             "--enable-apcu-clear-signal": "少用：用 SIGUSR1 清空缓存，默认关",

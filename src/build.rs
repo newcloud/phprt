@@ -22,6 +22,10 @@ pub struct Options<'a> {
     pub parallel: usize,
     /// 方案指纹和可复制的 install 命令，写进完成标记。
     pub scheme: &'a marker::Scheme,
+    /// 本次构建的工具解析结果。
+    pub tools: &'a crate::tools::Resolution,
+    /// 选中的编译器档位；产品没有 toolchain 声明时为 None。
+    pub toolchain: Option<&'a crate::toolchain::Resolved>,
     /// 是否按产品规则备份被改写的登记文件。
     pub backup: bool,
 }
@@ -43,6 +47,17 @@ pub fn run(
     let vendor = fs::canonicalize(opts.recipes.join("../vendor/perl")).ok();
     let host = HostEnv::from_process();
     let mut dep_sigs: BTreeMap<String, String> = BTreeMap::new();
+    let mut tool_sigs: BTreeMap<(String, String), String> = BTreeMap::new();
+    let tools_dir = layout::tools_dir(&root);
+    // 工具签名要记实际编译器；没有 toolchain 声明时也要探测一次 CC。
+    let compiler = if order.iter().any(|node| node.kind == Kind::Tool) {
+        Some(match opts.toolchain {
+            Some(selected) => selected.facts.clone(),
+            None => crate::toolchain::probe(product, false)?,
+        })
+    } else {
+        None
+    };
 
     let mut steps = Vec::new();
     let mut component_artifacts: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -62,32 +77,41 @@ pub fn run(
 
         let prefix = match target.kind {
             Kind::Dep => dep_prefix(&tree_path, target),
+            Kind::Tool => layout::tool_prefix(&tools_dir, &target.name, &target.version),
             _ => tree_path.clone(),
         };
         let work = work_dir(&root, target, product, strategy, mode.as_deref());
-        let deps = link_closure(reg, sel, features, target)?;
+        let deps = if target.kind == Kind::Tool {
+            BTreeSet::new()
+        } else {
+            link_closure(reg, sel, features, target)?
+        };
         let link_prefixes: Vec<PathBuf> = deps
             .iter()
             .filter_map(|name| reg.get(&format!("dep:{name}")))
             .map(|dep| dep_prefix(&tree_path, dep))
             .collect();
-        let tool_prefixes: Vec<PathBuf> = target
-            .tools
-            .iter()
-            .filter_map(|name| reg.get(&format!("dep:{name}")))
-            .map(|dep| dep_prefix(&tree_path, dep))
-            .collect();
+        let tool_prefixes: Vec<PathBuf> = opts.tools.prefixes(&target.id());
 
-        let mut env = build_env(
-            &tree,
-            &product.profile.runtime.lib_dir,
-            &link_prefixes,
-            &tool_prefixes,
-            vendor.as_deref(),
-        );
+        let mut env = if target.kind == Kind::Tool {
+            tool_build_env(&tool_prefixes, vendor.as_deref())
+        } else {
+            build_env(
+                &tree,
+                &product.profile.runtime.lib_dir,
+                &link_prefixes,
+                &tool_prefixes,
+                vendor.as_deref(),
+            )
+        };
         let node_ctx = ctx(&tree, &work, &prefix);
-        if target.kind != Kind::Dep {
-            env.extend(profile_env(product, target, &node_ctx, order)?);
+        if !matches!(target.kind, Kind::Dep | Kind::Tool) {
+            env.extend(profile_env(
+                product,
+                target,
+                &node_ctx,
+                opts.tools.tools_of(&target.id()),
+            )?);
         }
         if target.kind == Kind::Component {
             env.extend(component_env(reg, target, &node_ctx)?);
@@ -117,6 +141,16 @@ pub fn run(
             }
         }
 
+        // 档位参数永远在最后：宿主 CFLAGS 在执行时才前置，recipe 的 env 已经
+        // 覆盖了 -O2 基础值，这里再追加保证 -std=gnu17 之类的参数不被顶掉。
+        // 工具节点不加：工具跨产品共享，不能带某个产品的兼容参数。
+        if target.kind != Kind::Tool
+            && let Some(selected) = opts.toolchain
+        {
+            append_env(&mut env, "CFLAGS", &selected.cflags);
+            append_env(&mut env, "CXXFLAGS", &selected.cxxflags);
+        }
+
         let (commands, artifacts) = match target.kind {
             Kind::Dep => {
                 let args =
@@ -125,6 +159,26 @@ pub fn run(
                     program_commands(args, &target.make, &node_ctx, reg)?,
                     artifacts_expanded(&target.artifacts, target),
                 )
+            }
+            Kind::Tool => {
+                let mut args = target
+                    .configure
+                    .iter()
+                    .map(|arg| render::expand(arg, &node_ctx, reg))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut commands = Vec::new();
+                if !args.is_empty() {
+                    let program = if args[0] == "./configure" {
+                        args.remove(0)
+                    } else {
+                        "./configure".to_owned()
+                    };
+                    commands.push(Cmd::Program { program, args });
+                }
+                for line in &target.make {
+                    commands.push(Cmd::Shell(render::expand(line, &node_ctx, reg)?));
+                }
+                (commands, artifacts_expanded(&target.artifacts, target))
             }
             Kind::Product => {
                 let mut args = target
@@ -192,20 +246,40 @@ pub fn run(
             _ => None,
         };
         let copy_sig = copy_from.as_deref().map(source_sig).transpose()?;
-        let sig = signature(
-            reg,
-            target,
-            &SigInputs {
-                strategy,
-                commands: &commands,
-                env: &env,
-                artifacts: &artifacts,
-                copy_from: copy_sig.as_deref(),
-                dep_sigs: &dep_sigs,
-                deps: &deps,
-            },
-        )?;
-        dep_sigs.insert(target.name.clone(), sig.clone());
+        let sig = if target.kind == Kind::Tool {
+            let facts = compiler
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("缺少编译器信息，无法计算工具签名"))?;
+            tool_signature(
+                target,
+                &commands,
+                &env,
+                facts,
+                opts.tools.tools_of(&target.id()),
+                &tool_sigs,
+            )
+        } else {
+            signature(
+                reg,
+                target,
+                &SigInputs {
+                    strategy,
+                    commands: &commands,
+                    env: &env,
+                    artifacts: &artifacts,
+                    copy_from: copy_sig.as_deref(),
+                    dep_sigs: &dep_sigs,
+                    deps: &deps,
+                    tools: opts.tools.tools_of(&target.id()),
+                    tool_sigs: &tool_sigs,
+                },
+            )?
+        };
+        if target.kind == Kind::Tool {
+            tool_sigs.insert((target.name.clone(), target.version.clone()), sig.clone());
+        } else {
+            dep_sigs.insert(target.name.clone(), sig.clone());
+        }
 
         // 签名只用工具生成的确定性环境；宿主的 PATH / CFLAGS 和并行度在这里才接上，
         // 换 shell、上 CI、机器核数不同都不会让整棵树重编。
@@ -214,11 +288,7 @@ pub fn run(
         steps.push(Step {
             tag: format!(
                 "[{}] {} {}",
-                match target.kind {
-                    Kind::Product => "product",
-                    Kind::Dep => "deps",
-                    Kind::Component => "component",
-                },
+                layout::label(target.kind),
                 target.name,
                 target.version
             ),
@@ -242,6 +312,17 @@ pub fn run(
 
     phprt_build::run(&steps, &phprt_build::Options { ui: opts.ui })?;
 
+    // 工具前缀里的安装标记：只是可重建缓存的清单，不进产品 marker / state 的产品身份。
+    for target in order.iter().filter(|node| node.kind == Kind::Tool) {
+        let prefix = layout::tool_prefix(&tools_dir, &target.name, &target.version);
+        let sig = tool_sigs
+            .get(&(target.name.clone(), target.version.clone()))
+            .map(String::as_str)
+            .unwrap_or("");
+        fs::write(prefix.join(".phprt-installed"), format!("{sig}\n"))
+            .with_context(|| format!("写不到 {}", prefix.join(".phprt-installed").display()))?;
+    }
+
     let tree = PathBuf::from(&tree);
     deploy_libs(reg, sel, features, product, order, &tree)?;
     actions::run(
@@ -263,6 +344,15 @@ pub fn run(
         scheme: opts.scheme.digest.clone(),
         resolution: marker::resolution_digest(&product.version, order),
         scheme_cmd: opts.scheme.command.clone(),
+        toolchain: opts
+            .toolchain
+            .map(|tc| {
+                format!(
+                    "{} {} triple={}",
+                    tc.facts.cc, tc.facts.gcc, tc.facts.triple
+                )
+            })
+            .unwrap_or_default(),
         components: component_facts(reg, product, sel, &tree, &component_artifacts)?,
     };
     marker::write(&root, &product.name, &product.version, &installed)?;
@@ -410,10 +500,12 @@ struct SigInputs<'a> {
     copy_from: Option<&'a str>,
     dep_sigs: &'a BTreeMap<String, String>,
     deps: &'a BTreeSet<String>,
+    tools: &'a [crate::tools::ResolvedTool],
+    tool_sigs: &'a BTreeMap<(String, String), String>,
 }
 
 /// 一次构建的完整输入：身份、源码、命令、环境、产物、源码拷贝内容、
-/// 以及依赖闭包里每个 dep 的版本和构建签名。
+/// 依赖闭包里每个 dep 的版本和构建签名。
 /// 依赖只按实际闭包计入，不把整个 Registry 的 recipe 塞进签名。
 fn signature(reg: &Registry, target: &Target, inputs: &SigInputs<'_>) -> Result<String> {
     let SigInputs {
@@ -424,14 +516,30 @@ fn signature(reg: &Registry, target: &Target, inputs: &SigInputs<'_>) -> Result<
         copy_from,
         dep_sigs,
         deps,
+        tools,
+        tool_sigs,
     } = inputs;
     let mut out = String::new();
     out.push_str(&format!("id={}\n", target.id()));
     out.push_str(&format!("version={}\n", target.version));
     out.push_str(&format!("url={}\n", target.url));
     out.push_str(&format!("sha256={}\n", target.sha256));
-    for tool in &target.host_tools {
-        out.push_str(&format!("host-tool={} {}\n", tool.name, tool.min));
+    for tool in *tools {
+        match tool.provider {
+            crate::tools::Provider::Host => {
+                out.push_str(&format!("tool={} provider=host\n", tool.name));
+            }
+            crate::tools::Provider::Store => {
+                let sig = tool_sigs
+                    .get(&(tool.name.clone(), tool.version.clone()))
+                    .map(String::as_str)
+                    .unwrap_or("");
+                out.push_str(&format!(
+                    "tool={} provider=store:{} sig={}\n",
+                    tool.name, tool.version, sig
+                ));
+            }
+        }
     }
     out.push_str(&format!(
         "strategy={}\n",
@@ -467,6 +575,97 @@ fn signature(reg: &Registry, target: &Target, inputs: &SigInputs<'_>) -> Result<
         }
     }
     Ok(out)
+}
+
+/// 工具节点的签名：只算和工具产物有关的输入。
+///
+/// 不进签名：PATH、PKG_CONFIG_PATH、LD_LIBRARY_PATH、PERL5LIB、MAKEFLAGS、
+/// CMAKE_BUILD_PARALLEL_LEVEL，以及执行时才追加的宿主 CFLAGS / CPPFLAGS / LDFLAGS。
+/// 编译器版本进签名：工具目录跨产品共享，换编译器要重编。
+fn tool_signature(
+    target: &Target,
+    commands: &[Cmd],
+    env: &BTreeMap<String, String>,
+    compiler: &crate::toolchain::Facts,
+    tools: &[crate::tools::ResolvedTool],
+    tool_sigs: &BTreeMap<(String, String), String>,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("id={}\n", target.id()));
+    out.push_str(&format!("version={}\n", target.version));
+    out.push_str(&format!("url={}\n", target.url));
+    out.push_str(&format!("sha256={}\n", target.sha256));
+    out.push_str(&format!(
+        "compiler={} {} triple={}\n",
+        compiler.cc, compiler.gcc, compiler.triple
+    ));
+    for cmd in commands {
+        match cmd {
+            Cmd::Program { program, args } => {
+                out.push_str(&format!("command={program}\n"));
+                for arg in args {
+                    out.push_str(&format!("arg={arg}\n"));
+                }
+            }
+            Cmd::Shell(line) => out.push_str(&format!("command={line}\n")),
+        }
+    }
+    // 白名单：只放编译相关；库路径和宿主值不进工具签名。
+    for key in ["CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS"] {
+        if let Some(value) = env.get(key) {
+            out.push_str(&format!("env={key}={value}\n"));
+        }
+    }
+    for tool in tools {
+        match tool.provider {
+            crate::tools::Provider::Host => {
+                out.push_str(&format!("tool-dep={} host\n", tool.name));
+            }
+            crate::tools::Provider::Store => {
+                let sig = tool_sigs
+                    .get(&(tool.name.clone(), tool.version.clone()))
+                    .map(String::as_str)
+                    .unwrap_or("");
+                out.push_str(&format!(
+                    "tool-dep={} {} sig={sig}\n",
+                    tool.name, tool.version
+                ));
+            }
+        }
+    }
+    sig_hash(&out)
+}
+
+fn append_env(env: &mut BTreeMap<String, String>, key: &str, extra: &str) {
+    let extra = extra.trim();
+    if extra.is_empty() {
+        return;
+    }
+    let base = env.get(key).cloned().unwrap_or_default();
+    let base = base.trim_end();
+    let value = if base.is_empty() {
+        extra.to_owned()
+    } else {
+        format!("{base} {extra}")
+    };
+    env.insert(key.to_owned(), value);
+}
+
+/// 工具节点的构建环境：不带产品树、不带库路径；只把自己依赖的 built 工具
+/// 的 bin 前置，宿主 PATH 由 `add_host_env` 在执行时兜底。
+fn tool_build_env(tools: &[PathBuf], vendor: Option<&Path>) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    let path: Vec<String> = tools
+        .iter()
+        .map(|tool| tool.join("bin").display().to_string())
+        .collect();
+    env.insert("PATH".to_owned(), path.join(":"));
+    env.insert("CFLAGS".to_owned(), "-O2".to_owned());
+    env.insert("CXXFLAGS".to_owned(), "-O2".to_owned());
+    if let Some(vendor) = vendor {
+        env.insert("PERL5LIB".to_owned(), vendor.display().to_string());
+    }
+    env
 }
 
 /// copy_from 源码目录的内容指纹：相对路径 + 内容 hash，软链记目标。
@@ -540,6 +739,7 @@ fn link_closure(
     let mut out = BTreeSet::new();
     match target.kind {
         Kind::Dep => walk_dep(reg, features, &target.name, &mut out),
+        Kind::Tool => {}
         Kind::Component => {
             for need in &target.needs {
                 walk_dep(reg, features, need, &mut out);
@@ -668,6 +868,7 @@ impl HostEnv {
 }
 
 /// 把宿主的值接到工具生成的值后面，等价于 shell 里的 `VAR=base $VAR`。
+/// CFLAGS / CXXFLAGS 反过来前置：档位参数必须最后生效，不能被宿主顶掉。
 /// 这里的值只用于执行，不进构建签名。
 fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv, parallel: usize) {
     fn append(env: &mut BTreeMap<String, String>, key: &str, extra: &Option<String>) {
@@ -684,10 +885,24 @@ fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv, parallel: us
         env.insert(key.to_owned(), value);
     }
 
+    fn prepend(env: &mut BTreeMap<String, String>, key: &str, extra: &Option<String>) {
+        let Some(extra) = extra else {
+            return;
+        };
+        let base = env.get(key).cloned().unwrap_or_default();
+        let base = base.trim_end();
+        let value = if base.is_empty() {
+            extra.clone()
+        } else {
+            format!("{extra} {base}")
+        };
+        env.insert(key.to_owned(), value);
+    }
+
     append(env, "CPPFLAGS", &host.cppflags);
     append(env, "LDFLAGS", &host.ldflags);
-    append(env, "CFLAGS", &host.cflags);
-    append(env, "CXXFLAGS", &host.cxxflags);
+    prepend(env, "CFLAGS", &host.cflags);
+    prepend(env, "CXXFLAGS", &host.cxxflags);
     // 并行度跟着机器和配置走：只影响这次执行，不进签名。
     // make 认 MAKEFLAGS；cmake 认 CMAKE_BUILD_PARALLEL_LEVEL（recipe 里不要再写 --parallel）。
     env.insert("MAKEFLAGS".to_owned(), format!("-j{parallel}"));
@@ -718,11 +933,11 @@ fn profile_env(
     product: &Target,
     node: &Target,
     ctx: &Ctx<'_>,
-    order: &[&Target],
+    tools: &[crate::tools::ResolvedTool],
 ) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     for (key, value) in &product.profile.env {
-        let Some(expanded) = expand_tool(value, ctx, order, &node.tools)? else {
+        let Some(expanded) = expand_tool(value, ctx, tools, &node.tools)? else {
             continue;
         };
         out.insert(key.clone(), expanded);
@@ -745,8 +960,8 @@ fn component_env(
 fn expand_tool(
     template: &str,
     ctx: &Ctx<'_>,
-    order: &[&Target],
-    node_tools: &[String],
+    tools: &[crate::tools::ResolvedTool],
+    node_tools: &[crate::recipe::ToolSpec],
 ) -> Result<Option<String>> {
     let mut value = template.replace("{tree}", ctx.tree);
     while let Some(start) = value.find("{tool:") {
@@ -755,13 +970,23 @@ fn expand_tool(
             break;
         };
         let name = &after[..end];
-        if !node_tools.iter().any(|tool| tool == name) {
+        if !node_tools.iter().any(|tool| tool.name == name) {
             return Ok(None);
         }
-        let Some(dep) = order.iter().find(|t| t.kind == Kind::Dep && t.name == name) else {
+        // 宿主提供时跳过这个 env 项，让宿主 PATH 自己找到命令；
+        // 只有 built 工具才展开成安装前缀。
+        let Some(tool) = tools
+            .iter()
+            .find(|tool| tool.name == name && tool.prefix.is_some())
+        else {
             return Ok(None);
         };
-        let prefix = format!("{}/deps/{}-{}", ctx.tree, dep.name, dep.version);
+        let prefix = tool
+            .prefix
+            .as_ref()
+            .expect("刚检查过")
+            .display()
+            .to_string();
         value.replace_range(start..start + 6 + end + 1, &prefix);
     }
     Ok(Some(value))
@@ -852,7 +1077,10 @@ fn runtime_deps(
     order: &[&Target],
 ) -> Result<BTreeSet<String>> {
     let mut out = BTreeSet::new();
-    for target in order.iter().filter(|t| t.kind != Kind::Dep) {
+    for target in order
+        .iter()
+        .filter(|t| !matches!(t.kind, Kind::Dep | Kind::Tool))
+    {
         out.extend(link_closure(reg, sel, features, target)?);
     }
     Ok(out)
@@ -1109,7 +1337,7 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            host_tools: vec![],
+            toolchain: None,
             bundled: vec![],
             bundled_disable: Default::default(),
             components: vec![],
@@ -1159,7 +1387,15 @@ mod tests {
             modes: vec!["static".into(), "shared".into()],
             default_mode: "static".into(),
             needs: needs.iter().map(|s| s.to_string()).collect(),
-            tools: tools.iter().map(|s| s.to_string()).collect(),
+            tools: tools
+                .iter()
+                .map(|s| crate::recipe::ToolSpec {
+                    name: (*s).to_owned(),
+                    min: String::new(),
+                    max: String::new(),
+                    probe: vec!["--version".into()],
+                })
+                .collect(),
             modules: vec![name.into()],
             ini: format!("20-{name}.ini"),
             ..blank()
@@ -1177,7 +1413,15 @@ mod tests {
             version: "1.0".into(),
             url: format!("https://pecl.php.net/get/{name}-1.0.tgz"),
             needs: needs.iter().map(|s| s.to_string()).collect(),
-            tools: tools.iter().map(|s| s.to_string()).collect(),
+            tools: tools
+                .iter()
+                .map(|s| crate::recipe::ToolSpec {
+                    name: (*s).to_owned(),
+                    min: String::new(),
+                    max: String::new(),
+                    probe: vec!["--version".into()],
+                })
+                .collect(),
             modules: vec![name.into()],
             ini: format!("20-{name}.ini"),
             ..blank()
@@ -1276,8 +1520,8 @@ mod tests {
         add_host_env(&mut env, &host, 4);
         assert_eq!(env["MAKEFLAGS"], "-j4");
         assert_eq!(env["CMAKE_BUILD_PARALLEL_LEVEL"], "4");
-        assert_eq!(env["CFLAGS"], "-O2 -march=native");
-        assert_eq!(env["CXXFLAGS"], "-O2 -fPIC");
+        assert_eq!(env["CFLAGS"], "-march=native -O2");
+        assert_eq!(env["CXXFLAGS"], "-fPIC -O2");
         assert_eq!(env["CPPFLAGS"], "-DHOST");
         assert_eq!(env["LDFLAGS"], "-L/host/lib");
         assert_eq!(env["PATH"], "/tree/bin:/host/bin");
@@ -1475,23 +1719,26 @@ mod tests {
             .profile
             .env
             .insert("PHP_AUTOCONF".into(), "{tool:autoconf}/bin/autoconf".into());
-        let autoconf = dep("autoconf", &[]);
-        let order = vec![&autoconf];
         let ctx = Ctx {
             tree: "/tree",
             build: "/build".into(),
             prefix: "/tree".into(),
         };
-
         let mut node = external("swoole", &[], &["autoconf"]);
-        let env = profile_env(&product, &node, &ctx, &order).unwrap();
+        let built = vec![crate::tools::ResolvedTool {
+            name: "autoconf".into(),
+            version: "1".into(),
+            provider: crate::tools::Provider::Store,
+            prefix: Some("/build/tools/autoconf-1".into()),
+        }];
+        let env = profile_env(&product, &node, &ctx, &built).unwrap();
         assert_eq!(
             env.get("PHP_AUTOCONF").map(String::as_str),
-            Some("/tree/deps/autoconf-1/bin/autoconf")
+            Some("/build/tools/autoconf-1/bin/autoconf")
         );
 
         node.tools.clear();
-        let env = profile_env(&product, &node, &ctx, &order).unwrap();
+        let env = profile_env(&product, &node, &ctx, &built).unwrap();
         assert!(!env.contains_key("PHP_AUTOCONF"));
     }
 
@@ -1530,6 +1777,8 @@ mod tests {
                 copy_from,
                 dep_sigs,
                 deps,
+                tools: &[],
+                tool_sigs: &BTreeMap::new(),
             },
         )
         .unwrap()

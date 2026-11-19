@@ -17,8 +17,6 @@ curl.cainfo    = "${SSL_CERT_FILE}"
 
 PROFILE = product_profile(
     tools = [
-        tool("gcc", min = "9"),
-        tool("g++", min = "9"),
         tool("make", min = "4.0"),
         "ar",
         "ranlib",
@@ -75,8 +73,6 @@ PROFILE = product_profile(
     env = {
         "CC": "gcc",
         "CXX": "g++",
-        "PHP_AUTOCONF": "{tool:autoconf}/bin/autoconf",
-        "PHP_AUTOHEADER": "{tool:autoconf}/bin/autoheader",
     },
     audit = "php-config-m4",
 )

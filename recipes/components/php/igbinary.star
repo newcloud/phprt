@@ -21,7 +21,7 @@ def target(ctx):
         name = "igbinary",
         modules = ["igbinary"],
         modes = ["shared"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         prepare = prepare,
         configure = ["--enable-igbinary"],
         version = ctx["product_version"] if builtin else self["version"],

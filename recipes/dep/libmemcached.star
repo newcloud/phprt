@@ -6,7 +6,7 @@ def target(ctx):
         version = self["version"],
         url = self["url"],
         sha256 = self["sha256"],
-        host_tools = ["cmake"],
+        tools = ["cmake"],
         needs = [],
         # SASL、memaslap、文档和测试都用不到，关掉减少外部探测。
         configure = [

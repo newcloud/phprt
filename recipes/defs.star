@@ -43,7 +43,7 @@ def dep(
         url = "",
         sha256 = "",
         needs = [],
-        host_tools = [],
+        tools = [],
         features = {},
         ignored = {},
         configure = [],
@@ -53,6 +53,7 @@ def dep(
     """一个需要独立编译并安装到 deps/<name>-<version>/ 的 C 库。
 
     版本、下载地址由 catalog 和 ctx 注入；recipe 只写构建参数。
+    tools 是构建期工具要求：宿主满足就用宿主，否则从 catalog 构建。
     """
     return {
         "kind": "dep",
@@ -61,9 +62,38 @@ def dep(
         "url": url,
         "sha256": sha256,
         "needs": needs,
-        "host_tools": host_tools,
+        "tools": tools,
         "features": features,
         "ignored": ignored,
+        "configure": configure,
+        "make": make,
+        "artifacts": artifacts,
+        "desc": desc,
+    }
+
+
+def tool_target(
+        name,
+        version = "",
+        url = "",
+        sha256 = "",
+        tools = [],
+        configure = [],
+        make = ["make", "make install"],
+        artifacts = [],
+        desc = ""):
+    """一个构建期工具，装到 build/tools/<name>-<version>/。
+
+    版本、下载地址由 catalog 注入；工具不能声明库依赖 needs，
+    只能声明 tools（工具依赖工具）。
+    """
+    return {
+        "kind": "tool",
+        "name": name,
+        "version": version,
+        "url": url,
+        "sha256": sha256,
+        "tools": tools,
         "configure": configure,
         "make": make,
         "artifacts": artifacts,
@@ -96,16 +126,39 @@ def runtime(lib_dir = "", rpath = {}):
     }
 
 
-def tool(name, min = "", probe = ["--version"]):
+def tool(name, min = "", max = "", probe = ["--version"]):
     """一个宿主机命令要求。
 
-    字符串缩写只检查存在；带 min 时探测版本并要求 >= min。
+    字符串缩写只检查存在；带 min / max 时探测版本并要求落在区间里。
+    min / max 按写出的段数比较：min="14" 接受 14.x，max="13" 接受 13.x。
     probe 是探测命令的参数列表，不经过 shell。
     """
     return {
         "name": name,
         "min": min,
+        "max": max,
         "probe": probe,
+    }
+
+
+def toolchain_range(min = "", max = "", cflags = "", cxxflags = ""):
+    """一个编译器版本档位；区间语义与 tool(min/max) 相同。"""
+    return {
+        "min": min,
+        "max": max,
+        "cflags": cflags,
+        "cxxflags": cxxflags,
+    }
+
+
+def toolchain(gcc = [], gxx = []):
+    """产品的编译器档位表；只支持 gcc / gxx。
+
+    每项的档位不能重叠；gcc 档位只写 cflags，gxx 档位只写 cxxflags。
+    """
+    return {
+        "gcc": gcc,
+        "gxx": gxx,
     }
 
 
@@ -238,7 +291,7 @@ def product_profile(
         audit = "none"):
     """产品的组件挂载协议、运行时整理、验证和入口。
 
-    tools：产品总是需要的宿主机命令，可带最低版本。
+    tools：产品总是需要的构建期工具，可带版本区间；宿主满足就用宿主。
     modes：挂载方式 -> mode(...)。
     defaults：组件来源（bundled / external）-> 默认挂载方式。
     register：挂载方式 -> 登记动作；目前只有 php-ini。
@@ -247,7 +300,7 @@ def product_profile(
                   write_component_ini。
     verify / verify_modules：产品启动验证；verify_modules 用来检查组件模块。
     entry / entry_template：项目入口名模板和产品目录下的模板文件名。
-    env：产品专用环境变量，支持 {tree} 和 {tool:<dep>}。
+    env：产品专用环境变量，支持 {tree} 和 {tool:<工具名>}。
     audit：选项来源，php-config-m4 / configure-help / none。
     """
     return {
@@ -277,7 +330,6 @@ def component(
         url = "",
         sha256 = "",
         needs = [],
-        host_tools = [],
         tools = [],
         dep_configure = {},
         prepare = [],
@@ -300,7 +352,8 @@ def component(
     modes 是契约：只允许这里列出的挂载方式，具体含义由产品 profile 定义。
     默认挂载方式由产品 profile 的 defaults 按 source 推导。
 
-    tools 是构建期工具依赖（如 autoconf）：参与构建顺序和 PATH，不参与链接。
+    tools 是构建期工具要求（如 autoconf）：宿主满足就用宿主，否则从 catalog
+    构建到 build/tools/；不参与链接。
 
     dep_configure 按依赖名声明「这个依赖可以集成」：出现即表示允许
     dep:NAME 选择它；值是选中时额外加给组件的 configure 参数（可以为空）。
@@ -325,7 +378,6 @@ def component(
         "sha256": sha256,
         "modes": modes,
         "needs": needs,
-        "host_tools": host_tools,
         "tools": tools,
         "dep_configure": dep_configure,
         "prepare": prepare,
@@ -357,6 +409,7 @@ def product(
         artifacts = ["bin/php"],
         profile = {},
         targets = {},
+        toolchain = None,
         desc = ""):
     """一个产品（PHP、nginx、CPython）。
 
@@ -365,6 +418,7 @@ def product(
     没选中某个组件时用哪个 configure 参数关闭它。
     profile 描述组件怎么挂到产品上、装完怎么整理和验证。
     默认启用集合不在这里，写在 bundles/<产品>/<系列>.toml 的 default_components。
+    toolchain 声明产品的 gcc / gxx 版本档位和每档的兼容参数；不写就不检查。
     """
     return {
         "kind": "product",
@@ -382,6 +436,7 @@ def product(
         "artifacts": artifacts,
         "profile": profile,
         "targets": targets,
+        "toolchain": toolchain,
         "desc": desc,
     }
 

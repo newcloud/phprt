@@ -12,7 +12,7 @@ def target(ctx):
         name = "msgpack",
         modules = ["msgpack"],
         modes = ["shared"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         # 源码自带 bundled msgpack-c，不需要外部库。
         configure = ["--with-msgpack"],
         version = ctx["product_version"] if builtin else self["version"],

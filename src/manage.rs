@@ -453,7 +453,7 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            host_tools: vec![],
+            toolchain: None,
             bundled: vec![],
             bundled_disable: Default::default(),
             components: vec![],
@@ -602,6 +602,7 @@ mod tests {
             scheme: "s".into(),
             resolution: String::new(),
             scheme_cmd: String::new(),
+            toolchain: String::new(),
             components: Vec::new(),
         };
         let err = check_add(&product, &swoole, "shared", &root, Some(&installed), false)
@@ -632,6 +633,7 @@ mod tests {
             scheme: "s".into(),
             resolution: String::new(),
             scheme_cmd: String::new(),
+            toolchain: String::new(),
             components: vec![ComponentFacts {
                 name: "swoole".into(),
                 mode: "shared".into(),

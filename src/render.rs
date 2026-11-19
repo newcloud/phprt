@@ -13,7 +13,36 @@ pub struct Sim {
     pub tree: String,
     /// 本次选择的构建目标。
     pub targets: TargetSelection,
+    /// 实际使用的编译器档位；产品没有声明时为 null。
+    pub toolchain: Option<ToolchainReport>,
+    /// 本次用到的构建工具（host + built）。
+    pub tools: Vec<ToolReport>,
     pub order: Vec<Node>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolchainReport {
+    pub cc: String,
+    pub gcc: String,
+    pub cxx: String,
+    pub gxx: String,
+    pub triple: String,
+    pub arch: String,
+    pub gcc_band: String,
+    pub gxx_band: String,
+    pub cflags: String,
+    pub cxxflags: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolReport {
+    pub name: String,
+    pub version: String,
+    pub provider: String,
+    pub prefix: String,
+    /// 解析失败时的原因；正常为空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +93,8 @@ pub fn build(
     root: &str,
     sel: &Selection,
     features: &BTreeMap<String, Vec<String>>,
+    resolution: &crate::tools::Resolution,
+    toolchain: Option<&crate::toolchain::Resolved>,
 ) -> Result<Sim> {
     let product = reg.product_any()?;
     let root_path = std::path::Path::new(root);
@@ -71,6 +102,7 @@ pub fn build(
         root_path,
         &layout::tree_path(root_path, &product.name, &product.version),
     );
+    let tools_dir = layout::display_path(root_path, &layout::tools_dir(root_path));
     let mut nodes = Vec::new();
 
     for t in order {
@@ -88,6 +120,7 @@ pub fn build(
 
         let prefix = match t.kind {
             Kind::Dep => format!("{tree}/deps/{}-{}", t.name, t.version),
+            Kind::Tool => format!("{tools_dir}/{}-{}", t.name, t.version),
             _ => tree.clone(),
         };
         let build_dir = format!("{}/{}/{}", layout::build_dir_name(), t.name, stem);
@@ -116,6 +149,11 @@ pub fn build(
                 .iter()
                 .map(|s| expand(s, &ctx, reg))
                 .collect::<Result<Vec<_>>>()?,
+            Kind::Tool => t
+                .configure
+                .iter()
+                .map(|s| expand(s, &ctx, reg))
+                .collect::<Result<Vec<_>>>()?,
         };
 
         let mut needs: Vec<String> = t.needs.iter().map(|n| format!("dep:{n}")).collect();
@@ -127,7 +165,22 @@ pub fn build(
                 }
             }
         }
-        let tools: Vec<String> = t.tools.iter().map(|n| format!("dep:{n}")).collect();
+        let tools: Vec<String> = resolution
+            .tools_of(&t.id())
+            .iter()
+            .map(|tool| {
+                if tool.version.is_empty() {
+                    format!("{} ({})", tool.name, tool.provider.as_str())
+                } else {
+                    format!(
+                        "{} {} ({})",
+                        tool.name,
+                        tool.version,
+                        tool.provider.as_str()
+                    )
+                }
+            })
+            .collect();
         let mut enabled_features: Vec<String> = Vec::new();
 
         if t.kind == Kind::Component
@@ -298,10 +351,56 @@ pub fn build(
         });
     }
 
+    let mut reports: Vec<ToolReport> = resolution
+        .report()
+        .into_iter()
+        .map(|tool| ToolReport {
+            name: tool.name.clone(),
+            version: tool.version.clone(),
+            provider: tool.provider.as_str().to_owned(),
+            prefix: tool
+                .prefix
+                .as_ref()
+                .map(|prefix| layout::display_path(root_path, prefix))
+                .unwrap_or_default(),
+            reason: String::new(),
+        })
+        .collect();
+    // plan 不因工具缺失失败：解析不出来的按名字去重列出来。
+    let mut missing: BTreeMap<&str, &str> = BTreeMap::new();
+    for item in &resolution.unresolved {
+        missing
+            .entry(item.name.as_str())
+            .or_insert(item.reason.as_str());
+    }
+    for (name, reason) in missing {
+        reports.push(ToolReport {
+            name: name.to_owned(),
+            version: String::new(),
+            provider: "missing".to_owned(),
+            prefix: String::new(),
+            reason: reason.to_owned(),
+        });
+    }
+    let toolchain = toolchain.map(|selected| ToolchainReport {
+        cc: selected.facts.cc.clone(),
+        gcc: selected.facts.gcc.clone(),
+        cxx: selected.facts.cxx.clone(),
+        gxx: selected.facts.gxx.clone(),
+        triple: selected.facts.triple.clone(),
+        arch: selected.facts.arch.clone(),
+        gcc_band: selected.gcc_band.clone(),
+        gxx_band: selected.gxx_band.clone(),
+        cflags: selected.cflags.clone(),
+        cxxflags: selected.cxxflags.clone(),
+    });
+
     Ok(Sim {
         root: root.to_owned(),
         tree,
         targets: product.selected_targets.clone(),
+        toolchain,
+        tools: reports,
         order: nodes,
     })
 }
@@ -531,6 +630,47 @@ pub fn to_text(sim: &Sim) -> String {
         crate::targets::display(&sim.targets)
     ));
 
+    if let Some(tc) = &sim.toolchain {
+        out.push_str("\ntoolchain\n");
+        out.push_str(&format!(
+            "  cc        {} {} ({})\n",
+            tc.cc, tc.gcc, tc.gcc_band
+        ));
+        if !tc.cxx.is_empty() {
+            out.push_str(&format!(
+                "  cxx       {} {} ({})\n",
+                tc.cxx, tc.gxx, tc.gxx_band
+            ));
+        }
+        out.push_str(&format!("  triple    {} / {}\n", tc.triple, tc.arch));
+        if !tc.cflags.is_empty() {
+            out.push_str(&format!("  cflags    {}\n", tc.cflags));
+        }
+        if !tc.cxxflags.is_empty() {
+            out.push_str(&format!("  cxxflags  {}\n", tc.cxxflags));
+        }
+    }
+
+    out.push_str("\ntools\n");
+    if sim.tools.is_empty() {
+        out.push_str("  (none)\n");
+    }
+    for tool in &sim.tools {
+        if tool.provider == "missing" {
+            out.push_str(&format!("  {} (无法解析: {})\n", tool.name, tool.reason));
+        } else if tool.prefix.is_empty() {
+            out.push_str(&format!(
+                "  {} {} ({})\n",
+                tool.name, tool.version, tool.provider
+            ));
+        } else {
+            out.push_str(&format!(
+                "  {} {} ({}) -> {}\n",
+                tool.name, tool.version, tool.provider, tool.prefix
+            ));
+        }
+    }
+
     out.push_str("\nbuild order\n");
     for (i, n) in sim.order.iter().enumerate() {
         let extra = match n.kind.as_str() {
@@ -681,16 +821,7 @@ pub fn graph_text(
                 }
                 let mode = sel.mode_of(t);
                 if reg.product_mode(t, &mode)?.strategy_kind()? == Strategy::Standalone {
-                    // fold 组件不单独构建，也不使用这些工具。
-                    for tool in &t.tools {
-                        edge(
-                            &mut out,
-                            &reachable,
-                            &from,
-                            &format!("dep:{tool}"),
-                            "  (tool)",
-                        );
-                    }
+                    // 工具节点不在 graph 里画：它们按解析结果动态出现。
                     if let Some(product) = reg.get(&format!(
                         "product:{}@{}",
                         t.product,
@@ -715,6 +846,7 @@ pub fn graph_text(
                     }
                 }
             }
+            Kind::Tool => {}
         }
     }
     Ok(out)
@@ -832,7 +964,7 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            host_tools: vec![],
+            toolchain: None,
             bundled: vec![],
             bundled_disable: Default::default(),
             components: vec![],
@@ -986,8 +1118,7 @@ mod tests {
             version: "2.72".into(),
             ..blank()
         };
-        let mut component = openssl_component();
-        component.tools = vec!["autoconf".into()];
+        let component = openssl_component();
         let mut prod = product(&["openssl"]);
         prod.needs = vec!["autoconf".into()];
         let reg =

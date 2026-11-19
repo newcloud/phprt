@@ -1,71 +1,500 @@
-use std::collections::BTreeMap;
+//! 构建期工具：解析（宿主 / build/tools / catalog）和版本探测。
+//!
+//! 解析按节点进行，同名工具允许在同一次构建里出现多个版本。宿主优先；
+//! `--lock` 时 state 里记录的 built 版本优先，保证结果可复现。
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
-use crate::recipe::{Target, ToolSpec};
+use crate::layout;
+use crate::recipe::{Kind, Registry, Selection, Strategy, Target, ToolSpec};
 
-/// 检查产品工具和本次构建闭包里节点的 host_tools。
-pub fn check(product: &Target, order: &[&Target]) -> Result<()> {
-    let mut wanted: BTreeMap<String, ToolSpec> = BTreeMap::new();
-    for tool in &product.profile.tools {
-        add_tool(&mut wanted, tool);
-    }
-    for node in order {
-        for tool in &node.host_tools {
-            add_tool(&mut wanted, tool);
-        }
-    }
-
-    let mut missing = Vec::new();
-    for tool in wanted.values() {
-        if !on_path(&tool.name) {
-            missing.push(tool.name.clone());
-            continue;
-        }
-        if tool.min.is_empty() {
-            continue;
-        }
-        let current = probe_version(tool)?;
-        if compare_versions(&current, &tool.min) < 0 {
-            bail!("需要 {} >= {}，当前 {}", tool.name, tool.min, current);
-        }
-    }
-    if missing.is_empty() {
-        return Ok(());
-    }
-    bail!("缺少构建工具: {}", missing.join(", "))
+/// 工具从哪里来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Host,
+    Store,
 }
 
-/// 并集按名字取最严的一条：有 min 的优先，两条都有 min 时留更高的。
-fn add_tool(wanted: &mut BTreeMap<String, ToolSpec>, tool: &ToolSpec) {
-    let Some(old) = wanted.get(&tool.name) else {
-        wanted.insert(tool.name.clone(), tool.clone());
-        return;
+impl Provider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Provider::Host => "host",
+            Provider::Store => "store",
+        }
+    }
+}
+
+/// 一个节点实际使用的工具。
+#[derive(Debug, Clone)]
+pub struct ResolvedTool {
+    pub name: String,
+    pub version: String,
+    pub provider: Provider,
+    /// built 工具的安装前缀；host 为空。
+    pub prefix: Option<PathBuf>,
+}
+
+/// 解析不出来的工具；plan 只展示，不因此失败。
+#[derive(Debug, Clone)]
+pub struct Unresolved {
+    pub name: String,
+    pub reason: String,
+}
+
+/// 一次构建的工具解析结果。
+#[derive(Debug, Clone, Default)]
+pub struct Resolution {
+    /// 节点 id -> 实际使用的工具（同名只留一个版本）。
+    pub per_node: BTreeMap<String, Vec<ResolvedTool>>,
+    /// 需要构建的工具节点 id，已按依赖顺序排好。
+    pub tool_ids: Vec<String>,
+    pub unresolved: Vec<Unresolved>,
+}
+
+impl Resolution {
+    /// 本节点解析到的 built 工具安装前缀。
+    pub fn prefixes(&self, node: &str) -> Vec<PathBuf> {
+        self.per_node
+            .get(node)
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(|tool| tool.prefix.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn tools_of(&self, node: &str) -> &[ResolvedTool] {
+        self.per_node.get(node).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// 所有工具的展示项，按名字 / 版本去重。
+    pub fn report(&self) -> Vec<&ResolvedTool> {
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for tools in self.per_node.values() {
+            for tool in tools {
+                if seen.insert((tool.name.clone(), tool.version.clone(), tool.provider)) {
+                    out.push(tool);
+                }
+            }
+        }
+        out.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+        out
+    }
+}
+
+/// 解析时用到的上下文。
+pub struct Options<'a> {
+    pub reg: &'a Registry,
+    pub product: &'a Target,
+    pub sel: &'a Selection,
+    pub build_root: &'a Path,
+    /// `--lock`：优先复用 state 里记录过的 built 工具版本。
+    pub locked: BTreeMap<String, Vec<String>>,
+    pub lock: bool,
+    /// plan：解析失败只记录，不中断。
+    pub lenient: bool,
+}
+
+/// 解析整条构建顺序里的工具。
+pub fn resolve(order: &[&Target], opts: &Options<'_>) -> Result<Resolution> {
+    let mut resolver = Resolver {
+        opts,
+        tools_dir: layout::tools_dir(opts.build_root),
+        host: BTreeMap::new(),
+        store: BTreeMap::new(),
+        out: Resolution::default(),
+        seen: BTreeSet::new(),
     };
-    let stricter =
-        !tool.min.is_empty() && (old.min.is_empty() || compare_versions(&tool.min, &old.min) > 0);
-    if stricter {
-        wanted.insert(tool.name.clone(), tool.clone());
+    for node in order {
+        let specs = requirements(opts.reg, opts.sel, opts.product, node)?;
+        if specs.is_empty() {
+            continue;
+        }
+        let specs = merge(specs, &node.id())?;
+        let mut resolved = Vec::new();
+        for spec in &specs {
+            match resolver.one(spec, 0) {
+                Ok(tool) => resolved.push(tool),
+                Err(reason) => {
+                    if !opts.lenient {
+                        return Err(reason);
+                    }
+                    let message = format!("{reason:#}");
+                    resolver.out.unresolved.push(Unresolved {
+                        name: spec.name.clone(),
+                        reason: message,
+                    });
+                }
+            }
+        }
+        if !resolved.is_empty() {
+            resolver.out.per_node.insert(node.id(), resolved);
+        }
+    }
+    Ok(resolver.out)
+}
+
+/// 一个节点需要解析的工具要求。
+///
+/// 产品 profile 的 tools 是产品 / 依赖 / 组件的基线；工具节点只用自己的
+/// tools，否则工具无法跨产品共享（不同产品会把它绑回各自的依赖树）。
+fn requirements(
+    reg: &Registry,
+    sel: &Selection,
+    product: &Target,
+    node: &Target,
+) -> Result<Vec<ToolSpec>> {
+    let mut out = Vec::new();
+    if node.kind != Kind::Tool {
+        out.extend(product.profile.tools.iter().cloned());
+    }
+    match node.kind {
+        Kind::Product => {}
+        Kind::Dep | Kind::Tool => out.extend(node.tools.iter().cloned()),
+        Kind::Component => {
+            // 只有 standalone 组件需要 autoconf / phpize 这类构建工具。
+            let mode = sel.mode_of(node);
+            if reg.product_mode(node, &mode)?.strategy_kind()? == Strategy::Standalone {
+                out.extend(node.tools.iter().cloned());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 同名声明的合并：min 取大、max 取小；空表示不限制。
+fn merge(specs: Vec<ToolSpec>, node: &str) -> Result<Vec<ToolSpec>> {
+    let mut out: Vec<ToolSpec> = Vec::new();
+    for spec in specs {
+        let Some(existing) = out.iter_mut().find(|item| item.name == spec.name) else {
+            out.push(spec);
+            continue;
+        };
+        if !spec.min.is_empty()
+            && (existing.min.is_empty()
+                || crate::version::compare_to_bound(&spec.min, &existing.min)
+                    == std::cmp::Ordering::Greater)
+        {
+            existing.min = spec.min.clone();
+        }
+        if !spec.max.is_empty()
+            && (existing.max.is_empty()
+                || crate::version::compare_to_bound(&spec.max, &existing.max)
+                    == std::cmp::Ordering::Less)
+        {
+            existing.max = spec.max.clone();
+        }
+        if existing.probe.is_empty() {
+            existing.probe = spec.probe.clone();
+        }
+        if !existing.min.is_empty()
+            && !existing.max.is_empty()
+            && crate::version::compare_to_bound(&existing.min, &existing.max)
+                == std::cmp::Ordering::Greater
+        {
+            anyhow::bail!(
+                "节点 {node} 的 {} 要求交集为空：min={} 大于 max={}",
+                existing.name,
+                existing.min,
+                existing.max
+            );
+        }
+    }
+    Ok(out)
+}
+
+struct Resolver<'a, 'o> {
+    opts: &'o Options<'a>,
+    tools_dir: PathBuf,
+    /// 名字 + min + max -> 宿主探测结果。
+    host: BTreeMap<(String, String, String), HostProbe>,
+    /// 工具名 -> build/tools 里已安装的版本。
+    store: BTreeMap<String, Vec<String>>,
+    out: Resolution,
+    /// 已经排进 order 的 built 工具 (name, version)。
+    seen: BTreeSet<(String, String)>,
+}
+
+impl Resolver<'_, '_> {
+    fn one(&mut self, spec: &ToolSpec, depth: usize) -> Result<ResolvedTool> {
+        if depth > 32 {
+            anyhow::bail!("工具依赖成环（{}）", spec.name);
+        }
+        let name = &spec.name;
+        let recipes = self.recipes(name);
+
+        // 1. --lock：state 里记录过的 built 版本优先。
+        if self.opts.lock
+            && let Some(locked) = self.locked_version(spec)?
+        {
+            let Some(recipe) = recipes.iter().find(|item| item.version == locked) else {
+                anyhow::bail!(
+                    "锁定的工具 {name} {locked} 不在 catalog 里；去掉 --lock 或补回 catalog 版本"
+                );
+            };
+            self.install_recipe(recipe, depth)?;
+            return Ok(self.built(recipe));
+        }
+
+        // 2. 宿主优先。
+        if let Some(version) = self.host_version(spec)? {
+            return Ok(ResolvedTool {
+                name: name.clone(),
+                version,
+                provider: Provider::Host,
+                prefix: None,
+            });
+        }
+
+        // 3. build/tools 里已有的版本。
+        let installed = self.store_versions(name);
+        let reusable = recipes
+            .iter()
+            .filter(|recipe| installed.iter().any(|v| v == &recipe.version))
+            .filter(|recipe| crate::version::in_range(&recipe.version, &spec.min, &spec.max))
+            .max_by(|a, b| version_cmp(&a.version, &b.version));
+        if let Some(recipe) = reusable {
+            self.install_recipe(recipe, depth)?;
+            return Ok(self.built(recipe));
+        }
+
+        // 4. catalog 里满足区间的最高版本。
+        let candidate = recipes
+            .iter()
+            .filter(|recipe| crate::version::in_range(&recipe.version, &spec.min, &spec.max))
+            .max_by(|a, b| version_cmp(&a.version, &b.version));
+        if let Some(recipe) = candidate {
+            self.install_recipe(recipe, depth)?;
+            return Ok(self.built(recipe));
+        }
+
+        Err(self.no_candidate(spec, &recipes))
+    }
+
+    fn recipes(&self, name: &str) -> Vec<Target> {
+        let mut out: Vec<Target> = self
+            .opts
+            .reg
+            .of_kind(Kind::Tool)
+            .filter(|target| target.name == name)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| version_cmp(&a.version, &b.version));
+        out
+    }
+
+    /// 锁定版本：有记录且满足区间时取最高；记录不满足区间时报错。
+    fn locked_version(&self, spec: &ToolSpec) -> Result<Option<String>> {
+        let Some(versions) = self.opts.locked.get(&spec.name) else {
+            return Ok(None);
+        };
+        let mut candidates: Vec<&String> = versions
+            .iter()
+            .filter(|version| crate::version::in_range(version, &spec.min, &spec.max))
+            .collect();
+        if candidates.is_empty() {
+            anyhow::bail!(
+                "--lock 记录的工具 {} 版本 [{}] 都不满足当前要求 {}{}；去掉 --lock 重试",
+                spec.name,
+                versions.join(", "),
+                range_text(spec),
+                ""
+            );
+        }
+        candidates.sort_by(|a, b| version_cmp(a, b));
+        Ok(candidates.last().map(|version| (*version).clone()))
+    }
+
+    fn host_version(&mut self, spec: &ToolSpec) -> Result<Option<String>> {
+        let key = (spec.name.clone(), spec.min.clone(), spec.max.clone());
+        let probe = match self.host.get(&key) {
+            Some(value) => value.clone(),
+            None => {
+                let value = probe_host(spec)?;
+                self.host.insert(key, value.clone());
+                value
+            }
+        };
+        Ok(match probe {
+            HostProbe::Ok(version) => Some(version),
+            _ => None,
+        })
+    }
+
+    fn store_versions(&mut self, name: &str) -> Vec<String> {
+        if let Some(versions) = self.store.get(name) {
+            return versions.clone();
+        }
+        let mut out = Vec::new();
+        let prefix = format!("{name}-");
+        if let Ok(entries) = std::fs::read_dir(&self.tools_dir) {
+            for entry in entries.flatten() {
+                let Some(dir) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let Some(version) = dir.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if crate::recipe::is_version_text(version) && entry.path().is_dir() {
+                    out.push(version.to_owned());
+                }
+            }
+        }
+        out.sort_by(|a, b| version_cmp(a, b));
+        self.store.insert(name.to_owned(), out.clone());
+        out
+    }
+
+    /// 把工具节点排进 order；它自己的工具先排。
+    fn install_recipe(&mut self, recipe: &Target, depth: usize) -> Result<()> {
+        let key = (recipe.name.clone(), recipe.version.clone());
+        if self.seen.contains(&key) {
+            return Ok(());
+        }
+        let specs = merge(recipe.tools.clone(), &recipe.id())?;
+        for spec in &specs {
+            match self.one(spec, depth + 1) {
+                Ok(tool) => {
+                    self.out.per_node.entry(recipe.id()).or_default().push(tool);
+                }
+                Err(err) if self.opts.lenient => {
+                    self.out.unresolved.push(Unresolved {
+                        name: spec.name.clone(),
+                        reason: format!("{err:#}"),
+                    });
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        if self.seen.insert(key) {
+            self.out.tool_ids.push(recipe.id());
+        }
+        Ok(())
+    }
+
+    fn built(&self, recipe: &Target) -> ResolvedTool {
+        ResolvedTool {
+            name: recipe.name.clone(),
+            version: recipe.version.clone(),
+            provider: Provider::Store,
+            prefix: Some(layout::tool_prefix(
+                &self.tools_dir,
+                &recipe.name,
+                &recipe.version,
+            )),
+        }
+    }
+
+    fn no_candidate(&self, spec: &ToolSpec, recipes: &[Target]) -> anyhow::Error {
+        let name = &spec.name;
+        let range = range_text(spec);
+        if let Some(HostProbe::OutOfRange(version)) =
+            self.host
+                .get(&(name.clone(), spec.min.clone(), spec.max.clone()))
+        {
+            return anyhow::anyhow!("宿主 {name} {version} 不满足 {range}，catalog 也没有可用版本");
+        }
+        if recipes.is_empty() {
+            return anyhow::anyhow!("宿主缺少 {name}，catalog 没有 {name} 的构建 recipe");
+        }
+        let highest = recipes
+            .iter()
+            .max_by(|a, b| version_cmp(&a.version, &b.version))
+            .map(|recipe| recipe.version.as_str())
+            .unwrap_or("");
+        anyhow::anyhow!("catalog 里 {name} 最高 {highest}，不满足 {range}")
     }
 }
 
-fn probe_version(tool: &ToolSpec) -> Result<String> {
-    let output = Command::new(&tool.name)
-        .args(&tool.probe)
+fn range_text(spec: &ToolSpec) -> String {
+    match (spec.min.is_empty(), spec.max.is_empty()) {
+        (false, false) => format!(">= {} <= {}", spec.min, spec.max),
+        (false, true) => format!(">= {}", spec.min),
+        (true, false) => format!("<= {}", spec.max),
+        (true, true) => "任意版本".to_owned(),
+    }
+}
+
+/// 宿主探测结果。有命令但版本不满足时保留版本，错误文案才能说清是哪种情况。
+#[derive(Debug, Clone)]
+enum HostProbe {
+    Absent,
+    OutOfRange(String),
+    Ok(String),
+}
+
+fn probe_host(spec: &ToolSpec) -> Result<HostProbe> {
+    if !on_path(&spec.name) {
+        return Ok(HostProbe::Absent);
+    }
+    if spec.min.is_empty() && spec.max.is_empty() {
+        return Ok(HostProbe::Ok(String::new()));
+    }
+    let args: Vec<&str> = spec.probe.iter().map(String::as_str).collect();
+    let version = probe_program(&spec.name, &args)?;
+    if crate::version::in_range(&version, &spec.min, &spec.max) {
+        Ok(HostProbe::Ok(version))
+    } else {
+        // 宿主有这个命令但版本不满足：交给 store / catalog。
+        Ok(HostProbe::OutOfRange(version))
+    }
+}
+
+/// 全量版本比较（段数不同时短的补 0）。
+pub fn version_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = version_parts(left);
+    let right = version_parts(right);
+    let len = left.len().max(right.len());
+    for index in 0..len {
+        let a = *left.get(index).unwrap_or(&0);
+        let b = *right.get(index).unwrap_or(&0);
+        match a.cmp(&b) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn version_parts(text: &str) -> Vec<u64> {
+    text.split('.')
+        .map(|part| {
+            let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse().unwrap_or(0)
+        })
+        .collect()
+}
+
+/// 跑一个命令，返回 stdout + stderr 原文。
+pub fn run_program(program: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new(program)
+        .args(args)
         .env("LC_ALL", "C")
         .output()
-        .with_context(|| format!("跑不起来 {} 的版本探测", tool.name))?;
+        .with_context(|| format!("跑不起来 {program}"))?;
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push('\n');
     text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(text)
+}
+
+/// 跑版本探测命令，取输出里的第一个点分数字。
+pub fn probe_program(program: &str, args: &[&str]) -> Result<String> {
+    let text = run_program(program, args)?;
     find_version(&text).ok_or_else(|| {
         anyhow::anyhow!(
-            "拿不到 {} 版本（命令: {} {}）",
-            tool.name,
-            tool.name,
-            tool.probe.join(" ")
+            "拿不到 {program} 版本（命令: {program} {}）",
+            args.join(" ")
         )
     })
 }
@@ -88,29 +517,6 @@ fn find_version(text: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn compare_versions(current: &str, required: &str) -> i32 {
-    let current = version_parts(current);
-    let required = version_parts(required);
-    let len = current.len().max(required.len());
-    for index in 0..len {
-        let left = *current.get(index).unwrap_or(&0);
-        let right = *required.get(index).unwrap_or(&0);
-        if left != right {
-            return if left < right { -1 } else { 1 };
-        }
-    }
-    0
-}
-
-fn version_parts(text: &str) -> Vec<u64> {
-    text.split('.')
-        .map(|part| {
-            let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
-            digits.parse().unwrap_or(0)
-        })
-        .collect()
 }
 
 fn on_path(name: &str) -> bool {
@@ -149,33 +555,185 @@ mod tests {
         ToolSpec {
             name: name.to_owned(),
             min: min.to_owned(),
+            max: String::new(),
             probe: vec!["--version".to_owned()],
         }
     }
 
     #[test]
-    fn union_keeps_the_strictest_requirement() {
-        let mut wanted = BTreeMap::new();
-        add_tool(&mut wanted, &spec("nasm", "2.13"));
-        add_tool(&mut wanted, &spec("nasm", ""));
-        assert_eq!(wanted["nasm"].min, "2.13");
+    fn merge_keeps_the_strictest_requirement() {
+        let merged = merge(vec![spec("nasm", "2.13"), spec("nasm", "")], "node").unwrap();
+        assert_eq!(merged[0].min, "2.13");
 
-        let mut wanted = BTreeMap::new();
-        add_tool(&mut wanted, &spec("nasm", ""));
-        add_tool(&mut wanted, &spec("nasm", "2.13"));
-        assert_eq!(wanted["nasm"].min, "2.13");
+        let merged = merge(vec![spec("nasm", ""), spec("nasm", "2.13")], "node").unwrap();
+        assert_eq!(merged[0].min, "2.13");
 
-        let mut wanted = BTreeMap::new();
-        add_tool(&mut wanted, &spec("gcc", "9"));
-        add_tool(&mut wanted, &spec("gcc", "11"));
-        assert_eq!(wanted["gcc"].min, "11");
+        let merged = merge(vec![spec("gcc", "9"), spec("gcc", "11")], "node").unwrap();
+        assert_eq!(merged[0].min, "11");
+    }
+
+    #[test]
+    fn merge_rejects_an_empty_intersection() {
+        let mut low = spec("autoconf", "");
+        low.max = "2.69".into();
+        let mut high = spec("autoconf", "2.70");
+        high.max = String::new();
+        assert!(merge(vec![low, high], "openssl").is_err());
     }
 
     #[test]
     fn versions_compare_by_numeric_parts() {
-        assert!(compare_versions("15.3.1", "11") > 0);
-        assert!(compare_versions("9.4", "11") < 0);
-        assert_eq!(compare_versions("4.0", "4.0.0"), 0);
-        assert!(compare_versions("4.10", "4.9") > 0);
+        assert_eq!(version_cmp("15.3.1", "11"), std::cmp::Ordering::Greater);
+        assert_eq!(version_cmp("9.4", "11"), std::cmp::Ordering::Less);
+        assert_eq!(version_cmp("4.0", "4.0.0"), std::cmp::Ordering::Equal);
+        assert_eq!(version_cmp("4.10", "4.9"), std::cmp::Ordering::Greater);
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use crate::recipe::Profile;
+
+    fn tool_node(name: &str, version: &str) -> Target {
+        Target {
+            kind: Kind::Tool,
+            name: name.to_owned(),
+            version: version.to_owned(),
+            url: format!("https://example.com/{name}-{version}.tar.gz"),
+            ..Default::default()
+        }
+    }
+
+    fn product(tools: Vec<ToolSpec>) -> Target {
+        Target {
+            kind: Kind::Product,
+            name: "demo".to_owned(),
+            series: "1".to_owned(),
+            version: "1.0".to_owned(),
+            url: "https://example.com/demo.tar.gz".to_owned(),
+            profile: Profile {
+                tools,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn spec(min: &str) -> ToolSpec {
+        ToolSpec {
+            name: "phprt-demo-tool-xyz".to_owned(),
+            min: min.to_owned(),
+            max: String::new(),
+            probe: vec!["--version".to_owned()],
+        }
+    }
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "phprt-tools-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(layout::tools_dir(&root)).unwrap();
+        root
+    }
+
+    fn registry(nodes: Vec<Target>) -> Registry {
+        Registry::from_targets(nodes).unwrap()
+    }
+
+    fn run(
+        reg: &Registry,
+        product: &Target,
+        root: &Path,
+        locked: BTreeMap<String, Vec<String>>,
+        lock: bool,
+    ) -> Result<Resolution> {
+        let sel = Selection::default();
+        resolve(
+            &[product],
+            &Options {
+                reg,
+                product,
+                sel: &sel,
+                build_root: root,
+                locked,
+                lock,
+                lenient: false,
+            },
+        )
+    }
+
+    #[test]
+    fn store_reuse_beats_catalog() {
+        let root = temp_root("store");
+        std::fs::create_dir_all(root.join("build/tools/phprt-demo-tool-xyz-1.2")).unwrap();
+        let reg = registry(vec![
+            tool_node("phprt-demo-tool-xyz", "1.2"),
+            tool_node("phprt-demo-tool-xyz", "2.0"),
+        ]);
+        let product = product(vec![spec("1.0")]);
+        let out = run(&reg, &product, &root, BTreeMap::new(), false).unwrap();
+        let tools = out.tools_of(&product.id());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].provider, Provider::Store);
+        assert_eq!(tools[0].version, "1.2");
+        assert_eq!(out.tool_ids, vec!["tool:phprt-demo-tool-xyz@1.2"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn catalog_picks_the_highest_satisfying_version() {
+        let root = temp_root("catalog");
+        let reg = registry(vec![
+            tool_node("phprt-demo-tool-xyz", "1.2"),
+            tool_node("phprt-demo-tool-xyz", "2.0"),
+        ]);
+        let product = product(vec![spec("1.0")]);
+        let out = run(&reg, &product, &root, BTreeMap::new(), false).unwrap();
+        assert_eq!(out.tools_of(&product.id())[0].version, "2.0");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lock_prefers_the_recorded_built_version() {
+        let root = temp_root("lock");
+        std::fs::create_dir_all(root.join("build/tools/phprt-demo-tool-xyz-1.2")).unwrap();
+        std::fs::create_dir_all(root.join("build/tools/phprt-demo-tool-xyz-1.5")).unwrap();
+        let reg = registry(vec![
+            tool_node("phprt-demo-tool-xyz", "1.2"),
+            tool_node("phprt-demo-tool-xyz", "1.5"),
+        ]);
+        let product = product(vec![spec("1.0")]);
+        let mut locked = BTreeMap::new();
+        locked.insert("phprt-demo-tool-xyz".to_owned(), vec!["1.2".to_owned()]);
+        let out = run(&reg, &product, &root, locked, true).unwrap();
+        assert_eq!(out.tools_of(&product.id())[0].version, "1.2");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn missing_tool_names_the_reason() {
+        let root = temp_root("missing");
+        let reg = registry(vec![tool_node("phprt-demo-tool-xyz", "1.2")]);
+        let product = product(vec![spec("9.0")]);
+        let err = run(&reg, &product, &root, BTreeMap::new(), false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("最高 1.2，不满足 >= 9.0"), "{err}");
+
+        let reg = registry(vec![]);
+        let err = run(&reg, &product, &root, BTreeMap::new(), false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("没有 phprt-demo-tool-xyz 的构建 recipe"),
+            "{err}"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

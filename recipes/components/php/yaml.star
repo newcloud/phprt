@@ -13,7 +13,7 @@ def target(ctx):
         modules = ["yaml"],
         modes = ["shared"],
         needs = ["libyaml"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         configure = ["--with-yaml={dep:libyaml}"],
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],

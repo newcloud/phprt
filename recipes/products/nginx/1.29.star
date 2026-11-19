@@ -9,8 +9,13 @@ LINES = {
 }
 
 
+TOOLCHAIN = toolchain(
+    gcc = [toolchain_range(min = "8")],
+)
+
 TARGET = product(
     name = "nginx",
+    toolchain = TOOLCHAIN,
     series = "1.29",
     needs = ["pcre2", "openssl"],
     configure = [

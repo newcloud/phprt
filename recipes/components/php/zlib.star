@@ -23,7 +23,7 @@ def target(ctx):
         modes = ["static", "shared"],
         needs = ["zlib"],
         # shared 走 standalone / phpize，需要 autoconf；static 只用不到。
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         prepare = prepare,
         configure = ["--with-zlib={dep:zlib}"],
         source_path = "ext/zlib",

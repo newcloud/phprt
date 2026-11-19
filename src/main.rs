@@ -15,7 +15,9 @@ mod render;
 mod sources;
 mod state;
 mod targets;
+mod toolchain;
 mod tools;
+mod version;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -851,12 +853,24 @@ fn run() -> Result<()> {
                 goal.as_deref(),
             )?;
             let order = plan::resolve(&reg, &root, &sel, &features)?;
+            let (order, resolution, toolchain) = prepare_order(
+                &reg,
+                &sel,
+                order,
+                &cli.root,
+                &project,
+                lock_requested(&cli.cmd),
+                true,
+                true,
+            )?;
             let sim = render::build(
                 &reg,
                 &order,
                 &cli.root.display().to_string(),
                 &sel,
                 &features,
+                &resolution,
+                toolchain.as_ref(),
             )?;
             if json {
                 println!("{}", render::to_json(&sim)?);
@@ -899,6 +913,16 @@ fn run() -> Result<()> {
             let command = command_prefix(&cli);
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
             let resolution = marker::resolution_digest(&version, &order);
+            let (order, tool_resolution, toolchain) = prepare_order(
+                &reg,
+                &sel,
+                order,
+                &cli.root,
+                &project,
+                lock_requested(&cli.cmd),
+                download.downloads,
+                !download.downloads,
+            )?;
 
             let target_args = targets::scheme_args(&selected_targets);
             let mut plan = marker::Plan::Install;
@@ -941,6 +965,8 @@ fn run() -> Result<()> {
                 &cli.root.display().to_string(),
                 &sel,
                 &features,
+                &tool_resolution,
+                toolchain.as_ref(),
             )?;
             print!("{}", render::to_text(&sim));
             if fetch_sources(&cli.root, &reg, &order, &download, &config)? {
@@ -970,6 +996,8 @@ fn run() -> Result<()> {
                     ui: download.ui,
                     parallel,
                     scheme: &scheme,
+                    tools: &tool_resolution,
+                    toolchain: toolchain.as_ref(),
                     backup,
                 },
             )?;
@@ -981,6 +1009,7 @@ fn run() -> Result<()> {
             let persist: Vec<String> = project.components.keys().cloned().collect();
             project.sync_selection(&reg, &sel, &persist)?;
             project.set_deps(&order, &features);
+            project.set_tools(&tool_resolution);
             project.set_installed_all();
             project.save(&state_file)?;
             println!();
@@ -1062,6 +1091,7 @@ fn run() -> Result<()> {
                     product: &product,
                     series: &series,
                     bundle: &bundle,
+                    tools: &project.tools,
                 },
             )?;
             if json {
@@ -1215,6 +1245,16 @@ fn run() -> Result<()> {
                 return Ok(());
             }
 
+            let (order, tool_resolution, toolchain) = prepare_order(
+                &reg,
+                &sel,
+                order,
+                &cli.root,
+                &project,
+                lock_requested(&cli.cmd),
+                download.downloads,
+                !download.downloads,
+            )?;
             if fetch_sources(&cli.root, &reg, &order, &download, &config)? {
                 return Ok(());
             }
@@ -1229,6 +1269,8 @@ fn run() -> Result<()> {
                     ui: download.ui,
                     parallel,
                     scheme: &scheme,
+                    tools: &tool_resolution,
+                    toolchain: toolchain.as_ref(),
                     backup,
                 },
             )?;
@@ -1237,13 +1279,16 @@ fn run() -> Result<()> {
             project.installed_version = version.clone();
             project.sync_selection(&reg, &sel, &names)?;
             project.set_deps(&order, &features);
+            project.set_tools(&tool_resolution);
             project.set_installed_all();
             project.save(&state_file)?;
             println!();
             println!("已加入 {name}（{mode}）并完成编译");
             println!("已写入 {}", state_file.display());
         }
-        Cmd::Remove { name, force, .. } => {
+        Cmd::Remove {
+            name, force, lock, ..
+        } => {
             let download = download.expect("remove 一定带下载参数");
             let product = reg.product_any()?.clone();
             let component = reg.component(&name)?.clone();
@@ -1332,26 +1377,41 @@ fn run() -> Result<()> {
                 _ => println!("这个版本没有装完，只更新方案"),
             }
 
-            if rebuilt && !fetch_sources(&cli.root, &reg, &order, &download, &config)? {
-                build::run(
+            if rebuilt {
+                let (build_order, tool_resolution, toolchain) = prepare_order(
                     &reg,
-                    &order,
                     &sel,
-                    &features,
-                    &build::Options {
-                        root: &cli.root,
-                        recipes: &recipes,
-                        ui: download.ui,
-                        parallel,
-                        scheme: &scheme,
-                        backup,
-                    },
+                    order.clone(),
+                    &cli.root,
+                    &project,
+                    lock,
+                    download.downloads,
+                    !download.downloads,
                 )?;
-                let deleted = manage::delete_stale_artifacts(&tree, &stale_artifacts)?;
-                if !deleted.is_empty() {
-                    println!("已删除旧产物 {} 个：", deleted.len());
-                    for item in &deleted {
-                        println!("  {item}");
+                if !fetch_sources(&cli.root, &reg, &build_order, &download, &config)? {
+                    build::run(
+                        &reg,
+                        &build_order,
+                        &sel,
+                        &features,
+                        &build::Options {
+                            root: &cli.root,
+                            recipes: &recipes,
+                            ui: download.ui,
+                            parallel,
+                            scheme: &scheme,
+                            tools: &tool_resolution,
+                            toolchain: toolchain.as_ref(),
+                            backup,
+                        },
+                    )?;
+                    project.set_tools(&tool_resolution);
+                    let deleted = manage::delete_stale_artifacts(&tree, &stale_artifacts)?;
+                    if !deleted.is_empty() {
+                        println!("已删除旧产物 {} 个：", deleted.len());
+                        for item in &deleted {
+                            println!("  {item}");
+                        }
                     }
                 }
             }
@@ -1387,17 +1447,66 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+/// 解析整条构建顺序的工具，并把需要构建的工具节点排到最前面。
+///
+/// 工具节点只依赖其它工具，所以统一前置是拓扑序；宿主满足的工具不产生节点。
+#[allow(clippy::too_many_arguments)]
+fn prepare_order<'a>(
+    reg: &'a Registry,
+    sel: &Selection,
+    order: Vec<&'a Target>,
+    root: &Path,
+    project: &ProjectState,
+    lock: bool,
+    tools_lenient: bool,
+    with_toolchain: bool,
+) -> Result<(
+    Vec<&'a Target>,
+    tools::Resolution,
+    Option<toolchain::Resolved>,
+)> {
+    let product = reg.product_any()?;
+    let locked = if lock {
+        project.locked_tools()
+    } else {
+        BTreeMap::new()
+    };
+    let resolution = tools::resolve(
+        &order,
+        &tools::Options {
+            reg,
+            product,
+            sel,
+            build_root: root,
+            locked,
+            lock,
+            lenient: tools_lenient,
+        },
+    )?;
+    let mut full: Vec<&Target> = Vec::new();
+    for id in &resolution.tool_ids {
+        let node = reg
+            .get(id)
+            .ok_or_else(|| anyhow!("工具节点 {id} 不在 registry 里"))?;
+        full.push(node);
+    }
+    full.extend(order);
+    let toolchain = if with_toolchain {
+        toolchain::resolve(product)?
+    } else {
+        None
+    };
+    Ok((full, resolution, toolchain))
+}
+
 /// 下载并解压；返回 true 表示这次只下载（`--downloads`），不继续编译。
 fn fetch_sources(
     root: &Path,
-    reg: &Registry,
+    _reg: &Registry,
     order: &[&Target],
     download: &DownloadArgs,
     config: &config::Config,
 ) -> Result<bool> {
-    if !download.downloads {
-        tools::check(reg.product_any()?, order)?;
-    }
     let cache = layout::downloads_dir(root);
     let sources = sources::collect(order, root, &cache)?;
     let options = phprt_download::Options {

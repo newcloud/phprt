@@ -720,7 +720,6 @@ fn scheme_lock_round_trips_the_resolved_graph() {
             ("openssl", "3.5", "3.5.9"),
             ("libcurl", "8.23", "8.23.0"),
             ("libxml2", "2.15", "2.15.4"),
-            ("autoconf", "2.72", "2.72"),
             ("libmemcached", "1.1", "1.1.4"),
         ],
         "8.5.12",
@@ -786,11 +785,7 @@ fn second_pass_line_change_is_checked() {
     f.add_openssl_free_swoole_line();
     let mut st = state(
         &[],
-        &[
-            ("openssl", "3.5", "3.5.9"),
-            ("libcurl", "8.23", "8.23.0"),
-            ("autoconf", "2.72", "2.72"),
-        ],
+        &[("openssl", "3.5", "3.5.9"), ("libcurl", "8.23", "8.23.0")],
         "8.5.12",
     );
     st["components"]["swoole"] = serde_json::json!({

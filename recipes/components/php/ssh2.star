@@ -13,7 +13,7 @@ def target(ctx):
         modules = ["ssh2"],
         modes = ["shared"],
         needs = ["libssh2"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         configure = ["--with-ssh2={dep:libssh2}"],
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],

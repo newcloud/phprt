@@ -5,7 +5,7 @@
 `plan` 的输出是 `Sim`：
 
 ```text
-Sim { root, tree, targets, order: [Node] }
+Sim { root, tree, targets, toolchain, tools, order: [Node] }
 ```
 
 | 字段 | 说明 |
@@ -13,14 +13,16 @@ Sim { root, tree, targets, order: [Node] }
 | `root` | `--root` 的展示值 |
 | `tree` | `.phprt/<产品>-<产品版本>` |
 | `targets` | 本次构建目标：target 名 → 配置名 → 值；没有 targets 的产品为空对象 |
-| `order` | 拓扑序节点数组 |
+| `toolchain` | 实际编译器档位；产品没有 `toolchain` 声明时为 `null` |
+| `tools` | 本次用到的构建工具（host + built）以及解析失败项 |
+| `order` | 拓扑序节点数组；需要构建的工具节点排在最前面 |
 
 `Node` 字段：
 
 | 字段 | 说明 |
 | --- | --- |
-| `id` | 产品 `product:<名字>@<版本>`；组件 / 依赖 `component:<名字>` / `dep:<名字>` |
-| `kind` | `dep` / `component` / `product` |
+| `id` | 产品 `product:<名字>@<版本>`；工具 `tool:<名字>@<版本>`；组件 / 依赖 `component:<名字>` / `dep:<名字>` |
+| `kind` | `dep` / `component` / `product` / `tool` |
 | `name` / `version` | 目标名和版本（补丁默认来自 catalog；`--lock` 时用 state 指定、源码仍来自 catalog） |
 | `line` | 选中的版本线，如 `6.2`；bundled 组件为空 |
 | `source` | 组件的来源 `bundled` / `external`；产品 / 依赖为空 |
@@ -32,7 +34,7 @@ Sim { root, tree, targets, order: [Node] }
 | `unpack` | 解压目录；bundled standalone 组件显示拷贝出来的构建目录 |
 | `prefix` | 安装前缀 |
 | `needs` | 实际依赖的 `dep:*` / 产品节点 |
-| `tools` | 构建期工具依赖，如 `dep:autoconf` |
+| `tools` | 本节点解析到的构建工具，如 `autoconf 2.72 (store)`、`make 4.4.1 (host)` |
 | `modules` | 组件提供的模块 |
 | `deps` | 组件选中的依赖集成：`[{name, features}]` |
 | `features` | 该组件 / 依赖实际启用的 feature（含历史累计） |
@@ -64,13 +66,25 @@ Sim { root, tree, targets, order: [Node] }
 
 ## 3. 文本格式
 
-先打印三行头部和构建顺序，再逐节点输出：
+先打印头部、toolchain 段、tools 段和构建顺序，再逐节点输出：
 
 ```text
 phprt plan
   root    /home/z/project
-  tree    .phprt/php-8.5.12
+  tree    .phprt/php-7.4.33
   targets cli
+
+toolchain
+  cc        gcc 15.3.1 (>= 14)
+  cxx       g++ 15.3.1 (>= 14)
+  triple    x86_64-redhat-linux / x86_64
+  cflags    -std=gnu17 -Wno-error=incompatible-pointer-types
+
+tools
+  ar  (host)
+  autoconf 2.72 (store) -> build/tools/autoconf-2.72
+  make 4.4.1 (host)
+  ...
 
 build order
    1. dep:openssl               3.5.9
@@ -86,8 +100,8 @@ build order
 [4/27] component:curl 8.5.12
   from       ext/curl
   prefix     .phprt/php-8.5.12
-  needs      dep:libcurl, dep:autoconf
-  tools      dep:autoconf
+  needs      dep:libcurl
+  tools      autoconf 2.72 (store)
   modules    curl
   dep        libcurl [ssl]
   features   ssl
@@ -105,10 +119,13 @@ build order
   `bundled_disable` 的关闭参数其中一组，不会同时出现 `--without-x` 和 `--with-x`。
 - 有值才输出：`source`、`from`、`sha256`、`unpack`、`needs`、`tools`、`modules`、`deps`、
   `features`、`outputs`、`ini`。
+- `tools` 段在宿主工具名后不带版本时显示 `(host)`；built 工具显示 `(store) -> 前缀`；
+  解析不出来的显示 `名字 (无法解析: 原因)`。`plan` 不因工具缺失失败。
 - 首次项目会把 bundle 的 `default_components` 算进方案；`plan` 输出里能直接看到这些节点。
 - dep 的 `configure` 包含未启用 feature 的 `disable` 参数（如 `--without-ssl`）。
 
-`build order` 里组件显示 `(source mode, line X)`；产品显示补丁版本，dep 显示线对应的补丁。
+`build order` 里组件显示 `(source mode, line X)`；产品显示补丁版本，dep / tool 显示
+线对应的补丁。
 
 需要版本线的节点还会多一行：
 
@@ -127,6 +144,22 @@ build order
   "targets": {
     "cli": {}
   },
+  "toolchain": {
+    "cc": "gcc",
+    "gcc": "15.3.1",
+    "cxx": "g++",
+    "gxx": "15.3.1",
+    "triple": "x86_64-redhat-linux",
+    "arch": "x86_64",
+    "gcc_band": ">= 9",
+    "gxx_band": ">= 9",
+    "cflags": "",
+    "cxxflags": ""
+  },
+  "tools": [
+    {"name": "make", "version": "4.4.1", "provider": "host", "prefix": ""},
+    {"name": "autoconf", "version": "2.72", "provider": "store", "prefix": "build/tools/autoconf-2.72"}
+  ],
   "order": [
     {
       "id": "component:curl",
@@ -320,7 +353,9 @@ component:openssl
 ```
 
 - 每个组件 / 依赖一个段落；`source` 是源码目录，`note` 说明为什么拿不到清单。
-- `--json` 输出 `{product, series, components[]}`；每个组件的 `options[]` 是
+- 有 `state.tools` 时先输出 `build tools` 段，列出上次构建用到的工具和 provider；
+  工具没有上游选项，不出现在组件段落里。
+- `--json` 输出 `{product, series, components[], tools[]}`；每个组件的 `options[]` 是
   `{option, state, detail?}`，`state` 为 `configure` / `feature` / `ignored` / `missing`。
 - `features[]` 带 `default_on`（当前系列 bundle 是否默认开）和 `available`（requires 是否满足）。
 - `audited=false` 的组件（产品 profile 的 `audit=none`）不要求处置选项。

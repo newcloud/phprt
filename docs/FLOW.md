@@ -127,6 +127,27 @@ phprt install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'
 
 `add` / `remove` 沿用 state 里的 targets；要改目标用 `install --targets`。
 
+### 2.5 工具解析
+
+下载之前按最终顺序解析构建期工具：
+
+```text
+对每个节点：合并产品 profile.tools 与节点 tools（同名求交）
+  --lock 且 state.tools 有满足区间的 built 版本 → 用锁定版本
+  宿主满足区间                                  → host
+  build/tools 里已有满足区间的版本               → store（复用）
+  catalog 里满足区间的最高版本                   → store（需要构建）
+  都没有                                       → 报错
+```
+
+- 需要构建的工具节点排在最前面；宿主工具不产生节点。
+- 工具源码和产品源码一起进入下载 / 解压清单，`--downloads` 也包含它们。
+- 工具构建失败不写 state，也不写完成标记。
+- gcc / g++ 不是工具：按产品的 `toolchain` 探测、选档、合并 CFLAGS，见
+  [TOOLS.md](TOOLS.md) §4。产品没有声明时跳过编译器版本检查。
+- `plan` 不因工具缺失失败，只在 `tools` 段显示“无法解析”；`install` / `add` /
+  `remove` 走严格解析。
+
 ## 3. add
 
 ### 3.1 编译方式

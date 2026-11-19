@@ -31,16 +31,27 @@ TARGETS = {
     },
 }
 
+# GCC 15 默认 gnu23，() 旧式声明被当成零参数；GCC 14 起
+# incompatible-pointer-types 默认升级为错误。7.4 的 pcntl / scanf 等还是旧式 C，
+# 上游 EOL 没修，所以 >= 14 的档位显式降回 gnu17 并降级该警告。
+TOOLCHAIN = toolchain(
+    gcc = [
+        toolchain_range(min = "9", max = "13"),
+        toolchain_range(
+            min = "14",
+            cflags = "-std=gnu17 -Wno-error=incompatible-pointer-types",
+        ),
+    ],
+    gxx = [
+        toolchain_range(min = "9", max = "13"),
+        toolchain_range(min = "14"),
+    ],
+)
+
 TARGET = product(
     name = "php",
-    # GCC 15 默认 gnu23，() 旧式声明被当成零参数；incompatible-pointer-types
-    # 默认升级为错误。7.4 的 pcntl / scanf 等还是旧式 C，上游 EOL 没修。
-    profile = extend_profile(
-        PROFILE,
-        env = {
-            "CFLAGS": "-O2 -std=gnu17 -Wno-error=incompatible-pointer-types",
-        },
-    ),
+    profile = PROFILE,
+    toolchain = TOOLCHAIN,
     series = "7.4",
     # 该系列还没完整适配：先只声明当前有 recipe 的内置扩展，
     # 其余内置事实等适配该系列时再补全。

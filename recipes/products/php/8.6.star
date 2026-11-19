@@ -32,8 +32,14 @@ TARGETS = {
     },
 }
 
+TOOLCHAIN = toolchain(
+    gcc = [toolchain_range(min = "9")],
+    gxx = [toolchain_range(min = "9")],
+)
+
 TARGET = product(
     name = "php",
+    toolchain = TOOLCHAIN,
     profile = PROFILE,
     series = "8.6",
     # 该系列还没完整适配：先只声明当前有 recipe 的内置扩展，

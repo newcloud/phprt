@@ -271,6 +271,10 @@ phprt scheme  php@8.5 --lock
 6. 显式产品补丁：产品按显式补丁，其他已有节点仍按 lock。
 7. `--lock` 不改变构建必要性。static / fold 组件改 PHP configure 时，PHP 仍会重编；
    `--lock` 只避免已有依赖被升级而多出的重编。
+8. 构建工具也按 `state.tools` 锁定：`provider = "store"` 的 built 版本优先于宿主，
+   保证“上次真的编过的 autoconf 版本”能被复现。同一名字有多个锁定版本时，取满足
+   当前区间的最高的那个；锁定版本不满足当前要求、或不在 catalog 里时直接报错，
+   不静默回退。宿主工具不锁版本，换机器重新探测。
 
 ### 5.3 和完整方案列表冲突
 
@@ -516,7 +520,9 @@ scheme_cmd=...
 - `components.<名字>.version` / `deps.<名字>.version` 是 `--lock` 的精确版本来源；
 - `bindings` 仍然只保存用户显式钉的线，不把 state 的 line 写进去；
 - `targets` 是新增可选字段，参与方案指纹和 `scheme --lock` 的 `--targets` 导出，
-  不参与版本选线。
+  不参与版本选线；
+- `tools` 是新增可选字段（按版本列），只给 `--lock` 提供 built 工具版本；不参与
+  方案指纹和 `resolution=`。
 
 ## 11. 测试
 

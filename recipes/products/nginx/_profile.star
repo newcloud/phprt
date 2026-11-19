@@ -4,7 +4,6 @@
 
 PROFILE = product_profile(
     tools = [
-        tool("gcc", min = "8"),
         tool("make", min = "4.0"),
         "ar",
         "ranlib",

@@ -152,7 +152,8 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 `--targets` 在 `install` / `update` / `plan` 上接收；`add` / `remove` 沿用 state 里的选择。
 
 `install` / `plan` / `add` / `remove` 还支持 `--lock`：按 state 记录的实际补丁解析当前方案，
-只锁当前闭包里的节点，不写状态。CLI 显式选择会整体覆盖版本线 + 补丁；`update` 不接受
+只锁当前闭包里的节点，不写状态。`state.tools` 里记录过的 built 工具版本也参与锁定，
+优先于宿主；宿主工具不锁。CLI 显式选择会整体覆盖版本线 + 补丁；`update` 不接受
 `--lock`，它就是升级入口。语义见 [LOCK.md](LOCK.md)。
 
 ## 组件
@@ -469,7 +470,8 @@ phprt install php@8.5 --component swoole
 phprt install nginx@1.29 --ui plain
 ```
 
-`--downloads` 只下载源码，后面的解压和写状态都不做：
+`--downloads` 只下载源码，后面的解压和写状态都不做。需要构建的构建期工具源码
+（如 autoconf）也一并下载；宿主满足的工具不需要源码：
 
 ```bash
 phprt install php@8.5 --downloads
@@ -492,6 +494,7 @@ phprt install nginx@1.29 --downloads --offline
   解压目录是 `<root>/build/<名字>/<补丁>/`。
 - 下载失败、解压失败或编译失败都退出 1，并且不写状态。
 - `--downloads` 结束时只打印源码缓存位置，不修改 state。
+- `--downloads` 不检查工具链版本；解析不到的工具不会让命令失败，只在 `plan` 里提示。
 - GitHub 直连失败或 30 秒没下完会换镜像；`PHPRT_GITHUB_DIRECT_TIMEOUT` 可改秒数，
   镜像开关和列表在项目根的 `phprt.toml`。
 - 下载细节见 [DOWNLOAD.md](DOWNLOAD.md)，解压细节见 [EXTRACT.md](EXTRACT.md)，
@@ -515,8 +518,10 @@ phprt install nginx@1.29
 - PHP 选中 `cli` target 后写项目根 `myphp-<系列>`；项目里只有一个 PHP 系列时再写
   `myphp`。只选 `fpm` / `cgi` 时不生成入口；nginx 不生成入口。
 - 需要系统 gcc / g++ / make / binutils / pkg-config / patchelf / m4 / perl；
-  autoconf 和缺的纯 Perl 模块由 phprt 自己准备。镜像构建时这些工具按
-  [IMAGE.md](IMAGE.md) 的包名映射在容器里自动安装。
+  产品声明了 `toolchain` 时 gcc / g++ 必须落在声明的档位里。autoconf 和缺的纯
+  Perl 模块由 phprt 自己准备：宿主满足用宿主，否则从 `recipes/tools/` 构建到
+  `build/tools/`。镜像构建时这些工具按 [IMAGE.md](IMAGE.md) 的包名映射在容器里
+  自动安装。
 
 ## 镜像（待实施）
 

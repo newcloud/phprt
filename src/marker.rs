@@ -11,7 +11,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::recipe::{Selection, Target, TargetSelection};
+use crate::recipe::{Kind, Selection, Target, TargetSelection};
 
 pub const FILE_NAME: &str = ".phprt-installed";
 
@@ -49,6 +49,8 @@ pub struct InstalledTree {
     pub resolution: String,
     /// 当时那条可复制的 install 命令，用来给用户看差异。
     pub scheme_cmd: String,
+    /// 实际编译器环境，如 `gcc 15.3.1 triple=x86_64-linux-gnu`；只用于展示。
+    pub toolchain: String,
     pub components: Vec<ComponentFacts>,
 }
 
@@ -133,6 +135,8 @@ fn read_marker(path: &Path) -> Option<InstalledTree> {
             tree.resolution = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("scheme_cmd=") {
             tree.scheme_cmd = value.trim().to_owned();
+        } else if let Some(value) = line.strip_prefix("toolchain=") {
+            tree.toolchain = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("component=") {
             let (name, mode) = value.split_once(" mode=").unwrap_or((value, ""));
             tree.components.push(ComponentFacts {
@@ -181,6 +185,9 @@ pub fn write(root: &Path, product: &str, version: &str, tree: &InstalledTree) ->
     }
     if !tree.scheme_cmd.is_empty() {
         text.push_str(&format!("scheme_cmd={}\n", tree.scheme_cmd));
+    }
+    if !tree.toolchain.is_empty() {
+        text.push_str(&format!("toolchain={}\n", tree.toolchain));
     }
     for item in &tree.components {
         text.push_str(&format!("component={} mode={}\n", item.name, item.mode));
@@ -384,6 +391,10 @@ pub fn file_digest(path: &Path) -> Result<String> {
 pub fn resolution_digest(product_version: &str, nodes: &[&Target]) -> String {
     let mut canonical: BTreeMap<String, String> = BTreeMap::new();
     for node in nodes {
+        // 工具是可重建的构建缓存，不是版本解析的一部分。
+        if node.kind == Kind::Tool {
+            continue;
+        }
         canonical.insert(
             node.id(),
             format!(
@@ -564,6 +575,7 @@ mod tests {
             scheme: scheme.to_owned(),
             resolution: String::new(),
             scheme_cmd: "phprt install php@8.4 'gd=mode:static'".to_string(),
+            toolchain: String::new(),
             components: Vec::new(),
         })
     }
@@ -771,6 +783,7 @@ mod tests {
             scheme: "abc123".into(),
             resolution: "res123".into(),
             scheme_cmd: "phprt install php@8.5 'swoole=mode:shared'".into(),
+            toolchain: String::new(),
             components: vec![ComponentFacts {
                 name: "swoole".into(),
                 mode: "shared".into(),

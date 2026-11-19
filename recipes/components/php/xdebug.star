@@ -14,7 +14,7 @@ def target(ctx):
         name = "xdebug",
         modules = ["xdebug"],
         modes = ["shared"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         ignored = {
             "--enable-xdebug": "phpize 默认编译该扩展，不需要显式开关",
             "--enable-xdebug-dev": "调试用途：开发者构建开关",

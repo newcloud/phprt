@@ -105,13 +105,13 @@
 - 产品共享 profile 写在 `products/<产品>/_profile.star`，只定义 `PROFILE`；
   系列 recipe 用 `profile = PROFILE`，差异用 `extend_profile(PROFILE, ...)` 覆盖
   （tools 按名字合并、env 按 key 合并，其他字段传了才替换）。
-- 宿主机命令写在产品 profile 的 `tools` 里，可带最低版本：
-  `tool("gcc", min = "9", probe = ["-dumpfullversion"])`。只有部分依赖需要的命令
-  （cmake、nasm）写在该 dep / component 的 `host_tools`，不写死进 Rust。
-  检查集合是产品 `tools` 与闭包内 `host_tools` 的并集，同名按最严的一条
-  （有 min 优先，min 更高优先）。
-  Tool / Toolchain 的待实施方案见 `docs/TOOLS.md`（`tools` 统一、host-first、
-  同名工具多版本、gcc/g++ 归 `toolchain`）；实施前仍按本节规则。
+- 构建期工具统一写在 `tools`，可带版本区间：
+  `tool("make", min = "4.0")`、`tool("autoconf", min = "2.68")`。
+  产品 profile 的 `tools` 是产品 / 依赖 / 组件节点的基线；只有部分依赖需要的命令
+  （cmake、nasm）写在该 dep / component 的 `tools`。解析宿主优先，宿主不满足时
+  复用 `build/tools`，再否则从 `recipes/tools/<名字>.star` 构建；同名工具允许
+  多版本并存。gcc / g++ 不写在 `tools` 里，由产品系列 recipe 的
+  `toolchain = TOOLCHAIN` 声明档位。详见 `docs/TOOLS.md`。
 - 安装后行为写在产品 profile 的 `post_install`：`ensure_dir` / `write_file` /
   `copy_ca_bundle` / `write_component_ini`。不往 Rust 里加产品专用分支，也不使用
   任意 shell；需要改上游源码的命令仍写在组件的 `prepare`。组件 ini 的目录由

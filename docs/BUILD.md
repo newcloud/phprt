@@ -11,8 +11,8 @@ PHP 选中 `cli` target 时还会生成项目入口 `myphp-<系列>`；只选 `f
 ## 1. 顺序
 
 ```text
-dep → fold 组件（只贡献产品 configure 参数） → product → standalone 组件
-  → runtime（收库、rpath）
+tool（宿主不满足时） → dep → fold 组件（只贡献产品 configure 参数） → product
+  → standalone 组件 → runtime（收库、rpath）
   → post_install（目录、文件、CA、ini）
   → verify
   → entry
@@ -25,7 +25,9 @@ dep → fold 组件（只贡献产品 configure 参数） → product → standa
   组件使用产品 recipe `bundled_disable` 里的关闭参数。同一个组件只出现一组参数。
 - standalone 组件在产品之后构建：PHP 需要 `php-config`、`phpize` 和产品源码里的组件目录；
   nginx dynamic 模块是 fold，不单独构建。
-- `tools`（如 autoconf）作为 dep 节点参与顺序，只进 `PATH`，不参与链接和运行时收库。
+- 工具在下载前按节点解析：宿主满足就用宿主，否则才排一个 `tool:` 节点。需要构建的
+  工具节点统一排在最前面（工具只依赖工具，前置就是拓扑序）；它们只进 `PATH`，
+  不参与链接和运行时收库。宿主工具不产生节点。
 
 完成标记是整条流水线（含产品校验和写入口）成功后的最后一步，用临时文件加改名
 原子写入，内容是补丁号、方案指纹、解析出的版本指纹与当时的方案命令（组件、mode、
@@ -38,6 +40,7 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 
 | 类型 | 工作目录 | 命令 |
 | --- | --- | --- |
+| tool | `build/<名字>/<补丁>` | recipe 的 configure + make，装到 `build/tools/<名字>-<补丁>` |
 | dep | `build/<名字>/<补丁>` | recipe 的 configure + make |
 | product | `build/<产品>/<补丁>` | `./configure <全部参数>` + make |
 | bundled standalone 组件 | `build/<名字>/<产品>-<产品版本>` | 从产品源码的 `source_path` 拷贝 → 组件 `prepare` → profile 的 steps |
@@ -60,16 +63,17 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 | `LDFLAGS` | 当前节点依赖闭包的 `-L<dep>/lib` |
 | `PKG_CONFIG_PATH` | 依赖的 `lib/pkgconfig` 和 `share/pkgconfig` |
 | `LD_LIBRARY_PATH` | 产品 profile 的 `runtime.lib_dir`（非空时）和依赖的 `lib` / `lib64` |
-| `PATH` | `{tree}/bin`、工具 dep 的 `bin`，再接原有 PATH |
-| `CFLAGS` / `CXXFLAGS` | `-O2`，再接用户已有的值 |
+| `PATH` | `{tree}/bin`、本节点解析到的 built 工具 `bin`，再接原有 PATH |
+| `CFLAGS` / `CXXFLAGS` | `-O2`，再接 recipe / env，最后追加选中的 toolchain 档位参数 |
 | `MAKEFLAGS` | `-j<parallel>`，默认 CPU 数 - 1（最少 1），见 `phprt.toml` |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | 同上的并发数，给 `cmake --build` 用 |
 | `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块），再接用户已有的值 |
 
-表格里“再接原有 PATH”“再接用户已有的值”只发生在执行时。宿主 `PATH` / `CPPFLAGS` /
-`LDFLAGS` / `CFLAGS` / `CXXFLAGS` / `PERL5LIB` 不参与签名，所以换 shell、上 CI、
-`.bashrc` 里多一条路径都不会让整棵树重编；反过来，改了这些值也不会自动触发重编，
-要重编用 `install --force` 或删 `build/`。
+表格里“再接原有 PATH”只发生在执行时；宿主的 `CFLAGS` / `CXXFLAGS` 也在执行时
+**前置**到工具生成的值前面，保证 toolchain 档位参数最后生效。宿主 `PATH` /
+`CPPFLAGS` / `LDFLAGS` / `CFLAGS` / `CXXFLAGS` / `PERL5LIB` 不参与签名，所以换 shell、
+上 CI、`.bashrc` 里多一条路径都不会让整棵树重编；反过来，改了这些值也不会自动触发
+重编，要重编用 `install --force` 或删 `build/`。
 
 `MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 同样只用于执行，不进签名：并行度是机器
 属性，改 `parallel`、加 `--parallel`、换一台核数不同的机器都不该让整棵树重编。
@@ -79,10 +83,14 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 CPU 数 - 1）。phprt 把它写成 `MAKEFLAGS` 和 `CMAKE_BUILD_PARALLEL_LEVEL` 传给子进程，
 所以 **shell 里 `export MAKEFLAGS=4`、`export CMAKE_BUILD_PARALLEL_LEVEL=4` 都不生效**。
 
-产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX` / `PHP_AUTOCONF` /
-`PHP_AUTOHEADER`；8.0 / 7.4 的 `CFLAGS`）。`{tool:NAME}` 只在当前节点的 `tools` 含该工具
-dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的
-`LUAJIT_INC` / `LUAJIT_LIB`）。
+产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX`）。`{tool:NAME}` 只在
+当前节点的 `tools` 含该工具、且工具解析到 built 版本时展开成
+`build/tools/<名字>-<版本>`；宿主提供时跳过这个 env 项，让宿主 PATH 自己找到命令。
+fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_INC` / `LUAJIT_LIB`）。
+
+选中的 toolchain 档位把 `cflags` / `cxxflags` 追加进产品、依赖、组件节点的
+`CFLAGS` / `CXXFLAGS`；**不作用于 tool 节点**（工具跨产品共享）。工具节点只带
+`{tool}` 依赖的 `bin`，不带产品树、`PKG_CONFIG_PATH` 和 `LD_LIBRARY_PATH`。
 
 构建阶段使用绝对路径；`plan` 的输出仍然用相对项目根的路径，便于阅读。
 
@@ -90,13 +98,22 @@ dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 
 
 每个工作目录写 `.phprt-sig`，内容包含：
 
-- 节点 id、版本、源码 `url` / `sha256`、`host_tools`、挂载策略；
+- 节点 id、版本、源码 `url` / `sha256`、挂载策略；
+- 本节点实际使用的工具：宿主写 `tool=NAME provider=host`，built 写
+  `tool=NAME provider=store:<版本> sig=<tool-sig>`；
 - configure 程序和全部参数；
 - 组件 `prepare` / profile mode 的 steps / make 命令（按声明顺序）；
 - 注入的环境变量（只算工具生成的部分，见第 3 节；`MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 不算）；
 - 预期的产物路径；
 - `copy_from` 源码目录的内容指纹（相对路径 + 内容 hash，软链记目标）；
 - 依赖闭包里每个 dep 的名字、版本和它的构建签名。
+
+工具的签名 `tool-sig` 是单独一份：节点 id、版本、url / sha256、实际编译器的
+`cc + 版本 + triple`、configure / make 程序与参数、编译相关环境（`CFLAGS` /
+`CXXFLAGS` / `CPPFLAGS` / `LDFLAGS` 白名单），以及依赖工具的签名。`PATH` /
+`PKG_CONFIG_PATH` / `LD_LIBRARY_PATH` / `PERL5LIB` / `MAKEFLAGS` /
+`CMAKE_BUILD_PARALLEL_LEVEL` 和宿主执行时追加的值不进 `tool-sig`。工具签名变化只重编
+实际使用它的节点；工具不是版本解析的一部分，不进 `resolution=` 和方案指纹。
 
 依赖签名只按实际依赖闭包（`needs` / 已启用 feature 的 `needs`）计算，
 不把整个 Registry 的 recipe 塞进签名；未选中的 feature 不进签名。
@@ -105,8 +122,9 @@ dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 
 签名一致且产物齐全时跳过。签名变化时先执行 `make distclean`（忽略失败），
 再重新 configure / make。源码目录在 `build/`，删除它即可强制重新开始。
 
-环境变量按节点裁剪，只放和这个节点产物有关的项。例如 `PHP_AUTOCONF` 只给
-`tools` 里有 autoconf 的 standalone 组件节点，dep 节点不会因为加了一个 phpize 类组件而重编。
+环境变量按节点裁剪，只放和这个节点产物有关的项。例如只有 `tools` 里有 autoconf 的
+standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加了一个 phpize 类组件
+而重编。
 
 ## 5. 日志与失败
 
@@ -145,16 +163,22 @@ dep 时展开，否则跳过；fold 组件的 `env` 合并进产品节点（如 
 
 | 来源 | 内容 |
 | --- | --- |
-| 产品 profile 的 `tools` | 这个产品总是需要的命令，可带最低版本，如 `tool("gcc", min = "9")` |
-| dep / component 的 `host_tools` | 只有本次构建包含它时才需要的命令，如 cmake、nasm；并集按名字取最严的一条 |
-| feature 的 `requires.commands` | 选中 feature 时检查的命令 |
-| autoconf | 源码构建，catalog 的 `[autoconf]`，作为组件的 `tools`（dep 包，不是宿主机命令） |
+| 产品 profile 的 `tools` | 产品 / 依赖 / 组件节点的基线，可带版本区间，如 `tool("make", min = "4.0")` |
+| dep / component / tool 的 `tools` | 该节点自己的构建期工具，如 cmake、nasm、autoconf |
+| feature 的 `requires.commands` | 选中 feature 时检查的宿主机命令（只做选择阶段门禁） |
+| `recipes/tools/*.star` | 可从源码构建的工具；catalog 里每条线都是可选版本 |
 | 纯 Perl 模块 | 仓库 `vendor/perl`，构建时通过 `PERL5LIB` 注入 |
+
+解析按节点进行：同名要求取交集（`min` 取大、`max` 取小），宿主优先，其次复用
+`build/tools`，最后从 catalog 取满足区间的最高版本构建。同名工具允许多版本并存，
+按 `(name, version)` 去重。工具节点不继承产品 profile 的 `tools`，否则无法跨产品共享。
+
+gcc / g++ 不在这里：它们是 toolchain，只探测、不下载，见 [TOOLS.md](TOOLS.md) §4。
 
 libaom 的 configure 也接受 yasm，但 phprt 只检查 nasm（yasm 已停止维护）。
 
-检查在下载源码之前执行；`--downloads` 不检查。版本探测和比较见
-[PRODUCT.md](PRODUCT.md)。
+解析在下载源码之前执行；`--downloads` 只把本次解析到、需要构建的工具源码加进下载，
+不检查、不构建。版本探测和比较见 [PRODUCT.md](PRODUCT.md)。
 
 Fedora 上系统工具可以一次装好：
 

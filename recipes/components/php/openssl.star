@@ -62,7 +62,7 @@ def target(ctx):
         modules = ["openssl"],
         modes = ["static", "shared"],
         needs = ["openssl"],
-        tools = ["autoconf"],
+        tools = [tool("autoconf", min = "2.68")],
         prepare = prepare,
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],

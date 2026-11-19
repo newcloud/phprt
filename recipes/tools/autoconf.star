@@ -1,12 +1,12 @@
 def target(ctx):
     self = ctx["self"]
 
-    return dep(
+    return tool_target(
         name = "autoconf",
         version = self["version"],
         url = self["url"],
         sha256 = self["sha256"],
-        needs = [],
+        tools = [tool("m4", min = "1.4")],
         configure = [
             "./configure",
             "--prefix={prefix}",

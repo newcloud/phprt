@@ -23,7 +23,8 @@
 
 ## 2. 格式
 
-状态 schema 是版本 3；`targets` 是新增的可选字段，旧文件没有它时沿用 bundle 默认值：
+状态 schema 是版本 3；`targets` / `tools` 是新增的可选字段，旧文件没有它们时沿用
+bundle 默认值 / 重新解析工具：
 
 ```json
 {
@@ -66,7 +67,11 @@
       "version": "3.5.9",
       "features": []
     }
-  }
+  },
+  "tools": [
+    { "name": "make", "version": "4.4.1", "provider": "host" },
+    { "name": "autoconf", "version": "2.72", "provider": "store" }
+  ]
 }
 ```
 
@@ -87,8 +92,12 @@
 | `deps.<名字>.line` | 依赖实际使用的版本线 |
 | `deps.<名字>.version` | 依赖实际补丁；`--lock` 把它当作精确版本 |
 | `deps.<名字>.features` | 当前构建使用的 feature 并集 |
+| `tools` | 上次构建实际解析到的工具：`name` / `version` / `provider`（`host` / `store`）；旧文件没有这个字段 |
 
-`deps` 里也会记录构建期工具（如 `autoconf`）：它们参与构建顺序，但不参与链接。
+`tools` 按版本列，不按名字做 key，同名工具可以有多条；它是上次构建的解析结果，
+不写进 `components` / `bindings`，也不参与方案指纹。`--lock` 复用其中
+`provider = "store"` 的 built 版本；宿主工具不锁版本，换机器时重新探测，
+详见 [LOCK.md](LOCK.md)。工具不再记在 `deps` 里。
 
 `bindings` 是“保留的显式选择”。例如：
 

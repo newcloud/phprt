@@ -31,10 +31,6 @@ fn children(
             out.extend(t.needs.iter().map(|n| format!("dep:{n}")));
             // 选中的 feature 可能额外需要一个依赖库（如 swoole 的 cares）。
             out.extend(sel.feature_needs(t).into_iter().map(|n| format!("dep:{n}")));
-            // 只有 standalone 组件需要 phpize / autoconf 这类构建工具。
-            if strategy(reg, t, sel)? == Strategy::Standalone {
-                out.extend(t.tools.iter().map(|n| format!("dep:{n}")));
-            }
         }
         Kind::Product => {
             out.extend(t.needs.iter().map(|n| format!("dep:{n}")));
@@ -47,6 +43,7 @@ fn children(
                 }
             }
         }
+        Kind::Tool => {}
     }
     Ok(out)
 }
@@ -198,17 +195,6 @@ mod tests {
         }
     }
 
-    fn tool(name: &str) -> Target {
-        Target {
-            kind: Kind::Dep,
-            name: name.into(),
-            version: "1".into(),
-            url: format!("https://example.com/{name}.tar.gz"),
-            artifacts: vec!["bin/x".into()],
-            ..blank()
-        }
-    }
-
     fn external(name: &str) -> Target {
         Target {
             kind: Kind::Component,
@@ -269,7 +255,7 @@ mod tests {
             sha256: String::new(),
             needs: vec![],
             tools: vec![],
-            host_tools: vec![],
+            toolchain: None,
             bundled: vec![],
             bundled_disable: Default::default(),
             components: vec![],
@@ -307,7 +293,6 @@ mod tests {
             .insert("nghttp2".into(), feature(&["nghttp2"]));
 
         let mut curl = bundled("curl", &["libcurl"]);
-        curl.tools = vec!["autoconf".into()];
         curl.dep_configure.insert("libcurl".into(), vec![]);
 
         let mut swoole = external("swoole");
@@ -319,7 +304,6 @@ mod tests {
         Registry::from_targets(vec![
             dep("openssl", &[]),
             dep("nghttp2", &[]),
-            tool("autoconf"),
             libcurl,
             bundled("openssl", &["openssl"]),
             curl,
@@ -374,20 +358,6 @@ mod tests {
             .to_string();
         assert!(err.contains("component:xdebug"), "{err}");
         assert!(err.contains("不支持 mode:static"), "{err}");
-    }
-
-    #[test]
-    fn tools_only_follow_standalone_components() {
-        let reg = fixture();
-        let sel = selection(&reg, &["curl=mode:static"]);
-        let features = sel.features(&reg);
-        let order = ids(&resolve(&reg, "product:php@8.5.12", &sel, &features).unwrap());
-        assert!(!order.contains(&"dep:autoconf".to_owned()));
-
-        let sel = selection(&reg, &["curl=mode:shared"]);
-        let features = sel.features(&reg);
-        let order = ids(&resolve(&reg, "product:php@8.5.12", &sel, &features).unwrap());
-        assert!(pos(&order, "dep:autoconf") < pos(&order, "component:curl"));
     }
 
     #[test]
