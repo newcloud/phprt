@@ -40,6 +40,12 @@ pub struct ToolReport {
     pub version: String,
     pub provider: String,
     pub prefix: String,
+    /// built 工具被哪些节点使用（按名字去重）。
+    #[serde(default, rename = "for", skip_serializing_if = "Vec::is_empty")]
+    pub for_nodes: Vec<String>,
+    /// 使用它的节点覆盖了全部非工具节点；文本用 `all nodes` 折叠。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub for_all: bool,
     /// 解析失败时的原因；正常为空。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
@@ -72,6 +78,16 @@ pub struct Node {
     pub ini_dir: String,
     pub ini_lines: Vec<String>,
     pub source_path: String,
+    /// 工具节点：谁需要这一版（按名字去重）。其他节点为空。
+    #[serde(default, rename = "for", skip_serializing_if = "Vec::is_empty")]
+    pub for_nodes: Vec<String>,
+    /// 使用它的节点覆盖了全部非工具节点。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub for_all: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize)]
@@ -103,6 +119,34 @@ pub fn build(
         &layout::tree_path(root_path, &product.name, &product.version),
     );
     let tools_dir = layout::display_path(root_path, &layout::tools_dir(root_path));
+    // 工具版本 -> 使用它的节点 id；展示时换成名字并折叠 all nodes。
+    let mut consumers: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    let mut node_names: BTreeMap<String, String> = BTreeMap::new();
+    let mut non_tool = 0;
+    for node in order.iter().filter(|node| node.kind != Kind::Tool) {
+        non_tool += 1;
+        node_names.insert(node.id(), node.name.clone());
+        for tool in resolution.tools_of(&node.id()) {
+            if tool.provider == crate::tools::Provider::Store {
+                consumers
+                    .entry((tool.name.clone(), tool.version.clone()))
+                    .or_default()
+                    .insert(node.id());
+            }
+        }
+    }
+    let consumers_of = |name: &str, version: &str| -> (Vec<String>, bool) {
+        let Some(ids) = consumers.get(&(name.to_owned(), version.to_owned())) else {
+            return (Vec::new(), false);
+        };
+        let mut names: Vec<String> = ids
+            .iter()
+            .filter_map(|id| node_names.get(id).cloned())
+            .collect();
+        names.sort();
+        names.dedup();
+        (names, non_tool > 1 && ids.len() == non_tool)
+    };
     let mut nodes = Vec::new();
 
     for t in order {
@@ -348,22 +392,33 @@ pub fn build(
             ini_dir,
             ini_lines,
             source_path: t.source_path.clone(),
+            for_nodes: if t.kind == Kind::Tool {
+                consumers_of(&t.name, &t.version).0
+            } else {
+                Vec::new()
+            },
+            for_all: t.kind == Kind::Tool && consumers_of(&t.name, &t.version).1,
         });
     }
 
     let mut reports: Vec<ToolReport> = resolution
         .report()
         .into_iter()
-        .map(|tool| ToolReport {
-            name: tool.name.clone(),
-            version: tool.version.clone(),
-            provider: tool.provider.as_str().to_owned(),
-            prefix: tool
-                .prefix
-                .as_ref()
-                .map(|prefix| layout::display_path(root_path, prefix))
-                .unwrap_or_default(),
-            reason: String::new(),
+        .map(|tool| {
+            let (for_nodes, for_all) = consumers_of(&tool.name, &tool.version);
+            ToolReport {
+                name: tool.name.clone(),
+                version: tool.version.clone(),
+                provider: tool.provider.as_str().to_owned(),
+                prefix: tool
+                    .prefix
+                    .as_ref()
+                    .map(|prefix| layout::display_path(root_path, prefix))
+                    .unwrap_or_default(),
+                for_nodes,
+                for_all,
+                reason: String::new(),
+            }
         })
         .collect();
     // plan 不因工具缺失失败：解析不出来的按名字去重列出来。
@@ -379,6 +434,8 @@ pub fn build(
             version: String::new(),
             provider: "missing".to_owned(),
             prefix: String::new(),
+            for_nodes: Vec::new(),
+            for_all: false,
             reason: reason.to_owned(),
         });
     }
@@ -620,6 +677,14 @@ pub fn to_json(sim: &Sim) -> Result<String> {
     Ok(serde_json::to_string_pretty(sim)?)
 }
 
+/// 消费者文本：覆盖全部非工具节点时折叠成 `all nodes`。
+fn consumers_text(nodes: &[String], all: bool) -> String {
+    if all {
+        return "all nodes".to_owned();
+    }
+    nodes.join(", ")
+}
+
 pub fn to_text(sim: &Sim) -> String {
     let mut out = String::new();
     out.push_str("phprt plan\n");
@@ -656,6 +721,7 @@ pub fn to_text(sim: &Sim) -> String {
         out.push_str("  (none)\n");
     }
     for tool in &sim.tools {
+        let consumers = consumers_text(&tool.for_nodes, tool.for_all);
         if tool.provider == "missing" {
             out.push_str(&format!("  {} (无法解析: {})\n", tool.name, tool.reason));
         } else if tool.prefix.is_empty() {
@@ -663,9 +729,14 @@ pub fn to_text(sim: &Sim) -> String {
                 "  {} {} ({})\n",
                 tool.name, tool.version, tool.provider
             ));
-        } else {
+        } else if consumers.is_empty() {
             out.push_str(&format!(
                 "  {} {} ({}) -> {}\n",
+                tool.name, tool.version, tool.provider, tool.prefix
+            ));
+        } else {
+            out.push_str(&format!(
+                "  {} {} ({}) -> {}  for {consumers}\n",
                 tool.name, tool.version, tool.provider, tool.prefix
             ));
         }
@@ -673,7 +744,7 @@ pub fn to_text(sim: &Sim) -> String {
 
     out.push_str("\nbuild order\n");
     for (i, n) in sim.order.iter().enumerate() {
-        let extra = match n.kind.as_str() {
+        let mut extra = match n.kind.as_str() {
             "component" => {
                 let line = if n.line.is_empty() {
                     String::new()
@@ -685,6 +756,10 @@ pub fn to_text(sim: &Sim) -> String {
             "product" => String::new(),
             _ => format!("  {}", n.version),
         };
+        let consumers = consumers_text(&n.for_nodes, n.for_all);
+        if !consumers.is_empty() {
+            extra.push_str(&format!("  for {consumers}"));
+        }
         out.push_str(&format!("  {:>2}. {:<24}{}\n", i + 1, n.id, extra));
     }
 
@@ -714,6 +789,12 @@ pub fn to_text(sim: &Sim) -> String {
             out.push_str(&format!("  unpack     {}\n", n.unpack));
         }
         out.push_str(&format!("  prefix     {}\n", n.prefix));
+        if !n.for_nodes.is_empty() {
+            out.push_str(&format!(
+                "  for        {}\n",
+                consumers_text(&n.for_nodes, n.for_all)
+            ));
+        }
         if !n.line.is_empty() {
             out.push_str(&format!("  line       {}\n", n.line));
         }
@@ -1153,5 +1234,16 @@ mod tests {
         let args = dep_configure(&reg, dep, Some(&enabled), &ctx).unwrap();
         assert!(args.contains(&"--with-openssl=/t/deps/openssl-3.5.9".to_owned()));
         assert!(!args.contains(&"--without-ssl".to_owned()));
+    }
+
+    #[test]
+    fn consumers_text_collapses_all_nodes() {
+        assert_eq!(consumers_text(&[], false), "");
+        assert_eq!(consumers_text(&["xdebug".into()], false), "xdebug");
+        assert_eq!(
+            consumers_text(&["xdebug".into(), "zlib".into()], false),
+            "xdebug, zlib"
+        );
+        assert_eq!(consumers_text(&["xdebug".into()], true), "all nodes");
     }
 }

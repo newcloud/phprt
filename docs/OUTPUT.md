@@ -35,6 +35,8 @@ Sim { root, tree, targets, toolchain, tools, order: [Node] }
 | `prefix` | 安装前缀 |
 | `needs` | 实际依赖的 `dep:*` / 产品节点 |
 | `tools` | 本节点解析到的构建工具，如 `autoconf 2.72 (store)`、`make 4.4.1 (host)` |
+| `for` | 工具节点专用：哪些节点需要这一版，按名字去重，如 `["xdebug"]`；其他节点为空 |
+| `for_all` | 工具节点专用：`for` 覆盖本次全部非工具节点时为 `true`，文本显示 `all nodes` |
 | `modules` | 组件提供的模块 |
 | `deps` | 组件选中的依赖集成：`[{name, features}]` |
 | `features` | 该组件 / 依赖实际启用的 feature（含历史累计） |
@@ -82,13 +84,17 @@ toolchain
 
 tools
   ar  (host)
-  autoconf 2.72 (store) -> build/tools/autoconf-2.72
+  autoconf 2.71 (store) -> build/tools/autoconf-2.71  for xdebug
+  autoconf 2.72 (store) -> build/tools/autoconf-2.72  for zlib
   make 4.4.1 (host)
+  patchelf 0.19.3 (store) -> build/tools/patchelf-0.19.3  for all nodes
   ...
 
 build order
-   1. dep:openssl               3.5.9
-   2. component:curl            (bundled static)
+   1. tool:autoconf@2.71        2.71  for xdebug
+   2. tool:autoconf@2.72        2.72  for zlib
+   3. dep:openssl               3.5.9
+   4. component:curl            (bundled static)
   ...
   25. product:php@8.5.12
   27. component:xdebug          (external shared, line 3.5)
@@ -125,7 +131,8 @@ build order
 - dep 的 `configure` 包含未启用 feature 的 `disable` 参数（如 `--without-ssl`）。
 
 `build order` 里组件显示 `(source mode, line X)`；产品显示补丁版本，dep / tool 显示
-线对应的补丁。
+线对应的补丁。built 工具后面加 `for 消费者`；消费者覆盖全部非工具节点时写
+`for all nodes`。
 
 需要版本线的节点还会多一行：
 
