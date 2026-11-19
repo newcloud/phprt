@@ -753,7 +753,8 @@ pub fn to_text(sim: &Sim) -> String {
                 };
                 format!("  ({} {}{})", n.source, n.mode, line)
             }
-            "product" => String::new(),
+            // 工具 id 已带 @版本，不再重复版本号。
+            "product" | "tool" => String::new(),
             _ => format!("  {}", n.version),
         };
         let consumers = consumers_text(&n.for_nodes, n.for_all);
@@ -764,7 +765,7 @@ pub fn to_text(sim: &Sim) -> String {
     }
 
     for (i, n) in sim.order.iter().enumerate() {
-        let version = if n.kind == "product" {
+        let version = if matches!(n.kind.as_str(), "product" | "tool") {
             String::new()
         } else {
             format!(" {}", n.version)

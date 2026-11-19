@@ -91,8 +91,8 @@ tools
   ...
 
 build order
-   1. tool:autoconf@2.71        2.71  for xdebug
-   2. tool:autoconf@2.72        2.72  for zlib
+   1. tool:autoconf@2.71        for xdebug
+   2. tool:autoconf@2.72        for zlib
    3. dep:openssl               3.5.9
    4. component:curl            (bundled static)
   ...
@@ -130,9 +130,9 @@ build order
 - 首次项目会把 bundle 的 `default_components` 算进方案；`plan` 输出里能直接看到这些节点。
 - dep 的 `configure` 包含未启用 feature 的 `disable` 参数（如 `--without-ssl`）。
 
-`build order` 里组件显示 `(source mode, line X)`；产品显示补丁版本，dep / tool 显示
-线对应的补丁。built 工具后面加 `for 消费者`；消费者覆盖全部非工具节点时写
-`for all nodes`。
+`build order` 里组件显示 `(source mode, line X)`；产品不显示版本，dep 显示线对应的
+补丁；工具的 id 已带 `@版本`，不再重复版本号。built 工具后面加 `for 消费者`；
+消费者覆盖全部非工具节点时写 `for all nodes`。
 
 需要版本线的节点还会多一行：
 
