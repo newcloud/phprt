@@ -665,6 +665,7 @@ pub enum TargetValue {
 pub type TargetSelection = BTreeMap<String, BTreeMap<String, TargetValue>>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Target {
     pub kind: Kind,
     pub name: String,
@@ -2088,7 +2089,11 @@ pub fn load_targets(
     // 工具不绑定在产品闭包里：catalog 里每条线都是一个可构建的版本。
     for file in files.iter().filter(|file| file.kind == Kind::Tool) {
         let Some(lines) = catalog.lines(&file.name) else {
-            continue;
+            bail!(
+                "{}: 工具 recipe 没有 catalog 版本；在 recipes/catalog.toml 里加 [{}]",
+                file.path.display(),
+                file.name
+            );
         };
         let src = fs::read_to_string(&file.path)
             .with_context(|| format!("读不到 {}", file.path.display()))?;
@@ -3578,6 +3583,18 @@ TARGET = target
         );
         assert!(catalog.find_product_series("php", "8.9").is_err());
     }
+    #[test]
+    fn target_rejects_unknown_fields() {
+        let value = serde_json::json!({
+            "kind": "dep",
+            "name": "demo",
+            "version": "1",
+            "url": "https://example.com/demo.tar.gz",
+            "host_tools": ["cmake"],
+        });
+        assert!(serde_json::from_value::<Target>(value).is_err());
+    }
+
     #[test]
     fn compilers_are_toolchain_not_tools() {
         for name in ["gcc", "g++", "gxx", "cc", "c++"] {

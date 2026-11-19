@@ -84,8 +84,9 @@ def tool_target(
         desc = ""):
     """一个构建期工具，装到 build/tools/<name>-<version>/。
 
-    版本、下载地址由 catalog 注入；工具不能声明库依赖 needs，
-    只能声明 tools（工具依赖工具）。
+    版本、下载地址由 catalog 注入，catalog 必须有同名条目；工具不能声明库依赖
+    needs，只能声明 tools（工具依赖工具）。编译器（gcc / g++ / gxx / cc / c++）
+    不能做成 Tool，它们只属于产品的 toolchain(...)。
     """
     return {
         "kind": "tool",

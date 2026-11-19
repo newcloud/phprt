@@ -430,7 +430,32 @@ sysvshm = {}
 显式选择；openssl、curl、gd 选中时自动使用各自的 `[component_presets]`。
 默认集和 preset 都只在第一次写 state 时落盘。
 
-## 8. 验收
+## 8. 新增 recipe 的防错清单
+
+loading 时会直接拒绝下列写法，不会静默忽略：
+
+| 场景 | 规则 |
+| --- | --- |
+| 任何 `Target` | 只能写 contract 里的字段；未知字段直接报错（`host_tools` 已删除） |
+| dep / component / tool 的 `tools` | 不能写编译器 `gcc` / `g++` / `gxx` / `cc` / `c++`；编译器只属于产品 `toolchain` |
+| tool recipe | 必须在 `catalog.toml` 有同名条目；只能 `tool_target(...)`；不能有 `needs`、产品 / 组件字段 |
+| toolchain | 至少声明 `gcc` / `gxx` 之一；档位不能重叠；`gcc` 只写 `cflags`、`gxx` 只写 `cxxflags` |
+| component | `product` / `modes` / 默认 mode 必须和产品 profile 对得上；bundled 必须出现在产品 `bundled` 里 |
+| dep | 必须有 version / url；不能写产品 / 组件字段、`prepare`、`dep_configure` |
+| 产品系列 | 必须同时有 `products/<产品>/<系列>.star` 和 `bundles/<产品>/<系列>.toml`；catalog 系列集合要和 recipe 一致 |
+
+新增后至少跑：
+
+```bash
+cargo run -- plan <产品>@<系列>
+cargo run -- audit <产品>@<系列>
+cargo test --workspace
+```
+
+`plan` 会打印本次解析到的工具（host / store）和编译器档位；工具或档位有问题会在
+下载前报出来。
+
+## 9. 验收
 
 ```bash
 cargo fmt --all

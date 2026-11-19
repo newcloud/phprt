@@ -554,6 +554,7 @@ TARGETS = {
 
 加载时检查：
 
+0. 未知字段直接报错；`host_tools` 已删除，写了会报未知字段。
 1. `name` 非空；dep 的 version/url；product 的 series/version/url。
 2. dep 不出现产品 / 组件字段。
 3. component 的 `product`、`source`、`modes`、默认 mode；external 必须有 version/url；
@@ -575,7 +576,8 @@ TARGETS = {
 11. product 的 `bundled` 无重复；`bundled_disable` 的 key 是其子集，值是单个
    `--without-*` / `--disable-*`；profile 的 `modes` 非空、`strategy` 合法。
 12. catalog 的产品系列与 product recipe 集合一致。
-13. catalog 里每个组件（含 tool）都有同名 recipe；组件声明 `LINES` 时线集合必须一致。
+13. catalog 里每个组件（含 tool）都有同名 recipe；`recipes/tools/` 的 recipe 也必须在
+    catalog 里有同名条目，否则加载报错；组件声明 `LINES` 时线集合必须一致。
 14. `LINES` 的每条线对组件必须有非空 `product` 数组；产品可以省略 `product`。
 15. dep / tool recipe 不声明 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`。
 16. `PRODUCT_LINES` / `PRODUCT_DEP_LINES` 只用于 component，引用的系列和线都在 catalog 里。

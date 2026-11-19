@@ -105,6 +105,12 @@
 - 产品共享 profile 写在 `products/<产品>/_profile.star`，只定义 `PROFILE`；
   系列 recipe 用 `profile = PROFILE`，差异用 `extend_profile(PROFILE, ...)` 覆盖
   （tools 按名字合并、env 按 key 合并，其他字段传了才替换）。
+- 新增 recipe 的硬校验（写错会直接加载失败，不静默忽略）：
+  - `Target` 拒绝未知字段；旧的 `host_tools` 已删除，写了会报错；
+  - `tools` 里不能写 `gcc` / `g++` / `gxx` / `cc` / `c++`，编译器只属于 `toolchain`；
+  - `recipes/tools/<名字>.star` 必须在 `catalog.toml` 有同名条目，只能用
+    `tool_target(...)`，不能声明 `needs` 或产品 / 组件字段；
+  - `toolchain` 的档位不能重叠，`gcc` 档位只写 `cflags`、`gxx` 档位只写 `cxxflags`。
 - 构建期工具统一写在 `tools`，可带版本区间：
   `tool("make", min = "4.0")`、`tool("autoconf", min = "2.68")`。
   产品 profile 的 `tools` 是产品 / 依赖 / 组件节点的基线；只有部分依赖需要的命令
