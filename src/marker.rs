@@ -47,6 +47,8 @@ pub struct InstalledTree {
     pub scheme: String,
     /// 本次实际解析出的版本指纹；只用于比较，不参与解析。
     pub resolution: String,
+    /// 构建参数指纹：recipe 的构建参数 + 选中项；版本没变时用它判断要不要增量重编。
+    pub inputs: String,
     /// 当时那条可复制的 install 命令，用来给用户看差异。
     pub scheme_cmd: String,
     /// 实际编译器环境，如 `gcc 15.3.1 triple=x86_64-linux-gnu`；只用于展示。
@@ -60,12 +62,14 @@ impl InstalledTree {
     }
 }
 
-/// install 的判定结果：直接装、先备份旧树再装，或者接着装没装完的。
+/// install 的判定结果：直接装、先备份旧树再装、接着装没装完的，或增量重编。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
     Install,
     InstallAfterBackup,
     Continue,
+    /// 版本和方案都没变，只是 recipe 的构建参数变了：保留安装树，按签名增量重编。
+    Rebuild,
 }
 
 /// `install` 之前看到的现场。全是判定需要的输入，不看磁盘状态以外的东西。
@@ -84,6 +88,8 @@ pub struct InstallFacts<'a> {
     pub scheme: &'a str,
     /// 本次实际解析出的版本指纹。
     pub resolution: &'a str,
+    /// 本次的构建参数指纹。
+    pub inputs: &'a str,
     /// 本次方案的可执行命令，配置不一致时打给用户对比。
     pub requested_command: &'a str,
     /// 本次目标安装树的显示路径（全局模式是绝对路径）。
@@ -133,6 +139,8 @@ fn read_marker(path: &Path) -> Option<InstalledTree> {
             tree.scheme = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("resolution=") {
             tree.resolution = value.trim().to_owned();
+        } else if let Some(value) = line.strip_prefix("inputs=") {
+            tree.inputs = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("scheme_cmd=") {
             tree.scheme_cmd = value.trim().to_owned();
         } else if let Some(value) = line.strip_prefix("toolchain=") {
@@ -182,6 +190,9 @@ pub fn write(root: &Path, product: &str, version: &str, tree: &InstalledTree) ->
     let mut text = format!("version={version}\nscheme={}\n", tree.scheme);
     if !tree.resolution.is_empty() {
         text.push_str(&format!("resolution={}\n", tree.resolution));
+    }
+    if !tree.inputs.is_empty() {
+        text.push_str(&format!("inputs={}\n", tree.inputs));
     }
     if !tree.scheme_cmd.is_empty() {
         text.push_str(&format!("scheme_cmd={}\n", tree.scheme_cmd));
@@ -414,6 +425,42 @@ pub fn resolution_digest(product_version: &str, nodes: &[&Target]) -> String {
     digest(&text)
 }
 
+/// 构建参数指纹：recipe 的构建参数 + 本次选中项。
+///
+/// 只序列化 recipe 数据（占位符不展开、不含宿主路径和编译器版本），所以换机器
+/// 不会误判。工具节点是可重建缓存，不参与；`desc` / `ignored` 不影响产物，清掉。
+pub fn inputs_digest(nodes: &[&Target], sel: &Selection) -> String {
+    let mut canonical: BTreeMap<String, String> = BTreeMap::new();
+    for node in nodes {
+        if node.kind == Kind::Tool {
+            continue;
+        }
+        let mut copy = (*node).clone();
+        copy.desc.clear();
+        copy.ignored.clear();
+        let body = serde_json::to_string(&copy).unwrap_or_default();
+        canonical.insert(node.id(), body);
+    }
+    let targets = nodes
+        .iter()
+        .find(|node| node.kind == Kind::Product)
+        .map(|product| product.selected_targets.clone())
+        .unwrap_or_default();
+    let mut text = String::from("inputs\n");
+    text.push_str(&format!(
+        "selection={}\n",
+        serde_json::to_string(sel).unwrap_or_default()
+    ));
+    text.push_str(&format!(
+        "targets={}\n",
+        serde_json::to_string(&targets).unwrap_or_default()
+    ));
+    for (id, body) in canonical {
+        text.push_str(&format!("node={id}\n{body}\n"));
+    }
+    digest(&text)
+}
+
 fn digest(text: &str) -> String {
     use sha2::Digest;
     let value = sha2::Sha256::digest(text.as_bytes());
@@ -431,6 +478,7 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
         site,
         scheme,
         resolution,
+        inputs,
         requested_command,
         tree,
         installed_tree,
@@ -465,6 +513,9 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
                     head = format!(
                         "{product} {target} 已安装（{tree}），编译配置一致，但解析出的版本与本次不同"
                     );
+                } else if !record.inputs.is_empty() && record.inputs != *inputs {
+                    // 版本没变、只是 recipe 的构建参数变了：保留树，走增量构建。
+                    return Ok(Plan::Rebuild);
                 }
                 bail!(
                     "{head}\n  \
@@ -561,6 +612,7 @@ mod tests {
             site,
             scheme,
             resolution: "res",
+            inputs: "in",
             requested_command: "phprt install php@8.4 'swoole=mode=shared'",
             tree: ".phprt/php-8.4.14".into(),
             installed_tree: ".phprt/php-8.4.14".into(),
@@ -574,6 +626,7 @@ mod tests {
             version: "8.4.14".into(),
             scheme: scheme.to_owned(),
             resolution: String::new(),
+            inputs: String::new(),
             scheme_cmd: "phprt install php@8.4 'gd=mode:static'".to_string(),
             toolchain: String::new(),
             components: Vec::new(),
@@ -770,6 +823,73 @@ mod tests {
     }
 
     #[test]
+    fn changed_build_inputs_mean_incremental_rebuild() {
+        // 版本和方案都没变，只是构建参数不同：保留树，增量重编。
+        let mut changed = match complete("abc") {
+            Site::Complete(mut record) => {
+                record.inputs = "old".into();
+                Site::Complete(record)
+            }
+            other => other,
+        };
+        assert_eq!(
+            decide(&facts(changed.clone(), "abc"), false).unwrap(),
+            Plan::Rebuild
+        );
+
+        // 参数相同：仍然是“已安装”拒绝。
+        changed = match changed {
+            Site::Complete(mut record) => {
+                record.inputs = "in".into();
+                Site::Complete(record)
+            }
+            other => other,
+        };
+        let err = decide(&facts(changed, "abc"), false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("编译配置与本次方案一致"), "{err}");
+    }
+
+    #[test]
+    fn inputs_digest_follows_recipe_build_parameters() {
+        let mut openssl = node("dep", "openssl", "3.5.9", "bbb");
+        let php = node("product", "php", "8.5.12", "aaa");
+        let first = inputs_digest(&[&php, &openssl], &Selection::default());
+
+        // 节点顺序不影响。
+        assert_eq!(
+            first,
+            inputs_digest(&[&openssl, &php], &Selection::default())
+        );
+
+        // 改 configure 参数就变。
+        openssl.configure = vec!["--openssldir=/etc/ssl".into()];
+        let second = inputs_digest(&[&php, &openssl], &Selection::default());
+        assert_ne!(first, second);
+
+        // 只改描述和 audit 理由不变。
+        let mut described = openssl.clone();
+        described.desc = "换了描述".into();
+        described.ignored.insert("x".into(), "理由".into());
+        assert_eq!(
+            second,
+            inputs_digest(&[&php, &described], &Selection::default())
+        );
+
+        // 选中项变化也变。
+        let mut sel = Selection::default();
+        sel.per_component.insert(
+            "gd".into(),
+            ComponentSpec {
+                mode: Some("static".into()),
+                ..Default::default()
+            },
+        );
+        assert_ne!(second, inputs_digest(&[&php, &openssl], &sel));
+    }
+
+    #[test]
     fn marker_roundtrip() {
         let root = std::env::temp_dir().join(format!("phprt-marker-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -782,6 +902,7 @@ mod tests {
             version: "8.5.12".into(),
             scheme: "abc123".into(),
             resolution: "res123".into(),
+            inputs: String::new(),
             scheme_cmd: "phprt install php@8.5 'swoole=mode:shared'".into(),
             toolchain: String::new(),
             components: vec![ComponentFacts {

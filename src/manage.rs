@@ -472,6 +472,7 @@ mod tests {
             env: Default::default(),
             dep_configure: Default::default(),
             prepare: vec![],
+            feature_checks: Default::default(),
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
@@ -528,7 +529,10 @@ mod tests {
         let mut targets = std::collections::BTreeMap::new();
         targets.insert(product.id(), product.clone());
         targets.insert(component.id(), component.clone());
-        Registry { targets }
+        Registry {
+            targets,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -601,6 +605,7 @@ mod tests {
             version: "8.5.12".into(),
             scheme: "s".into(),
             resolution: String::new(),
+            inputs: String::new(),
             scheme_cmd: String::new(),
             toolchain: String::new(),
             components: Vec::new(),
@@ -632,6 +637,7 @@ mod tests {
             version: "8.5.12".into(),
             scheme: "s".into(),
             resolution: String::new(),
+            inputs: String::new(),
             scheme_cmd: String::new(),
             toolchain: String::new(),
             components: vec![ComponentFacts {

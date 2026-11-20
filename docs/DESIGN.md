@@ -66,9 +66,10 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 
 Tool / Toolchain 不新增层：Tool 的 recipe 在 `recipes/tools/`、源码版本仍走
 `catalog.toml`，构建产物放在 `build/tools/`（可重建缓存，不进 state 的产品身份）；
-Toolchain 是产品 recipe 的字段，只探测和合并参数。镜像线单独放在
-`recipes/images.toml`，只服务镜像模式，不改变这四层，见 [TOOLS.md](TOOLS.md) 和
-[IMAGE.md](IMAGE.md)（镜像部分待实施）。
+Toolchain 是产品 recipe 的字段，只探测和合并参数。镜像线放在
+`recipes/images.toml`，镜像部分待实施；同一文件里的 `[package_maps.*]` 现在也服务
+宿主模式的安装提示，不改变这四层，见 [TOOLS.md](TOOLS.md)、[IMAGE.md](IMAGE.md)
+和 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
 
 ## 4. 三个核心概念
 
@@ -277,6 +278,7 @@ src/
 ├── state.rs      state.json
 ├── tools.rs      构建期工具解析（宿主 / build/tools / catalog）、版本探测
 ├── toolchain.rs  编译器探测、档位选择、CFLAGS 合并
+├── host_commands.rs  宿主识别（包管理器 / 发行版 id / family）、包名映射、缺命令提示；向 recipe 注入 host ctx
 ├── version.rs    版本区间比较（tool / toolchain 共用）
 ├── layout.rs     源码 / 安装路径
 ├── sources.rs    下载清单
@@ -297,6 +299,7 @@ recipes/
 ├── tools/<名字>.star
 ├── bundles/<产品>/<系列>.toml
 ├── catalog.toml
+├── images.toml   镜像条目 [images.*]（镜像模式待实施，见 IMAGE.md）+ 包名映射 [package_maps.*]
 └── defs.star
 ```
 
@@ -340,6 +343,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle、targets |
 | [PRODUCT.md](PRODUCT.md) | 产品共享 profile、工具版本区间、toolchain 档位、安装后动作、入口模板 |
 | [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / build/tools、同名工具多版本、tool-sig、toolchain 档位与镜像筛选 |
+| [HOST-COMMANDS.md](HOST-COMMANDS.md) | 宿主缺命令时的安装提示：包名映射、包管理器识别、聚合与输出 |
 | [TARGETS.md](TARGETS.md) | `--targets`、target 声明、默认值、state/scheme 与构建身份 |
 | [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、feature 并集 |
 | [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |
@@ -349,7 +353,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |
-| [IMAGE.md](IMAGE.md) | 镜像线（`recipes/images.toml`、gcc/glibc facts、包名映射、`--image`）、容器化构建、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）（待实施，代码未实现） |
+| [IMAGE.md](IMAGE.md) | 镜像线（`recipes/images.toml`、gcc/glibc facts、包名映射、`bootstrap`/`packages`、`--image`）、容器化构建、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）、裸镜像实测记录（待实施，代码未实现） |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |

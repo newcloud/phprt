@@ -221,6 +221,7 @@ seed 进 state。
 version=8.5.12
 scheme=a348356a…（sha256，方案指纹）
 resolution=5d1c9e47…（sha256，产品补丁 + 各节点版本）
+inputs=2f8a1b3c…（sha256，recipe 构建参数 + 选中项）
 scheme_cmd=phprt install php@8.5 'curl=mode:static,swoole=mode:shared' --targets 'cli'（写标记时的方案）
 component=swoole mode=shared
 ini=swoole etc/conf.d/27-swoole.ini
@@ -232,6 +233,9 @@ artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
 - `resolution=` 是产品补丁和每个构建节点 `line` / `version` / `sha256` 的规范化哈希，
   只用于判断“方案相同、解析出的补丁是否相同”，不参与解析；字段定义见
   [LOCK.md](LOCK.md) 第 9 节。
+- `inputs=` 是构建参数指纹：recipe 的 `configure` / `make` / `mode` / feature 等加本次
+  选中项，占位符不展开、不含宿主路径和编译器版本。版本相同而参数变了时，`install`
+  保留安装树、按签名增量重编，不备份也不拒绝。旧标记没有这一行时只比较 `resolution`。
 - `component` 一行一个组件；`ini` / `ini_hash` / `artifact` 用组件名开头，可重复出现。
 - 产物写的是展开后的实际路径（recipe 里的 `*` 已经展开），删组件时按它删文件。
 - `ini_hash` 是安装时 ini 的内容指纹，`remove` 用它判断文件有没有被手改。
@@ -240,7 +244,8 @@ artifact=swoole lib/php/extensions/no-debug-non-zts-20250925/swoole.so
   已编译节点靠工作目录里的 `.phprt-sig` 签名一致来跳过，见 [BUILD.md](BUILD.md) 第 4 节；
   marker 不承担编译缓存。
 - `install` 用标记判断“这个补丁装过没有”：装过就拒绝重复安装，并说明本次方案与之
-  一致、不一致，或“配置一致但解析出的版本不同”，细节见 [CLI.md](CLI.md#重复安装与中断)。
+  一致、不一致，或“配置一致但解析出的版本不同”；构建参数变了则保留安装树增量重编，
+  细节见 [CLI.md](CLI.md#重复安装与中断)。
   方案指纹和 `scheme_cmd` 都按解析后的 `mode` / `feature` 渲染，没显式选的组件也带上
   默认值，所以首装后立刻重跑同一条 `install` 会判定为一致。
 - 默认只写系列时，产品补丁就是 `installed_version`，所以会命中上面的拒绝；

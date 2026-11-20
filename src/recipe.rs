@@ -193,7 +193,33 @@ pub struct Profile {
     pub audit: String,
 }
 
-/// 一个宿主机工具要求：字符串缩写只检查存在，带 min / max 时检查版本区间。
+/// 工具的一个具名检查：命令存在且版本满足后再执行，退出码 0 通过。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureCheck {
+    /// 检查命令的参数（不带命令本身），如 `["-MFindBin", "-e1"]`。
+    pub run: Vec<String>,
+    /// 检查失败时怎么处理。
+    pub on_fail: CheckFail,
+}
+
+/// 检查失败的处理方式；`need_packages` 进统一安装提示，`error_msg` 直接报错。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CheckFail {
+    /// 这些命令键需要装包；Rust 侧走 [package_maps.*] 合并成一条安装命令。
+    NeedPackages {
+        names: Vec<String>,
+        /// 给人看的说明，写在装包提示后面；空表示不写。
+        #[serde(default)]
+        reason: String,
+    },
+    /// 装包解决不了，直接打印这段文字。
+    ErrorMsg { text: String },
+}
+
+/// 一个宿主机工具要求：字符串缩写只检查存在，带 min / max 时检查版本区间，
+/// `feature_checks` 是要在这条命令上执行的具名检查（定义在工具 recipe 里）。
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolSpec {
     pub name: String,
@@ -203,6 +229,8 @@ pub struct ToolSpec {
     pub max: String,
     #[serde(default = "default_probe")]
     pub probe: Vec<String>,
+    #[serde(default)]
+    pub feature_checks: Vec<String>,
 }
 
 fn default_probe() -> Vec<String> {
@@ -226,6 +254,8 @@ impl<'de> Deserialize<'de> for ToolSpec {
                 max: String,
                 #[serde(default = "default_probe")]
                 probe: Vec<String>,
+                #[serde(default)]
+                feature_checks: Vec<String>,
             },
         }
         match Raw::deserialize(deserializer)? {
@@ -234,17 +264,20 @@ impl<'de> Deserialize<'de> for ToolSpec {
                 min: String::new(),
                 max: String::new(),
                 probe: default_probe(),
+                feature_checks: Vec::new(),
             }),
             Raw::Spec {
                 name,
                 min,
                 max,
                 probe,
+                feature_checks,
             } => Ok(Self {
                 name,
                 min,
                 max,
                 probe,
+                feature_checks,
             }),
         }
     }
@@ -737,6 +770,9 @@ pub struct Target {
     /// 构建前在源码目录执行的命令（如给上游源码打兼容补丁）。
     #[serde(default)]
     pub prepare: Vec<String>,
+    /// 具名检查：宿主命令存在且版本满足后再执行，见 `FeatureCheck`。
+    #[serde(default)]
+    pub feature_checks: BTreeMap<String, FeatureCheck>,
     #[serde(default)]
     pub features: BTreeMap<String, Feature>,
     /// 看过但决定不暴露的上游选项 -> 理由；只有 dep / component 使用。
@@ -1174,7 +1210,7 @@ pub struct RecipeMeta {
     pub bundled: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ComponentSpec {
     pub mode: Option<String>,
     /// 依赖名 -> 转给该依赖的 feature 列表
@@ -1272,7 +1308,7 @@ fn preparse_with(specs: &[String], multiple: bool) -> Result<Vec<RawComponent>> 
 }
 
 /// 命令行 `--component` 的选择结果。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Selection {
     pub per_component: BTreeMap<String, ComponentSpec>,
 }
@@ -1607,31 +1643,14 @@ pub(crate) fn feature_available(reg: &Registry, target: &Target, name: &str) -> 
         }
     }
     for command in &req.commands {
-        if !command_available(command) {
+        if !crate::tools::on_path(command) {
             bail!(
-                "{} 的 feature {name} 需要命令 {command}（Fedora: sudo dnf install {command}）",
-                target.id()
+                "{}",
+                crate::host_commands::feature_hint(&reg.host, &target.id(), name, command)
             );
         }
     }
     Ok(())
-}
-
-fn command_available(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let candidate = dir.join(name);
-        candidate.is_file()
-            && candidate
-                .metadata()
-                .map(|m| {
-                    use std::os::unix::fs::PermissionsExt;
-                    m.permissions().mode() & 0o111 != 0
-                })
-                .unwrap_or(false)
-    })
 }
 
 pub(crate) fn split_top(s: &str, sep: char) -> Result<Vec<&str>> {
@@ -1664,6 +1683,10 @@ pub(crate) fn split_top(s: &str, sep: char) -> Result<Vec<&str>> {
 #[derive(Debug, Default)]
 pub struct Registry {
     pub targets: BTreeMap<String, Target>,
+    /// 宿主环境：feature 的 `requires.commands` 用它生成安装提示。
+    pub host: crate::host_commands::Env,
+    /// 工具名 -> 具名检查；来自 `recipes/tools/<名字>.star`，含只能由系统提供的工具。
+    pub host_tools: BTreeMap<String, BTreeMap<String, FeatureCheck>>,
 }
 
 impl Registry {
@@ -1675,7 +1698,11 @@ impl Registry {
                 bail!("重复的目标 {id}");
             }
         }
-        let reg = Self { targets: map };
+        let reg = Self {
+            targets: map,
+            host: crate::host_commands::Env::default(),
+            host_tools: BTreeMap::new(),
+        };
         reg.validate_refs()?;
         Ok(reg)
     }
@@ -1989,6 +2016,12 @@ pub fn load_targets(
     let dialect = Dialect::Standard;
     let files = recipe_files(dir)?;
     let mut targets = Vec::new();
+    let mut host_tools: BTreeMap<String, BTreeMap<String, FeatureCheck>> = BTreeMap::new();
+
+    // 宿主事实注入 ctx：recipe 据此选择跟系统路径有关的构建参数（如 --openssldir）。
+    let host = crate::host_commands::Env::load(dir)?;
+    let mut base_ctx = base_ctx.clone();
+    base_ctx["host"] = host.recipe_ctx();
 
     let product_meta = metas
         .iter()
@@ -2086,18 +2119,40 @@ pub fn load_targets(
         targets.push(target);
     }
 
-    // 工具不绑定在产品闭包里：catalog 里每条线都是一个可构建的版本。
+    // 工具 recipe：catalog 有版本线就按版本构建；没有就是系统提供，只读 feature_checks。
     for file in files.iter().filter(|file| file.kind == Kind::Tool) {
-        let Some(lines) = catalog.lines(&file.name) else {
-            bail!(
-                "{}: 工具 recipe 没有 catalog 版本；在 recipes/catalog.toml 里加 [{}]",
-                file.path.display(),
-                file.name
-            );
-        };
         let src = fs::read_to_string(&file.path)
             .with_context(|| format!("读不到 {}", file.path.display()))?;
         let prelude = read_prelude(&file.path)?;
+        let Some(lines) = catalog.lines(&file.name) else {
+            let mut ctx = base_ctx.clone();
+            ctx["is_bundled"] = serde_json::Value::Bool(false);
+            ctx["self"] = serde_json::Value::Null;
+            let json = eval_target(
+                &file.path,
+                &defs,
+                prelude.as_deref(),
+                &src,
+                &globals,
+                &dialect,
+                &ctx,
+            )?;
+            let recipe: HostToolRecipe = serde_json::from_value(json)
+                .with_context(|| format!("{}: TARGET 字段不合法", file.path.display()))?;
+            if recipe.name != file.name {
+                bail!(
+                    "{}: TARGET.name={} 与文件名 {} 不一致",
+                    file.path.display(),
+                    recipe.name,
+                    file.name
+                );
+            }
+            validate_feature_checks(&recipe.feature_checks, &file.path)?;
+            if !recipe.feature_checks.is_empty() {
+                host_tools.insert(file.name.clone(), recipe.feature_checks);
+            }
+            continue;
+        };
         // 一条线里的每个补丁都是可选版本；工具没有“产品系列”，
         // 每个版本各自成节点。
         let mut versions: Vec<(String, String, String, String)> = Vec::new();
@@ -2147,6 +2202,9 @@ pub fn load_targets(
             target.sha256 = sha256;
             target.line = line;
             target.validate(&file.path)?;
+            if !target.feature_checks.is_empty() {
+                host_tools.insert(target.name.clone(), target.feature_checks.clone());
+            }
             targets.push(target);
         }
     }
@@ -2211,7 +2269,43 @@ pub fn load_targets(
     if !targets.iter().any(|t| t.kind == Kind::Product) {
         bail!("没有找到产品 {product_name}@{series} 的 recipe");
     }
-    Registry::from_targets(targets)
+    let mut reg = Registry::from_targets(targets)?;
+    reg.host = host;
+    reg.host_tools = host_tools;
+    Ok(reg)
+}
+
+/// catalog 里没有版本线的工具 recipe：只能由系统提供，只声明具名检查。
+#[derive(Debug, Deserialize)]
+struct HostToolRecipe {
+    name: String,
+    #[serde(default)]
+    feature_checks: BTreeMap<String, FeatureCheck>,
+}
+
+fn validate_feature_checks(checks: &BTreeMap<String, FeatureCheck>, path: &Path) -> Result<()> {
+    let at = path.display();
+    for (name, check) in checks {
+        if name.is_empty() {
+            bail!("{at}: feature_checks 里有空名字");
+        }
+        match &check.on_fail {
+            CheckFail::NeedPackages { names, .. } => {
+                if names.is_empty() {
+                    bail!("{at}: feature_check {name} 的 on_fail.need_packages 不能为空");
+                }
+                if names.iter().any(|item| item.is_empty()) {
+                    bail!("{at}: feature_check {name} 的 on_fail.need_packages 里有空名字");
+                }
+            }
+            CheckFail::ErrorMsg { text } => {
+                if text.trim().is_empty() {
+                    bail!("{at}: feature_check {name} 的 on_fail.error_msg 不能为空");
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn default_mode_of(product: &Target, component: &Target, path: &Path) -> Result<String> {
@@ -2914,6 +3008,25 @@ mod tests {
     }
 
     #[test]
+    fn openssl_ssl_dir_follows_the_host_family() {
+        let family = crate::host_commands::Env::load(&dir()).unwrap().family();
+        let expected = match family {
+            "rpm" => "--openssldir=/etc/pki/tls",
+            "deb" => "--openssldir=/etc/ssl",
+            _ => "--openssldir={prefix}/ssl",
+        };
+        for series in ["7.4", "8.5"] {
+            let (reg, _) = load(series, &[], &[]).unwrap();
+            let openssl = reg.get("dep:openssl").unwrap();
+            assert!(
+                openssl.configure.iter().any(|arg| arg == expected),
+                "{series}: {:?}",
+                openssl.configure
+            );
+        }
+    }
+
+    #[test]
     fn bundled_facts_come_from_the_product_recipe() {
         let (reg, _) = load("8.5", &[], &[]).unwrap();
         let product = reg.product_any().unwrap();
@@ -3581,6 +3694,17 @@ TARGET = target
     }
 
     #[test]
+    fn tool_feature_checks_are_parsed() {
+        let spec: ToolSpec = serde_json::from_value(serde_json::json!({
+            "name": "perl",
+            "min": "5.20",
+            "feature_checks": ["findbin"],
+        }))
+        .unwrap();
+        assert_eq!(spec.feature_checks, vec!["findbin".to_owned()]);
+    }
+
+    #[test]
     fn compilers_are_toolchain_not_tools() {
         for name in ["gcc", "g++", "gxx", "cc", "c++"] {
             let tools = vec![ToolSpec {
@@ -3588,6 +3712,7 @@ TARGET = target
                 min: "9".to_owned(),
                 max: String::new(),
                 probe: vec!["--version".to_owned()],
+                feature_checks: Vec::new(),
             }];
             let err = validate_tools(&tools, "fixture").unwrap_err().to_string();
             assert!(err.contains("toolchain"), "{err}");

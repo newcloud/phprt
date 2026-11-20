@@ -49,11 +49,17 @@ TARGET = target
     },
     "self": {"line": "6.2", "version": "6.2.5", "url": "...", "sha256": "..."},
     "is_bundled": False,
+    "host": {"id": "fedora", "family": "rpm"},
 }
 ```
 
 - `self` 是当前 recipe 同名组件在 catalog 里的记录；bundled 组件没有记录，为 `None`。
 - `is_bundled` 由产品 recipe 的 `bundled` 推导；dep / product 恒为 `False`。
+- `host` 是**构建宿主**的发行版事实：`id` 取 `/etc/os-release` 的 `ID`（小写，
+  如 `fedora` / `debian`），`family` 只分 `rpm` / `deb`，认不出时为空。
+  它只用来选跟系统路径有关的构建参数（`dep/openssl.star` 按 family 选
+  `--openssldir`）；兼容性判断走 `requires` / `LINES`，不写在 `target(ctx)` 里。
+  展开后的参数进构建签名，换发行版会重编对应节点。
 - 版本号、下载地址、sha256 都从 ctx 取，recipe 不写死。
 - bundled 组件用 `ctx["product_version"]` 作为自己的版本，url/sha256 留空；
   external 组件用 `self` 的版本和下载地址。
@@ -396,6 +402,14 @@ TARGET = target
 - 路径是 `recipes/tools/<名字>.star`，节点 id 是 `tool:<名字>@<版本>`。
 - 版本、url、sha256 由 catalog 注入；catalog 里每条线的数组元素都是一个可选版本。
 - 安装前缀是 `build/tools/<名字>-<版本>`，源码目录仍是 `build/<名字>/<stem>`。
+- catalog 里没有同名条目时，这个工具**只由系统提供**：不下载、不编译，只读
+  `feature_checks`（例：`recipes/tools/perl.star`）。有没有 catalog 条目就是唯一判据，
+  recipe 里不写“可构建 / 只能用宿主机”之类的标记。
+- `feature_checks` 是“工具名 → 检查定义”，由使用方按名字点单：
+  `tool("perl", min = "5.20", feature_checks = ["findbin"])`。检查用
+  `feature_check(run = [...], on_fail = ...)` 写，`on_fail` 取
+  `need_packages(names, reason = "")` 或 `error_msg(text)`；
+  `reason` 会打进装包提示，也作为 `plan` 里“无法解析”的原因。详见 [TOOLS.md](TOOLS.md)。
 - 不能声明 `needs`（工具不能依赖库），只能声明 `tools`（工具依赖工具）。
 - 不允许产品 / 组件字段：`product` / `series` / `source` / `modes` / `bundled` /
   `components` / `targets` / `prepare` / `features` / `ignored`。
@@ -495,7 +509,7 @@ TARGETS = {
 
 | 字段 | 说明 |
 | --- | --- |
-| `tools` | 产品总是需要的构建期工具；`tool(name, min, max, probe)` 或字符串，宿主优先、否则从 catalog 构建，详见 [PRODUCT.md](PRODUCT.md) 与 [TOOLS.md](TOOLS.md) |
+| `tools` | 产品总是需要的构建期工具；`tool(name, min, max, probe, feature_checks)` 或字符串，宿主优先、否则从 catalog 构建，详见 [PRODUCT.md](PRODUCT.md) 与 [TOOLS.md](TOOLS.md) |
 | `modes` | 挂载方式 → `mode(strategy, steps, artifacts, configure)` |
 | `defaults` | 组件来源（bundled / external）→ 默认挂载方式 |
 | `bundled_path` | bundled 组件的默认源码相对路径，支持 `{name}` |

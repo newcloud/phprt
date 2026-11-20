@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::layout;
-use crate::recipe::{Kind, Registry, Selection, Strategy, Target, ToolSpec};
+use crate::recipe::{CheckFail, Kind, Registry, Selection, Strategy, Target, ToolSpec};
 
 /// 工具从哪里来。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -41,11 +41,67 @@ pub struct ResolvedTool {
     pub prefix: Option<PathBuf>,
 }
 
+/// 解析不出来的原因；只有“缺命令”会进安装提示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnresolvedKind {
+    /// 命令不在 PATH，catalog 里也没有这个工具的 recipe。
+    MissingCommand,
+    /// 命令在，但版本不在要求区间，catalog 也没有可用版本。
+    OutOfRange,
+    /// catalog 有 recipe 但版本不满足，或探测失败等数据问题。
+    Data,
+}
+
+impl UnresolvedKind {
+    pub fn is_missing_command(self) -> bool {
+        matches!(self, Self::MissingCommand)
+    }
+}
+
+/// 带分类的解析失败；`lenient` 模式据此决定是提示安装还是保持原错误。
+#[derive(Debug)]
+struct ToolError {
+    kind: UnresolvedKind,
+    packages: Vec<String>,
+    /// feature_check 里写的说明（`need_packages(..., reason = ...)`）；空表示没写。
+    note: String,
+    message: String,
+}
+
+impl ToolError {
+    fn boxed(
+        kind: UnresolvedKind,
+        packages: Vec<String>,
+        note: String,
+        message: String,
+    ) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            kind,
+            packages,
+            note,
+            message,
+        })
+    }
+}
+
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ToolError {}
+
 /// 解析不出来的工具；plan 只展示，不因此失败。
 #[derive(Debug, Clone)]
 pub struct Unresolved {
     pub name: String,
     pub reason: String,
+    pub kind: UnresolvedKind,
+    /// 需要装包的键（feature_check 的 need_packages）；空表示用 `name`。
+    pub packages: Vec<String>,
+    /// 工具 recipe 里写的说明；空表示没写。
+    pub note: String,
 }
 
 /// 一次构建的工具解析结果。
@@ -133,6 +189,9 @@ pub fn resolve(order: &[&Target], opts: &Options<'_>) -> Result<Resolution> {
                     resolver.out.unresolved.push(Unresolved {
                         name: spec.name.clone(),
                         reason: message,
+                        kind: classify(&reason),
+                        packages: packages_of(&reason),
+                        note: note_of(&reason),
                     });
                 }
             }
@@ -197,6 +256,12 @@ fn merge(specs: Vec<ToolSpec>, node: &str) -> Result<Vec<ToolSpec>> {
         if existing.probe.is_empty() {
             existing.probe = spec.probe.clone();
         }
+        // 具名检查取并集，按声明顺序去重。
+        for name in &spec.feature_checks {
+            if !existing.feature_checks.contains(name) {
+                existing.feature_checks.push(name.clone());
+            }
+        }
         if !existing.min.is_empty()
             && !existing.max.is_empty()
             && crate::version::compare_to_bound(&existing.min, &existing.max)
@@ -216,8 +281,8 @@ fn merge(specs: Vec<ToolSpec>, node: &str) -> Result<Vec<ToolSpec>> {
 struct Resolver<'a, 'o> {
     opts: &'o Options<'a>,
     tools_dir: PathBuf,
-    /// 名字 + min + max -> 宿主探测结果。
-    host: BTreeMap<(String, String, String), HostProbe>,
+    /// 名字 + min + max + check -> 宿主探测结果。
+    host: BTreeMap<(String, String, String, String), HostProbe>,
     /// 工具名 -> build/tools 里已安装的版本。
     store: BTreeMap<String, Vec<String>>,
     out: Resolution,
@@ -246,14 +311,23 @@ impl Resolver<'_, '_> {
             return Ok(self.built(recipe));
         }
 
-        // 2. 宿主优先。
-        if let Some(version) = self.host_version(spec)? {
-            return Ok(ResolvedTool {
-                name: name.clone(),
-                version,
-                provider: Provider::Host,
-                prefix: None,
-            });
+        // 2. 宿主优先：存在 -> 版本 -> feature_checks（有才跑）。
+        match self.probe(spec)? {
+            HostProbe::Ok(version) => {
+                return Ok(ResolvedTool {
+                    name: name.clone(),
+                    version,
+                    provider: Provider::Host,
+                    prefix: None,
+                });
+            }
+            HostProbe::Unusable {
+                kind,
+                packages,
+                note,
+                message,
+            } => return Err(ToolError::boxed(kind, packages, note, message)),
+            HostProbe::Absent | HostProbe::OutOfRange(_) => {}
         }
 
         // 3. build/tools 里已有的版本。
@@ -315,20 +389,92 @@ impl Resolver<'_, '_> {
         Ok(candidates.last().map(|version| (*version).clone()))
     }
 
-    fn host_version(&mut self, spec: &ToolSpec) -> Result<Option<String>> {
-        let key = (spec.name.clone(), spec.min.clone(), spec.max.clone());
-        let probe = match self.host.get(&key) {
-            Some(value) => value.clone(),
-            None => {
-                let value = probe_host(spec)?;
-                self.host.insert(key, value.clone());
-                value
+    fn probe(&mut self, spec: &ToolSpec) -> Result<HostProbe> {
+        let key = (
+            spec.name.clone(),
+            spec.min.clone(),
+            spec.max.clone(),
+            spec.feature_checks.join(","),
+        );
+        if let Some(value) = self.host.get(&key) {
+            return Ok(value.clone());
+        }
+        let value = self.probe_uncached(spec)?;
+        self.host.insert(key, value.clone());
+        Ok(value)
+    }
+
+    /// 存在 -> 版本 -> feature_checks。检查命令和失败处理都来自工具 recipe。
+    fn probe_uncached(&self, spec: &ToolSpec) -> Result<HostProbe> {
+        if !on_path(&spec.name) {
+            return Ok(HostProbe::Absent);
+        }
+        let version = if spec.min.is_empty() && spec.max.is_empty() {
+            String::new()
+        } else {
+            let args: Vec<&str> = spec.probe.iter().map(String::as_str).collect();
+            let version = probe_program(&spec.name, &args)?;
+            if !crate::version::in_range(&version, &spec.min, &spec.max) {
+                // 宿主有这个命令但版本不满足：交给 store / catalog。
+                return Ok(HostProbe::OutOfRange(version));
             }
+            version
         };
-        Ok(match probe {
-            HostProbe::Ok(version) => Some(version),
-            _ => None,
-        })
+
+        for check_name in &spec.feature_checks {
+            let Some(checks) = self.opts.reg.host_tools.get(&spec.name) else {
+                anyhow::bail!(
+                    "工具 {} 要求检查 {check_name}，但 recipes/tools/{}.star 没有定义任何检查",
+                    spec.name,
+                    spec.name
+                );
+            };
+            let Some(check) = checks.get(check_name) else {
+                anyhow::bail!(
+                    "工具 {} 没有定义 feature_check {check_name}（在 recipes/tools/{}.star 里加）",
+                    spec.name,
+                    spec.name
+                );
+            };
+            let args: Vec<&str> = check.run.iter().map(String::as_str).collect();
+            let Err(reason) = run_check(&spec.name, &args) else {
+                continue;
+            };
+            let line = if check.run.is_empty() {
+                spec.name.clone()
+            } else {
+                format!("{} {}", spec.name, check.run.join(" "))
+            };
+            let (kind, packages, note, message) = match &check.on_fail {
+                CheckFail::NeedPackages {
+                    names,
+                    reason: note,
+                } => (
+                    UnresolvedKind::MissingCommand,
+                    names.clone(),
+                    note.clone(),
+                    // 写了 reason 就只报这一句，原始输出太长，需要时自己跑检查命令。
+                    if note.is_empty() {
+                        format!("宿主 {line} 检查不过（{check_name}）：{reason}")
+                    } else {
+                        note.clone()
+                    },
+                ),
+                CheckFail::ErrorMsg { text } => (
+                    UnresolvedKind::Data,
+                    Vec::new(),
+                    String::new(),
+                    format!("{text}\n  {line}: {reason}"),
+                ),
+            };
+            return Ok(HostProbe::Unusable {
+                kind,
+                packages,
+                note,
+                message,
+            });
+        }
+        Ok(HostProbe::Ok(version))
     }
 
     fn store_versions(&mut self, name: &str) -> Vec<String> {
@@ -371,6 +517,9 @@ impl Resolver<'_, '_> {
                     self.out.unresolved.push(Unresolved {
                         name: spec.name.clone(),
                         reason: format!("{err:#}"),
+                        kind: classify(&err),
+                        packages: packages_of(&err),
+                        note: note_of(&err),
                     });
                 }
                 Err(err) => return Err(err),
@@ -398,22 +547,61 @@ impl Resolver<'_, '_> {
     fn no_candidate(&self, spec: &ToolSpec, recipes: &[Target]) -> anyhow::Error {
         let name = &spec.name;
         let range = range_text(spec);
-        if let Some(HostProbe::OutOfRange(version)) =
-            self.host
-                .get(&(name.clone(), spec.min.clone(), spec.max.clone()))
-        {
-            return anyhow::anyhow!("宿主 {name} {version} 不满足 {range}，catalog 也没有可用版本");
+        let key = (
+            name.clone(),
+            spec.min.clone(),
+            spec.max.clone(),
+            spec.feature_checks.join(","),
+        );
+        if let Some(HostProbe::OutOfRange(version)) = self.host.get(&key) {
+            return ToolError::boxed(
+                UnresolvedKind::OutOfRange,
+                Vec::new(),
+                String::new(),
+                format!("宿主 {name} {version} 不满足 {range}，catalog 也没有可用版本"),
+            );
         }
         if recipes.is_empty() {
-            return anyhow::anyhow!("宿主缺少 {name}，catalog 没有 {name} 的构建 recipe");
+            return ToolError::boxed(
+                UnresolvedKind::MissingCommand,
+                Vec::new(),
+                String::new(),
+                format!("宿主缺少 {name}，catalog 没有 {name} 的构建 recipe"),
+            );
         }
         let highest = recipes
             .iter()
             .max_by(|a, b| version_cmp(&a.version, &b.version))
             .map(|recipe| recipe.version.as_str())
             .unwrap_or("");
-        anyhow::anyhow!("catalog 里 {name} 最高 {highest}，不满足 {range}")
+        ToolError::boxed(
+            UnresolvedKind::Data,
+            Vec::new(),
+            String::new(),
+            format!("catalog 里 {name} 最高 {highest}，不满足 {range}"),
+        )
     }
+}
+
+/// 解析失败要装哪些包；只有 feature_check 的 need_packages 会带。
+fn packages_of(err: &anyhow::Error) -> Vec<String> {
+    err.downcast_ref::<ToolError>()
+        .map(|error| error.packages.clone())
+        .unwrap_or_default()
+}
+
+/// 工具 recipe 写的说明；没写（或不是工具错误）时为空。
+fn note_of(err: &anyhow::Error) -> String {
+    err.downcast_ref::<ToolError>()
+        .map(|error| error.note.clone())
+        .unwrap_or_default()
+}
+
+/// 解析失败属于哪一类；没有分类的错误按数据问题处理，保持原错误。
+fn classify(err: &anyhow::Error) -> UnresolvedKind {
+    err.downcast_ref::<ToolError>()
+        .map(|error| error.kind)
+        .unwrap_or(UnresolvedKind::Data)
 }
 
 fn range_text(spec: &ToolSpec) -> String {
@@ -430,24 +618,39 @@ fn range_text(spec: &ToolSpec) -> String {
 enum HostProbe {
     Absent,
     OutOfRange(String),
+    /// 命令在、版本也行，但 feature_check 没过（如 Debian 的 perl-base 缺 FindBin）。
+    Unusable {
+        kind: UnresolvedKind,
+        /// need_packages 的键；error_msg 时为空。
+        packages: Vec<String>,
+        /// 工具 recipe 里写的说明；空表示没写。
+        note: String,
+        message: String,
+    },
     Ok(String),
 }
 
-fn probe_host(spec: &ToolSpec) -> Result<HostProbe> {
-    if !on_path(&spec.name) {
-        return Ok(HostProbe::Absent);
+/// 可用性检查：退出码 0 才算通过；失败时返回一行原因（stderr 首行）。
+fn run_check(program: &str, args: &[&str]) -> std::result::Result<(), String> {
+    let output = Command::new(program)
+        .args(args)
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|err| format!("跑不起来（{err}）"))?;
+    if output.status.success() {
+        return Ok(());
     }
-    if spec.min.is_empty() && spec.max.is_empty() {
-        return Ok(HostProbe::Ok(String::new()));
-    }
-    let args: Vec<&str> = spec.probe.iter().map(String::as_str).collect();
-    let version = probe_program(&spec.name, &args)?;
-    if crate::version::in_range(&version, &spec.min, &spec.max) {
-        Ok(HostProbe::Ok(version))
+    let text = String::from_utf8_lossy(&output.stderr);
+    let first = text.lines().next().unwrap_or("").trim();
+    let reason = if first.is_empty() {
+        match output.status.code() {
+            Some(code) => format!("退出码 {code}"),
+            None => "被信号终止".to_owned(),
+        }
     } else {
-        // 宿主有这个命令但版本不满足：交给 store / catalog。
-        Ok(HostProbe::OutOfRange(version))
-    }
+        first.chars().take(160).collect()
+    };
+    Err(reason)
 }
 
 /// 全量版本比较（段数不同时短的补 0）。
@@ -519,7 +722,8 @@ fn find_version(text: &str) -> Option<String> {
     None
 }
 
-fn on_path(name: &str) -> bool {
+/// 命令是否在 PATH 里且可执行。
+pub(crate) fn on_path(name: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else {
         return false;
     };
@@ -557,6 +761,7 @@ mod tests {
             min: min.to_owned(),
             max: String::new(),
             probe: vec!["--version".to_owned()],
+            feature_checks: Vec::new(),
         }
     }
 
@@ -582,6 +787,23 @@ mod tests {
     }
 
     #[test]
+    fn check_requires_zero_exit() {
+        assert!(run_check("/bin/true", &[]).is_ok());
+        assert!(run_check("/bin/false", &[]).is_err());
+        assert!(run_check("/nonexistent-phprt-check", &[]).is_err());
+    }
+
+    #[test]
+    fn feature_checks_are_unioned_across_nodes() {
+        let mut a = spec("perl", "5.20");
+        a.feature_checks = vec!["findbin".into()];
+        let mut b = spec("perl", "5.20");
+        b.feature_checks = vec!["findbin".into(), "encode".into()];
+        let merged = merge(vec![a, b], "node").unwrap();
+        assert_eq!(merged[0].feature_checks, ["findbin", "encode"]);
+    }
+
+    #[test]
     fn versions_compare_by_numeric_parts() {
         assert_eq!(version_cmp("15.3.1", "11"), std::cmp::Ordering::Greater);
         assert_eq!(version_cmp("9.4", "11"), std::cmp::Ordering::Less);
@@ -593,7 +815,7 @@ mod tests {
 #[cfg(test)]
 mod resolve_tests {
     use super::*;
-    use crate::recipe::Profile;
+    use crate::recipe::{FeatureCheck, Profile};
 
     fn tool_node(name: &str, version: &str) -> Target {
         Target {
@@ -626,6 +848,7 @@ mod resolve_tests {
             min: min.to_owned(),
             max: String::new(),
             probe: vec!["--version".to_owned()],
+            feature_checks: Vec::new(),
         }
     }
 
@@ -762,6 +985,118 @@ mod resolve_tests {
                 "tool:phprt-demo-tool-xyz@2.71",
                 "tool:phprt-demo-tool-xyz@2.72"
             ]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn real_spec(name: &str) -> ToolSpec {
+        // 用真实存在的命令，检查才是唯一变量。
+        ToolSpec {
+            name: name.to_owned(),
+            min: String::new(),
+            max: String::new(),
+            probe: vec!["--version".to_owned()],
+            feature_checks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn undefined_feature_check_stops_resolution() {
+        let root = temp_root("no-check");
+        let reg = registry(vec![]);
+        let mut spec = real_spec("true");
+        spec.feature_checks = vec!["findbin".into()];
+        let product = product(vec![spec]);
+        let err = run(&reg, &product, &root, BTreeMap::new(), false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("没有定义任何检查"), "{err}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn failed_check_with_need_packages_becomes_missing_command() {
+        let root = temp_root("need-packages");
+        let mut reg = registry(vec![]);
+        reg.host_tools.insert(
+            "false".into(),
+            BTreeMap::from([(
+                "findbin".into(),
+                FeatureCheck {
+                    run: vec!["-e".into(), "1".into()],
+                    on_fail: CheckFail::NeedPackages {
+                        names: vec!["perl".into()],
+                        reason: "当前 perl 模块不全".into(),
+                    },
+                },
+            )]),
+        );
+        let mut spec = real_spec("false");
+        spec.feature_checks = vec!["findbin".into()];
+        let product = product(vec![spec]);
+        let sel = Selection::default();
+        let out = resolve(
+            &[&product],
+            &Options {
+                reg: &reg,
+                product: &product,
+                sel: &sel,
+                build_root: &root,
+                locked: BTreeMap::new(),
+                lock: false,
+                lenient: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.unresolved.len(), 1);
+        assert_eq!(out.unresolved[0].kind, UnresolvedKind::MissingCommand);
+        assert_eq!(out.unresolved[0].packages, ["perl"]);
+        // 写了 reason 就只报这一句，不再带一长串原始输出。
+        assert_eq!(out.unresolved[0].note, "当前 perl 模块不全");
+        assert_eq!(out.unresolved[0].reason, "当前 perl 模块不全");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn failed_check_with_error_msg_is_not_installable() {
+        let root = temp_root("error-msg");
+        let mut reg = registry(vec![]);
+        reg.host_tools.insert(
+            "false".into(),
+            BTreeMap::from([(
+                "findbin".into(),
+                FeatureCheck {
+                    run: vec!["-e".into(), "1".into()],
+                    on_fail: CheckFail::ErrorMsg {
+                        text: "perl 是定制构建的，装包无效".into(),
+                    },
+                },
+            )]),
+        );
+        let mut spec = real_spec("false");
+        spec.feature_checks = vec!["findbin".into()];
+        let product = product(vec![spec]);
+        let sel = Selection::default();
+        let out = resolve(
+            &[&product],
+            &Options {
+                reg: &reg,
+                product: &product,
+                sel: &sel,
+                build_root: &root,
+                locked: BTreeMap::new(),
+                lock: false,
+                lenient: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.unresolved.len(), 1);
+        assert_eq!(out.unresolved[0].kind, UnresolvedKind::Data);
+        assert!(out.unresolved[0].packages.is_empty());
+        assert!(
+            out.unresolved[0].reason.contains("装包无效"),
+            "{}",
+            out.unresolved[0].reason
         );
         std::fs::remove_dir_all(&root).unwrap();
     }

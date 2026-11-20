@@ -503,6 +503,7 @@ versions: 名字 -> 精确补丁    （只在 --lock 时填）
 version=8.5.12
 scheme=...
 resolution=...
+inputs=...
 scheme_cmd=...
 ```
 
@@ -513,6 +514,8 @@ scheme_cmd=...
 - scheme 相同、resolution 不同：提示“编译配置一致，但解析出的版本与本次不同”，
   用 `--force` 或显式补丁重装；
 - 旧标记没有 `resolution`：只比较 scheme。
+- 版本和 scheme 都相同、`inputs` 不同：不拒绝，保留安装树按签名增量重编；
+- 旧标记没有 `inputs`：不触发重编，行为和以前一致。
 
 ### 10.4 state schema
 

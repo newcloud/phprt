@@ -596,6 +596,7 @@ mod tests {
             env: Default::default(),
             dep_configure: Default::default(),
             prepare: vec![],
+            feature_checks: Default::default(),
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],

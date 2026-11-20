@@ -178,7 +178,7 @@ toolchain 档位里。
 ## 4. 工具声明
 
 ```python
-tool(name, min = "", max = "", probe = ["--version"])
+tool(name, min = "", max = "", probe = ["--version"], feature_checks = [])
 ```
 
 - 字符串缩写表示只检查存在：`"patchelf"`。
@@ -187,14 +187,21 @@ tool(name, min = "", max = "", probe = ["--version"])
   拒绝 14.0；空表示不限。
 - `probe` 是探测命令的参数列表，不经过 shell；默认 `--version`。
 - 版本从 stdout + stderr 里取第一个 `\d+(\.\d+)+` 片段。
-- 探测时设置 `LC_ALL=C`。
+- `feature_checks` 是检查名列表，具体怎么检查写在 `recipes/tools/<name>.star` 里，
+  使用方只声明"我要过这个检查"，比如
+  `tool("perl", min = "5.20", feature_checks = ["findbin"])`。解析顺序是
+  命令存在 → 版本满足 → 执行检查；失败按工具 recipe 的 `on_fail` 处理
+  （`need_packages` 进安装提示、`error_msg` 直接报错）。只校验宿主命令，
+  catalog 自建的工具不跑；同名工具的检查名取并集。`need_packages` 可以带
+  `reason = "..."`，这句话会打在装包提示里，也作为 `plan` 里“无法解析”的原因。
+- 探测和检查都设置 `LC_ALL=C`。
 
 示例：
 
 ```python
 tool("cmake", min = "3.20", probe = ["--version"])
 tool("nasm", min = "2.13", probe = ["-v"])
-tool("perl", min = "5.20", probe = ["-e", "print $^V"])
+tool("perl", min = "5.20", probe = ["-e", "print $^V"], feature_checks = ["findbin"])
 ```
 
 解析发生在下载源码之前，按节点进行：宿主满足区间就用宿主，否则复用
@@ -203,8 +210,17 @@ tool("perl", min = "5.20", probe = ["-e", "print $^V"])
 
 ```text
 宿主 cmake 3.10 不满足 >= 3.20，catalog 也没有可用版本
-宿主缺少 nasm，catalog 没有 nasm 的构建 recipe
 catalog 里 autoconf 最高 2.72，不满足 >= 9.0
+```
+
+宿主缺命令时一次收齐本次方案缺的全部命令，按发行版拼成安装命令；只提示，不执行，
+见 [HOST-COMMANDS.md](HOST-COMMANDS.md)：
+
+```text
+error: 宿主缺少构建命令：gcc g++ cmake make m4
+这些命令 catalog 里没有可用的源码 recipe，phprt 不会自己编译；由系统包提供。
+Fedora Linux 43（dnf）上执行：
+  sudo dnf install gcc gcc-c++ cmake make m4
 ```
 
 宿主工具不下载、不安装；built 工具装到 `build/tools/<name>-<version>`，跨产品复用。

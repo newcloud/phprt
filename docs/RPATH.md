@@ -69,7 +69,7 @@ pub fn set_rpath(path: &Path, rpath: &str, opts: &Options) -> Result<()>
 # 两种方式行为一致，都等价于 patchelf --set-rpath <值> --force-rpath：
 # - oxipatch：用内嵌的 oxipatch 库直接改 ELF 文件，不需要装任何外部命令；
 # - patchelf：调用系统 patchelf 命令，选择它要先安装
-#   （Fedora: sudo dnf install patchelf）。
+#   （缺什么由 phprt 给出安装命令，见 HOST-COMMANDS.md）。
 # 同时保留两个方式：oxipatch 是新库，遇到边界行为问题时，改这一行就能
 # 切回久经考验的 patchelf，不用改代码、不用重编 phprt 本体。
 rpath_backend = "oxipatch"
@@ -120,8 +120,13 @@ backend，无需重设计。
 探测一次 `patchelf` 命令，缺失即报：
 
 ```text
-error: rpath_backend = "patchelf" 需要系统安装 patchelf（Fedora: sudo dnf install patchelf）
+error: rpath_backend = "patchelf" 需要系统安装 patchelf
+Fedora Linux 43（dnf）上执行：
+  sudo dnf install patchelf
 ```
+
+安装命令由 [HOST-COMMANDS.md](HOST-COMMANDS.md) 的同一个生成器给出，不在这里写死
+发行版文案。
 
 ## 8. ARM 兼容
 

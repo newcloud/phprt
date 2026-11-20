@@ -29,6 +29,7 @@
 | 解压顺序、目录、格式、跳过与安全 | `docs/EXTRACT.md` |
 | 构建顺序、环境、签名跳过、日志、rpath、ini、入口 | `docs/BUILD.md` |
 | 产品共享 profile、工具最低版本、安装后动作、入口模板 | `docs/PRODUCT.md` |
+| 宿主缺命令的安装提示、包名映射、发行版识别 | `docs/HOST-COMMANDS.md` |
 | 模块职责、数据流、关键决策、目录 | `docs/DESIGN.md` |
 
 ## 2. 不开发没明确要求的使用方式
@@ -112,7 +113,8 @@
 - 新增 recipe 的硬校验（写错会直接加载失败，不静默忽略）：
   - `Target` 拒绝未知字段；旧的 `host_tools` 已删除，写了会报错；
   - `tools` 里不能写 `gcc` / `g++` / `gxx` / `cc` / `c++`，编译器只属于 `toolchain`；
-  - `recipes/tools/<名字>.star` 必须在 `catalog.toml` 有同名条目，只能用
+  - `recipes/tools/<名字>.star`：`catalog.toml` 有同名条目就按版本下载构建；没有
+    就是系统提供（如 perl），只读 `feature_checks`，不下载不编译。只能用
     `tool_target(...)`，不能声明 `needs` 或产品 / 组件字段；
   - `toolchain` 的档位不能重叠，`gcc` 档位只写 `cflags`、`gxx` 档位只写 `cxxflags`。
 - 构建期工具统一写在 `tools`，可带版本区间：

@@ -257,6 +257,29 @@ phprt remove php@8.5 xdebug
 phprt 不展开组件之间的依赖：需要 libxml 的扩展（如 DOM/SimpleXML）必须把 `libxml`
 一起写进方案，漏写时 PHP configure 会报错。
 
+## 宿主构建命令
+
+`install` / `add` / `remove` 在下载源码之前解析本次方案用到的构建命令。宿主缺命令、
+catalog 也没有可用的源码 recipe 时，一次列出全部缺失项，并按发行版给出安装命令：
+
+```text
+error: 宿主缺少构建命令：gcc g++ cmake make m4
+这些命令 catalog 里没有可用的源码 recipe，phprt 不会自己编译；由系统包提供。
+Fedora Linux 43（dnf）上执行：
+  sudo dnf install gcc gcc-c++ cmake make m4
+```
+
+- 只提示，不执行：不跑 `sudo`、不装包、不改 PATH。
+- 包名映射在 `recipes/images.toml` 的 `[package_maps.*]`；未映射的名字单独列一行，
+  不拼进安装命令。
+- 命令在但版本不满足时，不拼进安装命令，仍按原错误报。
+- 工具的 `feature_check` 不过时，`need_packages` 的键并进安装命令；写了 `reason`
+  的话（如“当前 perl 模块不全，需要安装完整的 perl 包”）打在提示里，
+  `plan` 的 `host commands` 段多一行 `reason`。
+- `plan` 不因此失败，在 `tools` 段之后输出 `host commands` 段。
+- `--downloads` 不检查环境，不输出提示。
+- 识别不出包管理器时只列命令名。细节见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
+
 ## add / remove 的现场检查
 
 `add` / `remove` 先看磁盘再动手，改完方案就立即增量构建；需要重编时提示代价，
@@ -352,6 +375,7 @@ $ phprt add php@8.5 xdebug --force        # 手改过 30-xdebug.ini
 | 本次补丁已装、方案指纹一致 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案一致”，退出 1 |
 | 本次补丁已装、方案指纹不同 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案不一致”，退出 1 |
 | 本次补丁已装、方案一致但解析出的版本不同 | `install 产品@补丁` | 拒绝：说明“编译配置一致，但解析出的版本与本次不同”，退出 1 |
+| 本次补丁已装、版本相同但 recipe 构建参数变了 | `install 产品@补丁` | 不拒绝：提示“构建参数有变化”，保留安装树按签名增量重编 |
 | 本次补丁已装 | `install 产品@补丁 --force` | 等下载、解压都成功后，旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
 | 本次补丁的树在、缺完成标记 | 任意 | 当成中断，打印提示后继续 |
 | state 说装过、本次补丁的树不存在 | 任意 | 直接装（树被删过，没有要保护的东西） |
@@ -374,6 +398,13 @@ error: php 8.4.12 已安装（.phprt/php-8.4.12），编译配置一致，但解
   要重新安装，任选其一：
     phprt install php@8.4.12 --force     # 已装版本改名成 .phprt/php-8.4.12-backup-<日期>，然后全新安装
     rm -rf .phprt/php-8.4.12             # 确认不再需要这个版本，删掉后再装
+```
+
+版本和方案都没变、只是 recipe 的构建参数改了（例如 `configure` 参数）时，不拒绝也不备份：
+
+```text
+$ phprt install php@8.5
+已装版本不变，构建参数有变化：按签名增量重编，不备份原安装树
 ```
 
 | 参数 | 说明 |
@@ -494,7 +525,8 @@ phprt install nginx@1.29 --downloads --offline
   解压目录是 `<root>/build/<名字>/<补丁>/`。
 - 下载失败、解压失败或编译失败都退出 1，并且不写状态。
 - `--downloads` 结束时只打印源码缓存位置，不修改 state。
-- `--downloads` 不检查工具链版本；解析不到的工具不会让命令失败，只在 `plan` 里提示。
+- `--downloads` 不检查工具链版本；解析不到的工具不会让命令失败，只在 `plan` 里提示，
+  也不输出安装命令。
 - GitHub 直连失败或 30 秒没下完会换镜像；`PHPRT_GITHUB_DIRECT_TIMEOUT` 可改秒数，
   镜像开关和列表在项目根的 `phprt.toml`。
 - 下载细节见 [DOWNLOAD.md](DOWNLOAD.md)，解压细节见 [EXTRACT.md](EXTRACT.md)，
@@ -637,7 +669,9 @@ xdebug           external  shared             3.5.3      available
 | feature 写法不对 | `component:openssl 的 feature: 后面必须写方括号，例如 feature:[argon2]` |
 | feature 的产品条件不满足 | `component:openssl 的 feature argon2 需要产品系列 8.4, 8.5, 8.6，当前 8.2` |
 | feature 的依赖线条件不满足 | `component:openssl 的 feature argon2 需要 dep:openssl 3.5, 4.0，当前 3.0` |
-| feature 需要的命令不在 PATH | `dep:jpeg 的 feature simd 需要命令 nasm（Fedora: sudo dnf install nasm）` |
+| feature 需要的命令不在 PATH | `dep:jpeg 的 feature simd 需要命令 nasm` + `sudo dnf install nasm` |
+| 宿主缺构建命令 | `宿主缺少构建命令：gcc g++ make` + 该发行版的 `sudo dnf install ...` 一行 |
+| 宿主命令版本不满足 | `宿主 make 3.8 不满足 >= 4.0，catalog 也没有可用版本` |
 | 内置组件写版本线 | `component:openssl 是内置组件，没有自己的版本线；依赖库 openssl 的版本请用 --dep openssl=<线>` |
 | `--dep` 写了组件名 | `--dep swoole 不是依赖库` |
 | 上游选项未处置 | `N 项没有通过 audit：...` |

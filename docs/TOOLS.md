@@ -172,8 +172,40 @@ tools = [tool("nasm", min = "2.13"), "cmake"]
 - gcc / g++ 不写在这里，由产品的 `toolchain(...)` 声明；它们也永远不会从
   Tool catalog 解析，避免出现“下载 gcc”的第二条路径。加载时校验：`tools` 里出现
   `gcc` / `g++` / `gxx` / `cc` / `c++` 直接报错；`recipes/tools/` 也不允许这些名字。
-- `tool(name, min = "", max = "", probe = ["--version"])`：`max` 是可选上界，
-  语义与 `toolchain_range` 一致（按写出的段数比较）；不写表示不限制。
+- `tool(name, min = "", max = "", probe = ["--version"], feature_checks = [])`：`max` 是
+  可选上界，语义与 `toolchain_range` 一致（按写出的段数比较）；不写表示不限制。
+  `feature_checks` 是检查名，具体怎么检查写在 `recipes/tools/<name>.star`：
+
+  ```python
+  # 使用方：谁需要谁声明
+  tools = [tool("perl", min = "5.20", feature_checks = ["findbin"])]
+
+  # 工具 recipe：recipes/tools/perl.star
+  tool_target(
+      name = "perl",
+      feature_checks = {
+          "findbin": feature_check(
+              run = ["-MFindBin", "-e1"],
+              on_fail = need_packages(
+                  ["perl"],
+                  reason = "当前 perl 模块不全，需要安装完整的 perl 包",
+              ),
+          ),
+      },
+  )
+  ```
+
+  解析顺序固定：**命令存在 → 版本满足 → 执行 feature_checks**。检查只在宿主提供的
+  命令上跑，catalog 构建出来的不跑。失败按 `on_fail` 处理：`need_packages` 把键并进
+  统一安装命令，`error_msg` 直接打印。同名工具的检查名取并集；检查名在工具 recipe 里
+  找不到时直接报错。
+
+  `need_packages(names, reason = "")`：`names` 是命令键，`reason` 是给人看的一句话，
+  打进装包提示（`perl：当前 perl 模块不全，需要安装完整的 perl 包`），同时作为该工具
+  在 `plan` 里“无法解析”的原因。不写 `reason` 就只报检查命令和它的原始输出。
+
+- catalog 里有同名版本的工具按版本构建；**没有版本的就是系统提供**，不下载、不编译，
+  只读它的 `feature_checks`，recipe 里不写 `buildable` 之类的标记。
 
 - `tool(name, min = "", probe = ["--version"])` 保留；字符串缩写只检查存在。
 - `Target.tools` 类型从 `Vec<String>` 改成 `Vec<ToolSpec>`；`Profile.tools` 类型不变。
@@ -237,9 +269,15 @@ recipe 的 `env` 里。
   构建命令里。
 - 报错要区分：
   - `宿主 autoconf 2.60 不满足 >= 2.68，catalog 也没有可用版本`
-  - `宿主缺少 nasm，catalog 没有 nasm 的构建 recipe`
+  - `宿主缺少构建命令：nasm`（另附发行版安装命令）
+  - `宿主 perl 在，但检查不过（findbin）：Can't locate FindBin.pm…`
+    （命令在、`feature_check` 不过，按缺命令处理）
+  - `当前 perl 模块不全，需要安装完整的 perl 包`
+    （`need_packages` 写了 `reason` 时，用它替代上面那条原始输出）
   - `catalog 里 nasm 最高 2.16.03，不满足 >= 2.17`
   - `节点 openssl 要求 autoconf <= 2.69，Profile 要求 >= 2.70，交集为空`
+- 宿主缺命令、catalog 也没有可用 recipe 时，错误里附上按发行版拼好的安装命令；
+  同一次解析的缺失项收齐再报，不只报第一个，见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
 
 ### 3.6 构建
 
@@ -312,7 +350,8 @@ recipe 的 `env` 里。
 - `plan` 增加 `tools` 段，文本输出增加“构建工具”一节；同名多版本分别列出。
   built 工具标出谁需要它：`autoconf 2.72 (store) -> ...  for xdebug`，`build order`
   和工具节点详情也带 `for`；覆盖全部非工具节点时写 `all nodes`。`plan` 不因工具
-  缺失而失败，只显示将用 host / 将构建 / 无法解析。
+  缺失而失败，只显示将用 host / 将构建 / 无法解析；缺命令时另给安装提示，
+  见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
 - `--downloads` 把本次解析到、需要构建的工具源码加入下载（含同名多版本）；宿主满足
   的工具不需要源码。它保持“不检查、不构建”的语义，方便离线预取。真正 `install`
   仍然 host-first。
@@ -340,7 +379,8 @@ glibc / ld / binutils **不声明**：它们跟随 gcc 所在的系统或镜像�
 - 按产品声明的版本档位选一档；
 - 把该档的兼容 CFLAGS/CXXFLAGS 合入构建环境；
 - 记录实际环境；
-- 不满足声明时报错（不下载、不安装、不回退）；
+- 不满足声明时报错（不下载、不安装、不回退）；命令不存在时附发行版安装命令，
+  见 [HOST-COMMANDS.md](HOST-COMMANDS.md)；
 - 为未来镜像 catalog 提供同一份 `ToolchainFacts`，作为镜像筛选条件。
 
 Toolchain 不提供可执行文件，不进 PATH，不参与安装。
@@ -349,7 +389,7 @@ Toolchain 不提供可执行文件，不进 PATH，不参与安装。
 
 | | Tool | Toolchain |
 | --- | --- | --- |
-| 宿主缺失 / 版本不满足 | 从 catalog 取源码构建到 `build/tools/` 使用 | **停止**，报环境不满足 |
+| 宿主缺失 / 版本不满足 | 从 catalog 取源码构建到 `build/tools/` 使用 | **停止**，报环境不满足；缺命令时附安装命令 |
 | 来源 | 宿主或 catalog 源码 | 只有当前主机（将来可能是镜像） |
 | 作用 | 单个节点的构建命令 | 整次构建的编译器版本与 CFLAGS |
 | 是否可下载 | 是 | 否 |
@@ -430,7 +470,8 @@ ToolchainFacts {
 - 只探测声明了的项；没声明 `gxx` 时不检查 g++，也不加 CXXFLAGS。
 - 对每个声明的项，找包含实际版本的档。
 - 选中的档提供 `cflags` / `cxxflags`。
-- 探测失败（命令不存在、输出解析不出）直接报错，不猜版本。
+- 命令不存在时汇总成安装提示（[HOST-COMMANDS.md](HOST-COMMANDS.md)）；命令在但输出
+  解析不出、或版本不在任何档位里，直接报错，不猜版本。
 - 宿主模式没有候选列表：不满足声明就是环境不可用，不下载、不安装。
 
 ### 4.4 CFLAGS 合并
@@ -519,6 +560,7 @@ toolchain = TOOLCHAIN,
 | `docs/DESIGN.md` | 第 14 节登记本文；四层数据补充 Tool / Toolchain |
 | `docs/IMAGE.md` | 第 3 节改为 `recipes/images.toml`：条目字段 `image` / `digest` / `pm` / `gcc` / `glibc`；gcc 是唯一构建筛选条件，glibc 只提示运行下限；新增 `[package_maps.apt]` / `[package_maps.dnf]`、`phprt list_oci_images`、`--image <线名>`；删除 `libc` 声明和 `--builder` |
 | `docs/ADD-RECIPE.md` | 新增 Tool recipe、添加 toolchain 档位的步骤 |
+| `docs/HOST-COMMANDS.md` | 宿主缺命令时的安装提示、`[package_maps.*]`、包管理器识别、聚合与输出 |
 | `AGENTS.md` / `README.md` | 简要说明 `recipes/tools/`、`build/tools/`、host-first、toolchain 档位 |
 
 ---
