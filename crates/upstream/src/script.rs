@@ -6,7 +6,8 @@
 //! - `link`：从返回内容抽下载连接的正则，必须有命名组 `link`；
 //! - `version`：从下载连接抽版本的正则，必须有命名组 `version`
 //!   （`v2.1.33` 这类前缀在正则里过滤掉）；
-//! - `join`（可选）：连接是相对地址时，拼成绝对地址的模板，如 `"https://x/{link}"`。
+//! - `join`（可选）：连接是相对地址时，拼成绝对地址的模板，如 `"https://x/{link}"`；
+//!   源按线分目录时可再带 `{line}`（此时 url 必须也有 `{line}`）。
 //!
 //! 线归属、稳定性过滤、版本比较不在脚本里，在 Rust 侧（version.rs）。
 
@@ -72,6 +73,9 @@ impl Script {
             Some(_) => bail!("{component} 的 join 必须是字符串"),
             None => None,
         };
+        if join.as_deref().is_some_and(|join| join.contains("{line}")) && !url.contains("{line}") {
+            bail!("{component} 的 url 没有 {{line}}，join 里不能写 {{line}}");
+        }
         Ok(Self {
             component: component.to_owned(),
             url,
@@ -178,6 +182,19 @@ UPSTREAM = {
     "url": "https://example.com/",
     "link": r'(?P<href>[^"]+)',
     "version": r'(?P<version>[0-9.]+)',
+}
+"#;
+        assert!(Script::parse("demo", src).is_err());
+    }
+
+    #[test]
+    fn join_line_requires_url_line() {
+        let src = r#"
+UPSTREAM = {
+    "url": "https://example.com/",
+    "link": r'href="(?P<link>x-[0-9.]+\.tar\.gz)"',
+    "version": r'x-(?P<version>[0-9.]+)\.tar\.gz',
+    "join": "https://example.com/x/{line}/{link}",
 }
 "#;
         assert!(Script::parse("demo", src).is_err());

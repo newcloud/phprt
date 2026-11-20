@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::script::Script;
 
@@ -24,11 +24,12 @@ pub fn query(
 ) -> Result<Vec<Candidate>> {
     let url = script.url_for(line)?;
     let (_final_url, body) = phprt_download::fetch_text(&url, opts)?;
-    Ok(extract(script, &body))
+    extract(script, &body, line)
 }
 
 /// 从返回内容里抽候选。纯函数，单测覆盖这条路径；联网只在 `query` 里。
-pub fn extract(script: &Script, body: &str) -> Vec<Candidate> {
+/// `line` 是当前查询的线；join 模板带 `{line}`（源按线分目录）时必须有值。
+pub fn extract(script: &Script, body: &str, line: Option<&str>) -> Result<Vec<Candidate>> {
     let mut out = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for cap in script.link.captures_iter(body) {
@@ -47,12 +48,21 @@ pub fn extract(script: &Script, body: &str) -> Vec<Candidate> {
             continue;
         }
         let url = match &script.join {
-            Some(template) => template.replace("{link}", &link),
+            Some(template) => {
+                let mut resolved = template.replace("{link}", &link);
+                if resolved.contains("{line}") {
+                    let Some(line) = line else {
+                        bail!("{} 的 join 带 {{line}}，但查询时没给线", script.component);
+                    };
+                    resolved = resolved.replace("{line}", line);
+                }
+                resolved
+            }
             None => link,
         };
         out.push(Candidate { version, url });
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -76,7 +86,7 @@ UPSTREAM = {
 "#,
         );
         let body = r#"{"assets": [{"browser_download_url": "https://x/o-1.2.3.tar.gz"}]}"#;
-        let list = extract(&script, body);
+        let list = extract(&script, body, None).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].version, "1.2.3");
         assert_eq!(list[0].url, "https://x/o-1.2.3.tar.gz");
@@ -95,7 +105,7 @@ UPSTREAM = {
 "#,
         );
         let body = r#"<a href="z-1.0.tar.gz">z-1.0.tar.gz</a><a href="z-1.0.tar.gz">again</a>"#;
-        let list = extract(&script, body);
+        let list = extract(&script, body, None).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].url, "https://example.com/fossils/z-1.0.tar.gz");
     }
@@ -112,7 +122,7 @@ UPSTREAM = {
 "#,
         );
         let body = r#"<a href="README.md">README</a>"#;
-        assert!(extract(&script, body).is_empty());
+        assert!(extract(&script, body, None).unwrap().is_empty());
     }
 
     #[test]
@@ -126,7 +136,7 @@ UPSTREAM = {
 }
 "#,
         );
-        let list = extract(&script, r#""v2.1.33""#);
+        let list = extract(&script, r#""v2.1.33""#, None).unwrap();
         assert_eq!(list[0].version, "2.1.33");
     }
 
@@ -144,7 +154,7 @@ UPSTREAM = {
 "#,
         );
         let body = r#"<r><v>3.2.17RC1</v><s>stable</s></r><r><v>3.2.16</v><s>stable</s></r>"#;
-        let list = extract(&script, body);
+        let list = extract(&script, body, None).unwrap();
         assert_eq!(
             list.iter().map(|c| c.version.as_str()).collect::<Vec<_>>(),
             ["3.2.17RC1", "3.2.16"]
@@ -152,4 +162,27 @@ UPSTREAM = {
         assert!(version::is_unstable("3.2.17RC1"));
         assert!(!version::is_unstable("3.2.16"));
     }
+
+    #[test]
+    fn join_resolves_the_line_placeholder() {
+        let script = script(
+            r#"
+UPSTREAM = {
+    "url": "https://example.com/sources/x/{line}/",
+    "link": r'href="(?P<link>x-[0-9.]+\.tar\.gz)"',
+    "version": r'x-(?P<version>[0-9.]+)\.tar\.gz',
+    "join": "https://example.com/sources/x/{line}/{link}",
+}
+"#,
+        );
+        let body = r#"<a href="x-1.2.3.tar.gz">x-1.2.3.tar.gz</a>"#;
+        let list = extract(&script, body, Some("2.15")).unwrap();
+        assert_eq!(
+            list[0].url,
+            "https://example.com/sources/x/2.15/x-1.2.3.tar.gz"
+        );
+    }
+
+    // join 带 {line} 而 url 不带的脚本在 Script::parse 就报错，见 script.rs 的
+    // join_line_requires_url_line；这里不再重复。
 }

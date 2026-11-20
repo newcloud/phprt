@@ -1,6 +1,6 @@
 # catalog 自动更新
 
-状态：已实现 openssl / zlib / php / 13 个 PECL 扩展共 16 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
+状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源共 21 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
 
 目标读者：维护 `recipes/catalog.toml` 的人，以及实现这个功能的 agent。
 
@@ -95,10 +95,11 @@ v2 把查询规则写在 recipe 里（`upstream=` / `versions()`），v3 不沿�
 | `url` | 是 | 访问哪个地址拿版本和下载连接列表；可含 `{line}`，只有 URL 本身按线划分的源才写（如 php.net） |
 | `link` | 是 | 从返回内容抽下载连接的正则，必须有命名组 `link` |
 | `version` | 是 | 从下载连接抽版本的正则，必须有命名组 `version`（`v2.1.33` 这类前缀在正则里过滤掉） |
-| `join` | 否 | 连接是相对地址时拼绝对地址的模板，如 `"https://x/fossils/{link}"` |
+| `join` | 否 | 连接是相对地址时拼绝对地址的模板，如 `"https://x/fossils/{link}"`；源按线分目录时可含 `{line}`（此时 `url` 必须也带 `{line}`） |
 
 槽位缺名、类型不对、正则不合法都在加载时报错，不静默忽略。示例见
-`recipes/upstream/openssl.star`（GitHub Releases API）和 `zlib.star`（目录索引 + join）。
+`recipes/upstream/openssl.star`（GitHub Releases API）、`zlib.star`（目录索引 + join）
+和 `libxml2.star`（GNOME 按线分目录，url 和 join 都带 `{line}`）。
 
 ### 4.2 上游源的形态（事实记录）
 
@@ -143,7 +144,7 @@ php.net 的 URL 带线，属于源形态决定的按线访问；其余形态一�
 catalog 已有线做归属过滤；同一组件的多条线（如 openssl 的 `1.1.1` / `3.0` / `3.5` /
 `4.0`）共享同一次请求的结果，不按线重复请求同一个地址。这是设计要求，不是可选项：
 人类开发会默认这么做，agent 实现时容易退回「按线逐个请求」，写进流程就是为了防止这种退化。
-只有源形态本身强制按线访问时（如 php.net 的 URL 带 `<线>`）才按线请求，并在脚本里注明原因。
+只有源形态本身强制按线访问时（如 php.net 的 URL 带 `<线>`、GNOME 按线分目录）才按线请求，并在脚本里注明原因。
 顺带效果：GitHub 匿名限流按请求计数（见 11），同组件只请求一次就不吃重复配额。
 
 ## 6. 版本与线的判定
@@ -350,6 +351,8 @@ cargo run -- catalog update --fill-sha256 xdebug
 - 4.1 已完成（2026-11-20）：php（php.net JSON，按线访问是接口形态强制的）+
   swoole / xdebug / redis / apcu / igbinary / msgpack / protobuf / yaml /
   memcached / imagick / ssh2 / amqp / rdkafka 共 13 个 PECL 扩展。
+- 4.2 已完成（2026-11-20）：libxml2（GNOME，按线分目录）/ freetype（savannah）/
+  autoconf（GNU FTP）/ libyaml（pyyaml.org）/ libsodium，全部是目录索引页 + join。
 
 ## 13. 决策与讨论记录
 
@@ -462,6 +465,18 @@ cargo run -- catalog update --dry-run openssl zlib
 - igbinary 3.2.17RC1 被 PECL 标成 stable，靠脚本版本正则保留后缀 + Rust 预发布
   过滤拦下（对应 6.1 的规则，已加回归单测）；
 - 全量 sweep `--dry-run`：无下载、无备份、catalog 不变；点名不存在的组件退出码 3。
+
+第三轮实测（2026-11-20，4.2 批次，同一夹具）：
+
+- 五个目录索引源（libxml2 / freetype / autoconf / libyaml / libsodium）都把改旧的线
+  补回新补丁，哈希逐字等于 catalog 原值（如 libxml2 2.15.4 `98087fd1…`、
+  libsodium 1.0.22 `adbdd8f1…`）；
+- libxml2 的 GNOME 索引按线分目录，url 和 join 都带 `{line}`：2.11 线查 `/2.11/`
+  目录、报「无更新」，不会被 2.15 目录里的版本污染；
+- libsodium 直连下载卡住（HEAD / Range 通、全量 GET 不动），工具如实报失败、退出码 3、
+  不写半条；夹具设 `HTTPS_PROXY` 后走代理下载成功（catalog update 与 install 同一条
+  env 代理路径）；
+- 第二遍 7 条线全部「无更新」，catalog 字节不变。
 
 ## 15. 风险
 
