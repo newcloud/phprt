@@ -53,9 +53,8 @@ pub struct Options {
     pub download: phprt_download::Options,
     /// 只打印计划，不写文件。
     pub dry_run: bool,
-    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-    // /// 回填已有条目缺失的 sha256。
-    // pub fill_sha256: bool,
+    /// 回填已有条目缺失的 sha256；默认 false，不加 `--fill-sha256` 不下载旧包。
+    pub fill_sha256: bool,
     /// 只更新这些组件；空表示全部。
     pub components: Vec<String>,
     /// 写回前对临时文件做和加载时一样的校验（main 传 Catalog::load）。
@@ -147,10 +146,9 @@ pub fn run(options: Options) -> Result<Report> {
         }
     }
 
-    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-    // if options.fill_sha256 {
-    //     plan_fill(&options, &doc, &mut steps);
-    // }
+    if options.fill_sha256 {
+        plan_fill(&options, &doc, &mut steps);
+    }
 
     apply_steps(&options, &mut doc, &mut report, steps)?;
 
@@ -260,36 +258,35 @@ fn plan_line(
     )
 }
 
-// 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-// /// 回填已有条目缺失的 sha256；已有值的条目不动。
-// /// 传了组件名时只处理这些组件（和更新范围一致）。
-// fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
-//     let missing = catalog::missing_sha256(doc);
-//     for (component, line, version, url) in missing {
-//         if !options.components.is_empty() && !options.components.contains(&component) {
-//             continue;
-//         }
-//         if options.dry_run {
-//             steps.push(done(
-//                 &component,
-//                 &line,
-//                 Status::Filled,
-//                 &version,
-//                 "",
-//                 "dry-run：未写文件".to_owned(),
-//             ));
-//             continue;
-//         }
-//         steps.push(download_step(
-//             options,
-//             &component,
-//             &line,
-//             Status::Filled,
-//             &version,
-//             &url,
-//         ));
-//     }
-// }
+/// 回填已有条目缺失的 sha256；已有值的条目不动。只在 `--fill-sha256` 时调用。
+/// 传了组件名时只处理这些组件（和更新范围一致）。
+fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
+    let missing = catalog::missing_sha256(doc);
+    for (component, line, version, url) in missing {
+        if !options.components.is_empty() && !options.components.contains(&component) {
+            continue;
+        }
+        if options.dry_run {
+            steps.push(done(
+                &component,
+                &line,
+                Status::Filled,
+                &version,
+                "",
+                "dry-run：未写文件".to_owned(),
+            ));
+            continue;
+        }
+        steps.push(download_step(
+            options,
+            &component,
+            &line,
+            Status::Filled,
+            &version,
+            &url,
+        ));
+    }
+}
 
 fn done(
     component: &str,
@@ -429,29 +426,28 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
             return;
         }
     };
-    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-    // if item.status == Status::Filled {
-    //     match catalog::fill_sha256(doc, &item.component, &item.line, &item.version, &digest) {
-    //         Ok(true) => report.push(
-    //             &item.component,
-    //             &item.line,
-    //             Status::Filled,
-    //             &item.version,
-    //             "",
-    //             String::new(),
-    //         ),
-    //         Ok(false) => {}
-    //         Err(err) => report.push(
-    //             &item.component,
-    //             &item.line,
-    //             Status::Failed,
-    //             &item.version,
-    //             "",
-    //             format!("回填失败: {err:#}"),
-    //         ),
-    //     }
-    //     return;
-    // }
+    if item.status == Status::Filled {
+        match catalog::fill_sha256(doc, &item.component, &item.line, &item.version, &digest) {
+            Ok(true) => report.push(
+                &item.component,
+                &item.line,
+                Status::Filled,
+                &item.version,
+                "",
+                String::new(),
+            ),
+            Ok(false) => {}
+            Err(err) => report.push(
+                &item.component,
+                &item.line,
+                Status::Failed,
+                &item.version,
+                "",
+                format!("回填失败: {err:#}"),
+            ),
+        }
+        return;
+    }
     match catalog::append_patch(
         doc,
         &item.component,

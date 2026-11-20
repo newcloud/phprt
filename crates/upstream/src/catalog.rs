@@ -1,4 +1,4 @@
-//! catalog.toml 的读改写：插入新补丁、备份与原子写入。
+//! catalog.toml 的读改写：插入新补丁、回填 sha256、备份与原子写入。
 //!
 //! 用 toml_edit 在内存文档上操作，保留注释、分组和数组里其它元素的格式；
 //! 不能整体反序列化再序列化（docs/CATALOG-UPDATE.md 9）。
@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Value};
 
 /// 要写进 catalog 的一条补丁。
@@ -50,45 +50,44 @@ pub fn max_version(doc: &DocumentMut, component: &str, line: &str) -> Option<Str
         .max_by(|left, right| crate::version::compare(left, right))
 }
 
-// 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-// /// 缺 sha256 的已有条目：(组件, 线, 版本, url)。
-// pub fn missing_sha256(doc: &DocumentMut) -> Vec<(String, String, String, String)> {
-//     let mut out = Vec::new();
-//     for (component, item) in doc.iter() {
-//         let Some(table) = item.as_table() else {
-//             continue;
-//         };
-//         for (line, item) in table.iter() {
-//             let Some(array) = item.as_array() else {
-//                 continue;
-//             };
-//             for value in array.iter() {
-//                 let Some(entry) = value.as_inline_table() else {
-//                     continue;
-//                 };
-//                 let missing = entry
-//                     .get("sha256")
-//                     .and_then(|v| v.as_str())
-//                     .is_none_or(|sha| sha.is_empty());
-//                 if !missing {
-//                     continue;
-//                 }
-//                 let version = entry
-//                     .get("version")
-//                     .and_then(|v| v.as_str())
-//                     .unwrap_or_default()
-//                     .to_owned();
-//                 let url = entry
-//                     .get("url")
-//                     .and_then(|v| v.as_str())
-//                     .unwrap_or_default()
-//                     .to_owned();
-//                 out.push((component.to_owned(), line.to_owned(), version, url));
-//             }
-//         }
-//     }
-//     out
-// }
+/// 缺 sha256 的已有条目：(组件, 线, 版本, url)。只在 `--fill-sha256` 时用到。
+pub fn missing_sha256(doc: &DocumentMut) -> Vec<(String, String, String, String)> {
+    let mut out = Vec::new();
+    for (component, item) in doc.iter() {
+        let Some(table) = item.as_table() else {
+            continue;
+        };
+        for (line, item) in table.iter() {
+            let Some(array) = item.as_array() else {
+                continue;
+            };
+            for value in array.iter() {
+                let Some(entry) = value.as_inline_table() else {
+                    continue;
+                };
+                let missing = entry
+                    .get("sha256")
+                    .and_then(|v| v.as_str())
+                    .is_none_or(|sha| sha.is_empty());
+                if !missing {
+                    continue;
+                }
+                let version = entry
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                let url = entry
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                out.push((component.to_owned(), line.to_owned(), version, url));
+            }
+        }
+    }
+    out
+}
 
 /// 在对应线的数组末尾插入一条补丁；数组顺序不参与选择（取最大版本），所以不重排。
 /// 同一版本已存在时不写，返回 false。
@@ -135,55 +134,54 @@ pub fn append_patch(
     Ok(true)
 }
 
-// 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-// /// 给已有条目补 sha256；已有非空值时不覆盖。返回是否写了。
-// pub fn fill_sha256(
-//     doc: &mut DocumentMut,
-//     component: &str,
-//     line: &str,
-//     version: &str,
-//     sha256: &str,
-// ) -> Result<bool> {
-//     let array = line_array_mut(doc, component, line)?;
-//     for value in array.iter_mut() {
-//         let Some(table) = value.as_inline_table_mut() else {
-//             continue;
-//         };
-//         if table.get("version").and_then(|v| v.as_str()) != Some(version) {
-//             continue;
-//         }
-//         match table.get("sha256").and_then(|v| v.as_str()) {
-//             Some(existing) if !existing.is_empty() => return Ok(false),
-//             _ => {}
-//         }
-//         // 直接 insert 会把原表尾的空格留在逗号前面（渲染成 `" , sha256"`），
-//         // 按原顺序抄一遍再追加哈希，写进去才干净；inline table 自己的装饰
-//         //（`[ { ... } ]` 方括号内侧的空格）也要搬过去。
-//         let entries: Vec<(String, String)> = table
-//             .iter()
-//             .filter(|(key, _)| *key != "sha256")
-//             .filter_map(|(key, value)| value.as_str().map(|v| (key.to_owned(), v.to_owned())))
-//             .collect();
-//         let (prefix, suffix) = (
-//             table.decor().prefix().cloned(),
-//             table.decor().suffix().cloned(),
-//         );
-//         let mut fresh = toml_edit::InlineTable::new();
-//         for (key, value) in entries {
-//             fresh.insert(&key, Value::from(value));
-//         }
-//         fresh.insert("sha256", Value::from(sha256));
-//         *table = fresh;
-//         if let Some(prefix) = prefix {
-//             table.decor_mut().set_prefix(prefix);
-//         }
-//         if let Some(suffix) = suffix {
-//             table.decor_mut().set_suffix(suffix);
-//         }
-//         return Ok(true);
-//     }
-//     bail!("catalog 里没有 {component}.{line} 的补丁 {version}")
-// }
+/// 给已有条目补 sha256；已有非空值时不覆盖。返回是否写了。只在 `--fill-sha256` 时用到。
+pub fn fill_sha256(
+    doc: &mut DocumentMut,
+    component: &str,
+    line: &str,
+    version: &str,
+    sha256: &str,
+) -> Result<bool> {
+    let array = line_array_mut(doc, component, line)?;
+    for value in array.iter_mut() {
+        let Some(table) = value.as_inline_table_mut() else {
+            continue;
+        };
+        if table.get("version").and_then(|v| v.as_str()) != Some(version) {
+            continue;
+        }
+        match table.get("sha256").and_then(|v| v.as_str()) {
+            Some(existing) if !existing.is_empty() => return Ok(false),
+            _ => {}
+        }
+        // 直接 insert 会把原表尾的空格留在逗号前面（渲染成 `" , sha256"`），
+        // 按原顺序抄一遍再追加哈希，写进去才干净；inline table 自己的装饰
+        //（`[ { ... } ]` 方括号内侧的空格）也要搬过去。
+        let entries: Vec<(String, String)> = table
+            .iter()
+            .filter(|(key, _)| *key != "sha256")
+            .filter_map(|(key, value)| value.as_str().map(|v| (key.to_owned(), v.to_owned())))
+            .collect();
+        let (prefix, suffix) = (
+            table.decor().prefix().cloned(),
+            table.decor().suffix().cloned(),
+        );
+        let mut fresh = toml_edit::InlineTable::new();
+        for (key, value) in entries {
+            fresh.insert(&key, Value::from(value));
+        }
+        fresh.insert("sha256", Value::from(sha256));
+        *table = fresh;
+        if let Some(prefix) = prefix {
+            table.decor_mut().set_prefix(prefix);
+        }
+        if let Some(suffix) = suffix {
+            table.decor_mut().set_suffix(suffix);
+        }
+        return Ok(true);
+    }
+    bail!("catalog 里没有 {component}.{line} 的补丁 {version}")
+}
 
 /// 写文件前备份一次：`<备份目录>/<UTC 时间戳>_catalog.toml`，和 ini 备份共用配置。
 pub fn backup(path: &Path, dir: &Path) -> Result<PathBuf> {
@@ -366,36 +364,35 @@ mod tests {
         assert!(err.to_string().contains("没有 openssl 的 4.0 线"));
     }
 
-    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-    // #[test]
-    // fn fill_only_touches_empty_hashes() {
-    //     let mut document = doc();
-    //     let written = fill_sha256(&mut document, "openssl", "3.5", "3.5.8", "new").unwrap();
-    //     assert!(written);
-    //     let untouched = fill_sha256(&mut document, "openssl", "3.5", "3.5.9", "newer").unwrap();
-    //     assert!(!untouched);
-    //     let text = document.to_string();
-    //     assert!(
-    //         text.contains(
-    //             r#"version = "3.5.8", url = "https://x/openssl-3.5.8.tar.gz", sha256 = "new""#
-    //         ),
-    //         "actual:\n{text}"
-    //     );
-    //     assert!(text.contains(r#"sha256 = "old""#));
-    // }
+    #[test]
+    fn fill_only_touches_empty_hashes() {
+        let mut document = doc();
+        let written = fill_sha256(&mut document, "openssl", "3.5", "3.5.8", "new").unwrap();
+        assert!(written);
+        let untouched = fill_sha256(&mut document, "openssl", "3.5", "3.5.9", "newer").unwrap();
+        assert!(!untouched);
+        let text = document.to_string();
+        assert!(
+            text.contains(
+                r#"version = "3.5.8", url = "https://x/openssl-3.5.8.tar.gz", sha256 = "new""#
+            ),
+            "actual:\n{text}"
+        );
+        assert!(text.contains(r#"sha256 = "old""#));
+    }
 
-    // #[test]
-    // fn fill_keeps_single_line_array_style() {
-    //     let mut document = doc();
-    //     fill_sha256(&mut document, "openssl", "1.1.1", "1.1.1w", "abc").unwrap();
-    //     let text = document.to_string();
-    //     assert!(
-    //         text.contains(
-    //             r#""1.1.1" = [ { version = "1.1.1w", url = "https://x/openssl-1.1.1w.tar.gz", sha256 = "abc" } ]"#
-    //         ),
-    //         "actual:\n{text}"
-    //     );
-    // }
+    #[test]
+    fn fill_keeps_single_line_array_style() {
+        let mut document = doc();
+        fill_sha256(&mut document, "openssl", "1.1.1", "1.1.1w", "abc").unwrap();
+        let text = document.to_string();
+        assert!(
+            text.contains(
+                r#""1.1.1" = [ { version = "1.1.1w", url = "https://x/openssl-1.1.1w.tar.gz", sha256 = "abc" } ]"#
+            ),
+            "actual:\n{text}"
+        );
+    }
 
     #[test]
     fn max_version_takes_the_latest_patch() {
@@ -405,31 +402,30 @@ mod tests {
         assert!(max_version(&document, "openssl", "4.0").is_none());
     }
 
-    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-    // #[test]
-    // fn missing_sha256_lists_empty_and_absent_hashes() {
-    //     let document = doc();
-    //     let missing = missing_sha256(&document);
-    //     assert_eq!(missing.len(), 3);
-    //     assert!(missing.contains(&(
-    //         "openssl".into(),
-    //         "3.5".into(),
-    //         "3.5.8".into(),
-    //         "https://x/openssl-3.5.8.tar.gz".into()
-    //     )));
-    //     assert!(missing.contains(&(
-    //         "openssl".into(),
-    //         "1.1.1".into(),
-    //         "1.1.1w".into(),
-    //         "https://x/openssl-1.1.1w.tar.gz".into()
-    //     )));
-    //     assert!(missing.contains(&(
-    //         "zlib".into(),
-    //         "1.3".into(),
-    //         "1.3.1".into(),
-    //         "https://x/zlib-1.3.1.tar.gz".into()
-    //     )));
-    // }
+    #[test]
+    fn missing_sha256_lists_empty_and_absent_hashes() {
+        let document = doc();
+        let missing = missing_sha256(&document);
+        assert_eq!(missing.len(), 3);
+        assert!(missing.contains(&(
+            "openssl".into(),
+            "3.5".into(),
+            "3.5.8".into(),
+            "https://x/openssl-3.5.8.tar.gz".into()
+        )));
+        assert!(missing.contains(&(
+            "openssl".into(),
+            "1.1.1".into(),
+            "1.1.1w".into(),
+            "https://x/openssl-1.1.1w.tar.gz".into()
+        )));
+        assert!(missing.contains(&(
+            "zlib".into(),
+            "1.3".into(),
+            "1.3.1".into(),
+            "https://x/zlib-1.3.1.tar.gz".into()
+        )));
+    }
 
     #[test]
     fn backup_name_is_unique_and_stamped() {

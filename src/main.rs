@@ -222,10 +222,9 @@ enum CatalogCmd {
         /// 只打印计划，不写文件
         #[arg(long)]
         dry_run: bool,
-        // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
-        // /// 回填已有条目缺失的 sha256
-        // #[arg(long = "fill-sha256")]
-        // fill_sha256: bool,
+        /// 回填已有条目缺失的 sha256（默认不做，普通使用不用加）
+        #[arg(long = "fill-sha256")]
+        fill_sha256: bool,
         /// 只更新这些组件；空表示全部（没有 upstream 脚本的跳过）
         components: Vec<String>,
     },
@@ -411,6 +410,7 @@ fn run() -> Result<()> {
         let report = match command {
             CatalogCmd::Update {
                 dry_run,
+                fill_sha256,
                 components,
             } => {
                 let backup = match layout::backup_dir_name() {
@@ -430,9 +430,11 @@ fn run() -> Result<()> {
                         proxy: None,
                         github_proxy: config.github_proxy()?,
                         offline: false,
-                        ui: Mode::Plain,
+                        // 和 install 的默认一致：终端里画进度框，非终端逐行输出。
+                        ui: Mode::Auto,
                     },
                     dry_run: *dry_run,
+                    fill_sha256: *fill_sha256,
                     components: components.clone(),
                     validate: Box::new(|path| Catalog::load(path).map(|_| ())),
                 })?
