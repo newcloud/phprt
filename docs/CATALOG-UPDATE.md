@@ -1,6 +1,6 @@
 # catalog 自动更新
 
-状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源 / webp / aom / 9 个 GitHub Releases 组件共 32 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
+状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源 / webp / aom / 9 个 GitHub Releases 组件 / 6 个 GitHub tag 归档组件共 38 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
 
 目标读者：维护 `recipes/catalog.toml` 的人，以及实现这个功能的 agent。
 
@@ -361,6 +361,11 @@ cargo run -- catalog update --fill-sha256 xdebug
   （`pcre2-`、`c-ares-`、`libssh2-`、`nghttp2-`、`patchelf-`、`libjpeg-turbo-`、
   `libheif-`、`libde265-`、`onig-`），`patchelf-<版本>-x86_64.tar.gz` 这类平台变体
   靠版本正则排除。下载从逐条串行改成整批进下载队列（10 文件 / 每站点 2）。
+- 4.5 已完成（2026-11-20）：avif / libimagequant / libultrahdr / libmemcached /
+  rabbitmq-c / librdkafka 共 6 个 GitHub tag 归档源。Tags API 只给 tag 名，下载
+  地址按 `archive/refs/tags/{link}.tar.gz` 拼；version 正则带首尾锚点，`rc` /
+  `-RC4` / `R1` 这类后缀 tag 不进候选。libimagequant 的 4.x tag 不属于 catalog
+  的 2.18 线，靠线归属过滤。
 
 ## 13. 决策与讨论记录
 
@@ -519,6 +524,20 @@ cargo run -- catalog update --dry-run openssl zlib
   8.3.37 / 8.4.28 / 8.5.13、openssl 3.0.22 / 4.0.3、swoole 5.1.8 / 6.2.6），dry-run
   不写文件，catalog 字节不变、零下载、零备份。这些补丁留给专门的一次不带 `--dry-run`
   的运行，不混进本批次提交。
+
+第六轮实测（2026-11-20，4.5 批次，夹具 `/tmp/upstream-fixture-4.5`）：
+
+- 单版本线用 `"线" = []` 清空、双版本线改旧（libultrahdr 2.0.0、rabbitmq-c 0.18.0），
+  六个组件一轮全部补回：avif 1.3.0、libimagequant 2.18.0、libultrahdr 2.0.2、
+  rabbitmq-c 0.18.1、librdkafka 2.16.0，url 与 catalog 原值逐字一致；
+- 哈希：avif `0a545e95…`、libultrahdr `aa8d193b…`、rabbitmq-c `0779bd4f…`、
+  librdkafka `e6b61de6…` 与 catalog 原值一致；libimagequant 原来没写 sha256，
+  本次补出 `790d2593…`；
+- libmemcached 1.1 线补出上游新补丁 1.1.5（sha256 `623b57be…`），说明 tag 归档源
+  的补丁号也能升；1.2.x 是 cmake 构建且不属于 1.1 线，没有被写进来；
+- 六个文件一次进队列同时下载（10 文件 / 每站点 2 个上限），全部成功；
+- 空数组线的插入格式正确（`"1.3" = [ { version = ..., url = ... } ]`），catalog 可被
+  `Catalog::load` 复检通过。
 
 ## 15. 风险
 
