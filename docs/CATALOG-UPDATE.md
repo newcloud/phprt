@@ -1,6 +1,6 @@
 # catalog 自动更新
 
-状态：已实现 openssl / zlib 两源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
+状态：已实现 openssl / zlib / php / 13 个 PECL 扩展共 16 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
 
 目标读者：维护 `recipes/catalog.toml` 的人，以及实现这个功能的 agent。
 
@@ -157,6 +157,9 @@ catalog 已有线做归属过滤；同一组件的多条线（如 openssl 的 `1
 - 只接受点分数字（末段可带字母后缀，如 `1.1.1w`）和点分数字 + 连字符数字后缀
   （如 `7.1.2-35`、`2.1-20261102`）；这两类由第 6.3 节的比较器处理，脚本的提取
   正则负责把 `v` 前缀等不规则形式过滤掉。
+- 脚本的版本正则必须保留预发布后缀（`3.2.17RC1` 不能截成 `3.2.17`）：PECL 会把
+  RC 标成 `stable`（igbinary 实测），只剩 Rust 侧这层过滤，截掉后缀会让 RC 混进
+  catalog。
 
 ### 6.2 线归属
 
@@ -342,6 +345,12 @@ cargo run -- catalog update --fill-sha256 xdebug
 
 每批完成后跑同一套夹具：把已知最新补丁清掉 → 抓回 → 比对；再跑一遍确认幂等。全部批次完成后再做一次全量回填和全量「无更新」检查。
 
+进度：
+
+- 4.1 已完成（2026-11-20）：php（php.net JSON，按线访问是接口形态强制的）+
+  swoole / xdebug / redis / apcu / igbinary / msgpack / protobuf / yaml /
+  memcached / imagick / ssh2 / amqp / rdkafka 共 13 个 PECL 扩展。
+
 ## 13. 决策与讨论记录
 
 ### 13.1 已定
@@ -439,6 +448,20 @@ cargo run -- catalog update --dry-run openssl zlib
 - 点名不存在的组件退出码 3；全量 sweep（没有 upstream 脚本的组件记「跳过」）不改文件；
 - `cargo test --workspace` 189 过 / 1 败（`build::tests::deploy_libs_copies_runtime_deps_but_not_build_tools`
   需要环境预置 patchelf，主 checkout 同样失败，非本次回归）；`cargo clippy --workspace --all-targets` 全绿。
+
+第二轮实测（2026-11-20，4.1 批次，同一夹具 `/tmp/upstream-fixture`）：
+
+- php 8.5 线（夹具改旧到 8.5.11）补上 8.5.13，sha256 `3aeb20a7…` 与 php.net
+  接口给的值一致；8.2 / 8.3 / 8.4 线同批补上 8.2.36 / 8.3.37 / 8.4.28；8.6 线
+  的 `8.6.0RC3` 不被误判为新版本（预发布过滤）；
+- swoole 6.2 线补上 6.2.6；xdebug 3.5 线（夹具改旧到 3.5.1）补回 3.5.3，
+  sha256 `f073de91…`；redis / apcu / msgpack / protobuf / memcached / imagick /
+  ssh2 / amqp / rdkafka 各线报「无更新」；
+- `--fill-sha256 yaml` 把清空的 2.3.0 回填为 `bc840480…`；fill 模式下无脚本组件
+  （nginx）记「跳过」但条目照常回填；
+- igbinary 3.2.17RC1 被 PECL 标成 stable，靠脚本版本正则保留后缀 + Rust 预发布
+  过滤拦下（对应 6.1 的规则，已加回归单测）；
+- 全量 sweep `--dry-run`：无下载、无备份、catalog 不变；点名不存在的组件退出码 3。
 
 ## 15. 风险
 

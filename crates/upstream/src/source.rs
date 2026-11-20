@@ -58,6 +58,7 @@ pub fn extract(script: &Script, body: &str) -> Vec<Candidate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::version;
 
     fn script(src: &str) -> Script {
         Script::parse("demo", src).unwrap()
@@ -127,5 +128,28 @@ UPSTREAM = {
         );
         let list = extract(&script, r#""v2.1.33""#);
         assert_eq!(list[0].version, "2.1.33");
+    }
+
+    #[test]
+    fn pecl_rc_suffix_survives_extraction_for_the_unstable_filter() {
+        // PECL 会把 RC 标成 stable（igbinary 3.2.17RC1 实测），版本正则必须保留
+        // 后缀，交给 is_unstable 过滤；截掉后缀会让 RC 混进 catalog。
+        let script = script(
+            r#"
+UPSTREAM = {
+    "url": "https://pecl.php.net/rest/r/demo/allreleases.xml",
+    "link": r'<r><v>(?P<link>[^<]+)</v><s>stable</s></r>',
+    "version": r'(?P<version>[0-9]+(?:\.[0-9]+)*[a-zA-Z]*[0-9]*)',
+}
+"#,
+        );
+        let body = r#"<r><v>3.2.17RC1</v><s>stable</s></r><r><v>3.2.16</v><s>stable</s></r>"#;
+        let list = extract(&script, body);
+        assert_eq!(
+            list.iter().map(|c| c.version.as_str()).collect::<Vec<_>>(),
+            ["3.2.17RC1", "3.2.16"]
+        );
+        assert!(version::is_unstable("3.2.17RC1"));
+        assert!(!version::is_unstable("3.2.16"));
     }
 }
