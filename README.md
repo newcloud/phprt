@@ -403,3 +403,7 @@ OCI Image
 - [docs/CLI.md](docs/CLI.md)：完整命令、参数、错误
 - [docs/BUILD.md](docs/BUILD.md)：构建、日志、跳过规则
 - [docs/DESIGN.md](docs/DESIGN.md)：设计与各子文档入口
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。

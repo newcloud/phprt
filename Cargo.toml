@@ -27,6 +27,7 @@ zip = { version = "9.5", default-features = false, features = ["deflate-flate2",
 [package]
 name = "phprt"
 version = "0.1.0"
+license = "MIT"
 edition = "2024"
 
 [dependencies]
