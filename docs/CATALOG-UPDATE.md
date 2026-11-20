@@ -1,6 +1,6 @@
 # catalog 自动更新
 
-状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源共 21 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
+状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源 / webp / aom 共 23 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
 
 目标读者：维护 `recipes/catalog.toml` 的人，以及实现这个功能的 agent。
 
@@ -338,7 +338,7 @@ cargo run -- catalog update --fill-sha256 xdebug
 | --- | --- | --- |
 | 4.1 | php、其余 PECL 扩展 | 接口格式、批量下载耗时 |
 | 4.2 | GNOME / savannah / GNU FTP / libsodium / pyyaml | 目录索引格式差异 |
-| 4.3 | Google Storage（webp / aom） | S3 XML 列表解析 |
+| 4.3 | Google Storage（webp / aom） | S3 XML 列表解析；webp 的 GCS 目录无列表页，改走 tags API + join |
 | 4.4 | 其余 GitHub Releases（pcre2、c-ares、libssh2、nghttp2、patchelf 等） | asset 命名差异 |
 | 4.5 | GitHub tag 归档（avif、libmemcached、rabbitmq-c、librdkafka 等） | tag 无直链，必须模板拼 |
 | 4.6 | curl、sqlite、libpng | 页面特殊、文件名与版本不直接对应 |
@@ -353,6 +353,8 @@ cargo run -- catalog update --fill-sha256 xdebug
   memcached / imagick / ssh2 / amqp / rdkafka 共 13 个 PECL 扩展。
 - 4.2 已完成（2026-11-20）：libxml2（GNOME，按线分目录）/ freetype（savannah）/
   autoconf（GNU FTP）/ libyaml（pyyaml.org）/ libsodium，全部是目录索引页 + join。
+- 4.3 已完成（2026-11-20）：aom（GCS S3 XML 列表）/ webp（GCS 目录是 2014 年的空
+  对象、没有列表页，改走 GitHub tags API + GCS join 模板，与 PECL 同构）。
 
 ## 13. 决策与讨论记录
 
@@ -477,6 +479,20 @@ cargo run -- catalog update --dry-run openssl zlib
   不写半条；夹具设 `HTTPS_PROXY` 后走代理下载成功（catalog update 与 install 同一条
   env 代理路径）；
 - 第二遍 7 条线全部「无更新」，catalog 字节不变。
+
+第四轮实测（2026-11-20，4.3 批次，同一夹具）：
+
+- webp 的 GCS 目录（`.../releases/webp/`）实测是 2014 年的空对象（200 但空体），
+  没有列表页，改走 GitHub tags API 拿版本、GCS 模板拼下载地址；tag 里的 rc 后缀
+  （`v1.6.0-rc1`）不进 link 正则；
+- aom 走 GCS S3 XML 列表（`<Key>libaom-<版本>.tar.gz</Key>`，未分页，`.asc` 不进
+  link 正则）；
+- 夹具把 webp 1.6 线改旧到 1.5.0、aom 3.12 线改旧到 3.12.0，一轮补回 1.6.0 /
+  3.12.1，sha256 与 catalog 原值逐字一致（`e4ab7009…` / `9e977518…`）；
+- aom 桶里已有 3.13 / 3.14 / 3.15（最高 3.15.1），3.12 线只补回 3.12.1，高线版本
+  没有漏进低线（线归属过滤端到端验证）；
+- `--fill-sha256` 回填 1.5.0 / 3.12.0 的哈希，并用独立 curl 下载核验逐字一致；
+- 第二遍「无更新」、catalog 字节不变；全量 sweep `--dry-run` 无下载、无备份。
 
 ## 15. 风险
 
