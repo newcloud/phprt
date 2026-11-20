@@ -1085,7 +1085,7 @@ test -x myphp                 # 只有一个 PHP 系列时的别名
 test ! -L .phprt/current      # 不再写全局 current
 cargo run -- list
 cargo run -- install php@8.5 nginx@1.29   # 必须失败：一次只能一个产品
-ls .phprt/downloads | sort | uniq -d   # 不应有重复文件名
+find .phprt/downloads -maxdepth 1 -type f   # 不应有直接放在根目录的源码包
 ```
 
 判定标准：

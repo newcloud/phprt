@@ -9,7 +9,7 @@ pub struct Source {
     pub version: String,
     pub url: String,
     pub sha256: String,
-    /// 缓存里的压缩包：<root>/.phprt/downloads/<文件名>
+    /// 缓存里的压缩包：<root>/.phprt/downloads/<项名>/<文件名>
     pub archive: PathBuf,
     /// 解压后的源码根：<root>/build/<组件>/<stem>
     pub unpack: PathBuf,

@@ -115,6 +115,10 @@ fn fetch_inner(
         bail!("离线模式，缓存里没有这个文件");
     }
 
+    if let Some(dir) = item.archive.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("建不了 {}", dir.display()))?;
+    }
+
     let mut last: Option<anyhow::Error> = None;
     let is_github = direct;
     for (position, candidate) in candidate::candidates(&item.url, &opts.github_proxy)

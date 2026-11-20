@@ -521,8 +521,8 @@ phprt install nginx@1.29 --downloads --offline
 | `--offline` | 关 | 只用缓存，不联网 |
 | `--ui auto\|plain\|progress` | auto | 下载、解压和编译的进度显示方式 |
 
-- 缓存目录是 `<root>/.phprt/downloads/`，所有产品共用；
-  解压目录是 `<root>/build/<名字>/<补丁>/`。
+- 缓存目录是 `<root>/.phprt/downloads/`，所有产品共用；每个源码包在
+  `<缓存>/<项名>/` 下，解压目录是 `<root>/build/<名字>/<补丁>/`。
 - 下载失败、解压失败或编译失败都退出 1，并且不写状态。
 - `--downloads` 结束时只打印源码缓存位置，不修改 state。
 - `--downloads` 不检查工具链版本；解析不到的工具不会让命令失败，只在 `plan` 里提示，

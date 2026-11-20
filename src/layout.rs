@@ -145,6 +145,12 @@ pub fn archive_name(url: &str) -> Option<String> {
     }
 }
 
+/// 缓存里一个源码包的位置：`<cache>/<项名>/<URL 最后一段>`。
+/// 不同项的压缩包可能同名（如都叫 `v1.3.0.tar.gz`），靠这一级目录分开。
+pub fn archive_path(cache: &Path, name: &str, url: &str) -> Option<PathBuf> {
+    archive_name(url).map(|file| cache.join(name).join(file))
+}
+
 /// 去掉压缩后缀，得到解压目录名。
 pub fn archive_stem(name: &str) -> String {
     for suffix in [".tar.gz", ".tar.xz", ".tar.bz2", ".tgz", ".txz", ".zip"] {
@@ -214,6 +220,28 @@ mod tests {
             "php-8.5.12.tar.xz"
         );
         assert!(archive_name("https://example.com/").is_none());
+    }
+
+    #[test]
+    fn archive_path_groups_same_file_name_by_item() {
+        let cache = Path::new("/cache");
+        assert_eq!(
+            archive_path(
+                cache,
+                "libavif",
+                "https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.3.0.tar.gz"
+            ),
+            Some(PathBuf::from("/cache/libavif/v1.3.0.tar.gz"))
+        );
+        assert_eq!(
+            archive_path(
+                cache,
+                "libultrahdr",
+                "https://github.com/google/libultrahdr/archive/refs/tags/v1.3.0.tar.gz"
+            ),
+            Some(PathBuf::from("/cache/libultrahdr/v1.3.0.tar.gz"))
+        );
+        assert_eq!(archive_path(cache, "libaom", "https://example.com/"), None);
     }
 
     #[test]

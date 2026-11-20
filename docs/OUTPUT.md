@@ -55,7 +55,7 @@ Sim { root, tree, targets, toolchain, tools, host_commands, order: [Node] }
 | 项目入口（PHP） | 选中 `cli` target 时写 `<root>/myphp-<系列>`；只有一个 PHP 系列时额外写 `<root>/myphp` |
 | 依赖库 | `{tree}/<产品 profile 的 runtime.lib_dir>`；PHP / nginx 当前是 `{tree}/lib/phprt` |
 | dep 前缀 | `{tree}/deps/<name>-<version>` |
-| 源码缓存 | `<root>/.phprt/downloads/<URL 最后一段>` |
+| 源码缓存 | `<root>/.phprt/downloads/<项名>/<URL 最后一段>` |
 | 解压目录 | `build/<目标名>/<源码目录名>` |
 | bundled standalone 组件源码 | `build/<产品>/<产品源码目录名>/<source_path>` |
 | bundled standalone 组件构建目录 | `build/<组件名>/<产品>-<产品版本>` |

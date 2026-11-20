@@ -6,7 +6,7 @@ pub use candidate::GitHubProxy;
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Condvar, Mutex};
 
 use anyhow::{Context, Result, bail};
@@ -41,16 +41,11 @@ fn finish(ui: &Tracker, index: usize, outcome: &Outcome) {
     }
 }
 
-pub fn run(sources: &[Source], opts: &Options) -> Result<()> {
+pub fn run(sources: &[Source], cache: &Path, opts: &Options) -> Result<()> {
     if sources.is_empty() {
         return Ok(());
     }
-    let cache = sources[0]
-        .archive
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    fs::create_dir_all(&cache).with_context(|| format!("建不了 {}", cache.display()))?;
+    fs::create_dir_all(cache).with_context(|| format!("建不了 {}", cache.display()))?;
 
     eprintln!("源码缓存: {}", cache.display());
     eprintln!(

@@ -370,6 +370,21 @@ fn downloads_single_stream_and_verifies() {
 }
 
 #[test]
+fn creates_item_directory_before_download() {
+    let data = payload(90_000);
+    let server = Server::start(data.clone());
+    let dir = temp_dir("itemdir");
+    let sha = sha_hex(&data);
+    let mut source = item(&server.url("/v1.3.0.tar.gz"), Some(&sha), &dir, "libavif");
+    source.archive = dir.join("libavif").join("v1.3.0.tar.gz");
+
+    let (outcome, file) = run(source);
+    assert!(matches!(outcome, Outcome::Done(_)), "{outcome:?}");
+    assert_eq!(fs::read(&file).unwrap(), data);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn large_file_is_split_and_assembled() {
     let data = payload(9 * 1024 * 1024 + 123);
     let server = Server::start(data.clone());

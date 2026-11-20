@@ -37,7 +37,7 @@ phprt update --offline               # 用缓存下载，再解压
 
 ```text
 <root>/
-├── .phprt/downloads/php-8.5.12.tar.xz      # 压缩包缓存
+├── .phprt/downloads/php/php-8.5.12.tar.xz  # 压缩包缓存
 └── build/
     ├── php/php-8.5.12/                     # unpack
     ├── libcurl/curl-8.23.0/

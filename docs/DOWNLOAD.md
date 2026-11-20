@@ -21,15 +21,17 @@ phprt install php@7.4 --component swoole --offline
 
 ## 2. 下载清单
 
-| 节点 | 是否下载 | 缓存文件名 |
+| 节点 | 是否下载 | 缓存路径 |
 | --- | --- | --- |
-| `php` | 是 | URL 最后一段，如 `php-8.5.12.tar.xz` |
-| `dep` | 是 | 如 `openssl-3.5.9.tar.gz` |
-| `ext`（非内置 ext（origin 推导为 pecl）） | 是 | 如 `swoole-6.2.5.tgz` |
+| `php` | 是 | `php/<URL 最后一段>`，如 `php/php-8.5.12.tar.xz` |
+| `dep` | 是 | `<项名>/<URL 最后一段>`，如 `openssl/openssl-3.5.9.tar.gz` |
+| `ext`（非内置 ext（origin 推导为 pecl）） | 是 | `<项名>/<URL 最后一段>`，如 `swoole/swoole-6.2.5.tgz` |
 | 内置 ext（origin 推导为 builtin） | 否 | 源码在 PHP tarball 里 |
+| 需要构建的工具 | 是 | `<项名>/<URL 最后一段>`，如 `autoconf/autoconf-2.72.tar.xz` |
 
 清单按拓扑序生成，顺序只影响开始顺序，实际执行受并发限制。
-两个不同的组件若解析出同名文件，直接报错，不静默覆盖。
+每个源码包放在以项名（产品 / 依赖库 / 组件 / 工具名）命名的子目录里；不同项的压缩包
+即使同名也互不覆盖。同一个项目录里再出现同名文件（不同 URL）时直接报错，不静默覆盖。
 
 ## 3. 缓存布局
 
@@ -38,14 +40,15 @@ phprt install php@7.4 --component swoole --offline
 
 ```text
 .phprt/downloads/
-├── php-8.5.12.tar.xz
-├── openssl-3.5.9.tar.gz
-├── openssl-3.5.9.tar.gz.part          # 下载中的单流临时文件
-├── openssl-3.5.9.tar.gz.part.0        # 分片临时文件
-├── openssl-3.5.9.tar.gz.part.json     # 分片元数据
-└── swoole-6.2.5.tgz
+├── php/php-8.5.12.tar.xz
+├── openssl/openssl-3.5.9.tar.gz
+├── openssl/openssl-3.5.9.tar.gz.part          # 下载中的单流临时文件
+├── openssl/openssl-3.5.9.tar.gz.part.0        # 分片临时文件
+├── openssl/openssl-3.5.9.tar.gz.part.json     # 分片元数据
+└── swoole/swoole-6.2.5.tgz
 ```
 
+- 子目录名是项名，压缩包文件名保持 URL 最后一段不变。
 - 缓存跨 PHP 系列共享；删除工具目录（默认 `.phprt`）即清空。
 - 下载完成后才把 `.part` 改名为最终文件；中途退出不会留下“看起来完整”的包。
 - `.part.json` 记录最终 URL、ETag、Last-Modified、总长和分片数。

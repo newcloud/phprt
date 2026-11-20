@@ -178,8 +178,8 @@ dep → fold 组件 → product → standalone 组件
 
 ### 5.6 下载源码
 
-按 catalog 的 URL 下载到共享缓存 `.phprt/downloads/`；缓存文件名冲突时报错。
-`--downloads` 在这里结束。
+按 catalog 的 URL 下载到共享缓存 `.phprt/downloads/<项名>/`；同一个项目录里
+文件名冲突时报错。`--downloads` 在这里结束。
 
 ### 5.7 解压源码
 
@@ -350,6 +350,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [STATE.md](STATE.md) | state.json、bindings、line/version |
 | [LOCK.md](LOCK.md) | 解析顺序、`--lock`、`update`、`scheme --lock`、catalog 旧补丁保留 |
 | [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
+| [CATALOG-UPDATE.md](CATALOG-UPDATE.md) | 上游版本查询、每组件 upstream star 脚本、catalog 写回与备份、sha256 获取（待实施，代码未实现） |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |

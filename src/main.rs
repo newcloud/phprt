@@ -1582,7 +1582,7 @@ fn fetch_sources(
         offline: download.offline,
         ui: download.ui,
     };
-    phprt_download::run(&sources, &options)?;
+    phprt_download::run(&sources, &cache, &options)?;
 
     if download.downloads {
         println!();
