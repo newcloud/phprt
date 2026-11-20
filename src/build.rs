@@ -360,6 +360,7 @@ pub fn run(
         version: product.version.clone(),
         scheme: opts.scheme.digest.clone(),
         resolution: marker::resolution_digest(&product.version, order),
+        inputs: marker::inputs_digest(order, sel),
         scheme_cmd: opts.scheme.command.clone(),
         toolchain: opts
             .toolchain
@@ -1375,6 +1376,7 @@ mod tests {
             env: Default::default(),
             dep_configure: Default::default(),
             prepare: vec![],
+            feature_checks: Default::default(),
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
@@ -1413,6 +1415,7 @@ mod tests {
                     min: String::new(),
                     max: String::new(),
                     probe: vec!["--version".into()],
+                    feature_checks: Vec::new(),
                 })
                 .collect(),
             modules: vec![name.into()],
@@ -1439,6 +1442,7 @@ mod tests {
                     min: String::new(),
                     max: String::new(),
                     probe: vec!["--version".into()],
+                    feature_checks: Vec::new(),
                 })
                 .collect(),
             modules: vec![name.into()],

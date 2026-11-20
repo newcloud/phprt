@@ -317,10 +317,19 @@ myphp-8.5                     项目入口（选中 cli target 时生成）
 
 gcc / g++ 由产品 recipe 的 `toolchain` 声明档位：落在档位里就继续，太新但有兼容
 参数时用该档的 `cflags`，不在任何档位才报错。个别依赖还会用到 `cmake`、`nasm`，
-缺了会在下载前报出来：
+缺了会在下载前报出来，并按发行版给出安装命令：
 
 ```text
-error: 宿主缺少 nasm，catalog 没有 nasm 的构建 recipe
+error: 宿主缺少构建命令：gcc g++ cmake make m4
+这些命令 catalog 里没有可用的源码 recipe，phprt 不会自己编译；由系统包提供。
+Fedora Linux 43（dnf）上执行：
+  sudo dnf install gcc gcc-c++ cmake make m4
+```
+
+只提示，不执行；包名映射在 `recipes/images.toml` 的 `[package_maps.*]`，规则见
+[docs/HOST-COMMANDS.md](docs/HOST-COMMANDS.md)。版本不满足的项不拼进安装命令：
+
+```text
 error: 宿主 make 3.8 不满足 >= 4.0，catalog 也没有可用版本
 error: 产品 php 声明 gcc 档位 >= 16，实际 gcc 15.3.1 不在任何一档里
 ```

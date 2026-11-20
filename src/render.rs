@@ -17,6 +17,8 @@ pub struct Sim {
     pub toolchain: Option<ToolchainReport>,
     /// 本次用到的构建工具（host + built）。
     pub tools: Vec<ToolReport>,
+    /// 宿主缺少的构建命令和安装命令；没有缺失项时为 null。
+    pub host_commands: Option<crate::host_commands::Report>,
     pub order: Vec<Node>,
 }
 
@@ -28,6 +30,8 @@ pub struct ToolchainReport {
     pub gxx: String,
     pub triple: String,
     pub arch: String,
+    /// 不在 PATH 的编译器命令；空数组表示齐全。
+    pub missing: Vec<String>,
     pub gcc_band: String,
     pub gxx_band: String,
     pub cflags: String,
@@ -109,10 +113,10 @@ pub fn build(
     root: &str,
     sel: &Selection,
     features: &BTreeMap<String, Vec<String>>,
-    resolution: &crate::tools::Resolution,
-    toolchain: Option<&crate::toolchain::Resolved>,
+    prepared: &crate::Prepared<'_>,
 ) -> Result<Sim> {
     let product = reg.product_any()?;
+    let resolution = &prepared.tools;
     let root_path = std::path::Path::new(root);
     let tree = layout::display_path(
         root_path,
@@ -401,9 +405,17 @@ pub fn build(
         });
     }
 
+    // 同一个工具既"解析到"又"解析不出"时，汇总列表只留解析不出那条：
+    // 产品要求"有就行"、某个依赖要求"能用"，两条并存看着自相矛盾。
+    let unresolved_names: BTreeSet<&str> = resolution
+        .unresolved
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
     let mut reports: Vec<ToolReport> = resolution
         .report()
         .into_iter()
+        .filter(|tool| !unresolved_names.contains(tool.name.as_str()))
         .map(|tool| {
             let (for_nodes, for_all) = consumers_of(&tool.name, &tool.version);
             ToolReport {
@@ -439,18 +451,45 @@ pub fn build(
             reason: reason.to_owned(),
         });
     }
-    let toolchain = toolchain.map(|selected| ToolchainReport {
-        cc: selected.facts.cc.clone(),
-        gcc: selected.facts.gcc.clone(),
-        cxx: selected.facts.cxx.clone(),
-        gxx: selected.facts.gxx.clone(),
-        triple: selected.facts.triple.clone(),
-        arch: selected.facts.arch.clone(),
-        gcc_band: selected.gcc_band.clone(),
-        gxx_band: selected.gxx_band.clone(),
-        cflags: selected.cflags.clone(),
-        cxxflags: selected.cxxflags.clone(),
-    });
+    let toolchain = match &prepared.toolchain.resolved {
+        Some(selected) => Some(ToolchainReport {
+            cc: selected.facts.cc.clone(),
+            gcc: selected.facts.gcc.clone(),
+            cxx: selected.facts.cxx.clone(),
+            gxx: selected.facts.gxx.clone(),
+            triple: selected.facts.triple.clone(),
+            arch: selected.facts.arch.clone(),
+            missing: Vec::new(),
+            gcc_band: selected.gcc_band.clone(),
+            gxx_band: selected.gxx_band.clone(),
+            cflags: selected.cflags.clone(),
+            cxxflags: selected.cxxflags.clone(),
+        }),
+        None if !prepared.toolchain.missing.is_empty() => {
+            let declares_cxx = product
+                .toolchain
+                .as_ref()
+                .is_some_and(|toolchain| !toolchain.gxx.is_empty());
+            Some(ToolchainReport {
+                cc: crate::toolchain::cc_name(product),
+                gcc: String::new(),
+                cxx: if declares_cxx {
+                    crate::toolchain::cxx_name(product)
+                } else {
+                    String::new()
+                },
+                gxx: String::new(),
+                triple: "-".to_owned(),
+                arch: crate::toolchain::arch(),
+                missing: prepared.toolchain.missing.clone(),
+                gcc_band: String::new(),
+                gxx_band: String::new(),
+                cflags: String::new(),
+                cxxflags: String::new(),
+            })
+        }
+        None => None,
+    };
 
     Ok(Sim {
         root: root.to_owned(),
@@ -458,6 +497,7 @@ pub fn build(
         targets: product.selected_targets.clone(),
         toolchain,
         tools: reports,
+        host_commands: prepared.host.clone(),
         order: nodes,
     })
 }
@@ -697,15 +737,23 @@ pub fn to_text(sim: &Sim) -> String {
 
     if let Some(tc) = &sim.toolchain {
         out.push_str("\ntoolchain\n");
-        out.push_str(&format!(
-            "  cc        {} {} ({})\n",
-            tc.cc, tc.gcc, tc.gcc_band
-        ));
-        if !tc.cxx.is_empty() {
+        if tc.missing.iter().any(|name| name == &tc.cc) {
+            out.push_str(&format!("  cc        {} (缺少)\n", tc.cc));
+        } else {
             out.push_str(&format!(
-                "  cxx       {} {} ({})\n",
-                tc.cxx, tc.gxx, tc.gxx_band
+                "  cc        {} {} ({})\n",
+                tc.cc, tc.gcc, tc.gcc_band
             ));
+        }
+        if !tc.cxx.is_empty() {
+            if tc.missing.iter().any(|name| name == &tc.cxx) {
+                out.push_str(&format!("  cxx       {} (缺少)\n", tc.cxx));
+            } else {
+                out.push_str(&format!(
+                    "  cxx       {} {} ({})\n",
+                    tc.cxx, tc.gxx, tc.gxx_band
+                ));
+            }
         }
         out.push_str(&format!("  triple    {} / {}\n", tc.triple, tc.arch));
         if !tc.cflags.is_empty() {
@@ -738,6 +786,21 @@ pub fn to_text(sim: &Sim) -> String {
             out.push_str(&format!(
                 "  {} {} ({}) -> {}  for {consumers}\n",
                 tool.name, tool.version, tool.provider, tool.prefix
+            ));
+        }
+    }
+
+    if let Some(host) = &sim.host_commands {
+        out.push_str("\nhost commands\n");
+        out.push_str(&format!("  missing   {}\n", host.missing.join(" ")));
+        for (name, reason) in &host.reasons {
+            out.push_str(&format!("  reason    {name}：{reason}\n"));
+        }
+        out.push_str(&format!("  install   {}\n", host.plan_install()));
+        if !host.unmapped.is_empty() {
+            out.push_str(&format!(
+                "  unmapped  {}（请自行确认包名）\n",
+                host.unmapped.join(" ")
             ));
         }
     }
@@ -1065,6 +1128,7 @@ mod tests {
             env: Default::default(),
             dep_configure: Default::default(),
             prepare: vec![],
+            feature_checks: Default::default(),
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],

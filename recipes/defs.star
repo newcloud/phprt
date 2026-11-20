@@ -81,12 +81,15 @@ def tool_target(
         configure = [],
         make = ["make", "make install"],
         artifacts = [],
-        desc = ""):
-    """一个构建期工具，装到 build/tools/<name>-<version>/。
+        desc = "",
+        feature_checks = {}):
+    """一个构建期工具。
 
-    版本、下载地址由 catalog 注入，catalog 必须有同名条目；工具不能声明库依赖
-    needs，只能声明 tools（工具依赖工具）。编译器（gcc / g++ / gxx / cc / c++）
-    不能做成 Tool，它们只属于产品的 toolchain(...)。
+    catalog 里有同名条目：按条目里的版本下载构建，装到 build/tools/<name>-<version>/。
+    catalog 里没有条目：只由系统提供，不下载不构建，只读 feature_checks。
+
+    工具不能声明库依赖 needs，只能声明 tools（工具依赖工具）。编译器
+    （gcc / g++ / gxx / cc / c++）不能做成 Tool，它们只属于产品的 toolchain(...)。
     """
     return {
         "kind": "tool",
@@ -99,7 +102,32 @@ def tool_target(
         "make": make,
         "artifacts": artifacts,
         "desc": desc,
+        "feature_checks": feature_checks,
     }
+
+
+def feature_check(run, on_fail):
+    """工具的一个具名检查：run 是参数列表（不经过 shell），退出码 0 通过。
+
+    on_fail 用 need_packages(...) 或 error_msg(...)；前者进统一安装提示，
+    后者直接打印。检查只在系统已有这条命令、版本也满足之后执行。
+    """
+    return {"run": run, "on_fail": on_fail}
+
+
+def need_packages(names, reason = ""):
+    """检查失败后需要装包：names 是命令键，由 [package_maps.*] 换成发行版包名。
+
+    reason 是给人看的一句话，写在装包提示的后面，比如
+    need_packages(["perl"], reason = "当前 perl 模块不全，需要安装完整的 perl 包")。
+    不写时只报"检查不过"和命令的原始输出。
+    """
+    return {"kind": "need_packages", "names": names, "reason": reason}
+
+
+def error_msg(text):
+    """检查失败后直接打印这段文字；装包解决不了的情况用它。"""
+    return {"kind": "error_msg", "text": text}
 
 
 def mode(strategy, steps = [], artifacts = [], configure = []):
@@ -127,18 +155,21 @@ def runtime(lib_dir = "", rpath = {}):
     }
 
 
-def tool(name, min = "", max = "", probe = ["--version"]):
+def tool(name, min = "", max = "", probe = ["--version"], feature_checks = []):
     """一个宿主机命令要求。
 
     字符串缩写只检查存在；带 min / max 时探测版本并要求落在区间里。
     min / max 按写出的段数比较：min="14" 接受 14.x，max="13" 接受 13.x。
     probe 是探测命令的参数列表，不经过 shell。
+    feature_checks 是检查名列表，具体怎么检查写在 recipes/tools/<name>.star 里，
+    例如 tool("perl", min = "5.20", feature_checks = ["findbin"])。
     """
     return {
         "name": name,
         "min": min,
         "max": max,
         "probe": probe,
+        "feature_checks": feature_checks,
     }
 
 

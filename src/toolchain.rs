@@ -30,6 +30,14 @@ pub struct Resolved {
     pub gxx_band: String,
 }
 
+/// 本次编译器检查结果：解析成功的档位，或缺失的命令名。
+#[derive(Debug, Clone, Default)]
+pub struct Checked {
+    pub resolved: Option<Resolved>,
+    /// 不在 PATH 的编译器（实际命令名，如 `gcc` / `g++`）。
+    pub missing: Vec<String>,
+}
+
 /// 构建实际使用的编译器：产品 profile 的 CC / CXX 优先，其次进程环境，最后 gcc / g++。
 pub fn cc_name(product: &Target) -> String {
     env_or(product, "CC", "gcc")
@@ -65,9 +73,7 @@ pub fn probe(product: &Target, with_cxx: bool) -> Result<Facts> {
         .with_context(|| format!("探测编译器 {cc} 的 triple 失败"))?
         .trim()
         .to_owned();
-    let arch = tools::run_program("uname", &["-m"])
-        .map(|text| text.trim().to_owned())
-        .unwrap_or_else(|_| std::env::consts::ARCH.to_owned());
+    let arch = arch();
 
     let (cxx, gxx) = if with_cxx {
         let cxx = cxx_name(product);
@@ -115,6 +121,51 @@ pub fn resolve(product: &Target) -> Result<Option<Resolved>> {
         gcc_band,
         gxx_band,
     }))
+}
+
+/// 产品声明了 toolchain 就检查；命令缺失时不探测，返回缺失清单。
+///
+/// 命令存在但版本不在任何档位里仍然报错：装包不一定能解决，不降级成提示。
+pub fn check(product: &Target) -> Result<Checked> {
+    let missing = missing_commands(product);
+    if !missing.is_empty() {
+        return Ok(Checked {
+            resolved: None,
+            missing,
+        });
+    }
+    Ok(Checked {
+        resolved: resolve(product)?,
+        missing: Vec::new(),
+    })
+}
+
+/// 只检查命令是否存在，不探测版本；返回实际命令名（`CC` / `CXX`）。
+pub fn missing_commands(product: &Target) -> Vec<String> {
+    let Some(toolchain) = &product.toolchain else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let cc = cc_name(product);
+    if !tools::on_path(&cc) {
+        out.push(cc);
+    }
+    if !toolchain.gxx.is_empty() {
+        let cxx = cxx_name(product);
+        if !out.contains(&cxx) && !tools::on_path(&cxx) {
+            out.push(cxx);
+        }
+    }
+    out
+}
+
+/// 记录用的架构：`uname -m` 优先，取不到时用编译期常量。
+pub fn arch() -> String {
+    tools::run_program("uname", &["-m"])
+        .map(|text| text.trim().to_owned())
+        .ok()
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| std::env::consts::ARCH.to_owned())
 }
 
 fn pick<'a>(

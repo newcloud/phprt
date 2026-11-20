@@ -5,7 +5,7 @@
 `plan` 的输出是 `Sim`：
 
 ```text
-Sim { root, tree, targets, toolchain, tools, order: [Node] }
+Sim { root, tree, targets, toolchain, tools, host_commands, order: [Node] }
 ```
 
 | 字段 | 说明 |
@@ -15,6 +15,7 @@ Sim { root, tree, targets, toolchain, tools, order: [Node] }
 | `targets` | 本次构建目标：target 名 → 配置名 → 值；没有 targets 的产品为空对象 |
 | `toolchain` | 实际编译器档位；产品没有 `toolchain` 声明时为 `null` |
 | `tools` | 本次用到的构建工具（host + built）以及解析失败项 |
+| `host_commands` | 宿主缺少的构建命令、安装命令，以及工具 recipe 写的一句话说明（`reasons`）；没有缺失项时为 `null` |
 | `order` | 拓扑序节点数组；需要构建的工具节点排在最前面 |
 
 `Node` 字段：
@@ -68,7 +69,7 @@ Sim { root, tree, targets, toolchain, tools, order: [Node] }
 
 ## 3. 文本格式
 
-先打印头部、toolchain 段、tools 段和构建顺序，再逐节点输出：
+先打印头部、toolchain 段、tools 段、host commands 段和构建顺序，再逐节点输出：
 
 ```text
 phprt plan
@@ -89,6 +90,10 @@ tools
   make 4.4.1 (host)
   patchelf 0.19.3 (store) -> build/tools/patchelf-0.19.3  for all nodes
   ...
+
+host commands
+  missing   cmake nasm
+  install   sudo dnf install cmake nasm
 
 build order
    1. tool:autoconf@2.71        for xdebug
@@ -126,7 +131,15 @@ build order
 - 有值才输出：`source`、`from`、`sha256`、`unpack`、`needs`、`tools`、`modules`、`deps`、
   `features`、`outputs`、`ini`。
 - `tools` 段在宿主工具名后不带版本时显示 `(host)`；built 工具显示 `(store) -> 前缀`；
-  解析不出来的显示 `名字 (无法解析: 原因)`。`plan` 不因工具缺失失败。
+  解析不出来的显示 `名字 (无法解析: 原因)`。同名工具只要有一处解析不出，汇总列表就
+  只留“无法解析”那条（节点自己的 `tools` 行照旧）。`plan` 不因工具缺失失败。
+- `host commands` 段只在有缺失项时出现：`missing` 是命令名，`install` 是按发行版
+  拼好的安装命令；未映射的包名单独一行 `unmapped`。工具 recipe 写了
+  `need_packages(..., reason = ...)` 时，`missing` 后面每个命令一行
+  `reason  perl：当前 perl 模块不全，需要安装完整的 perl 包`。
+  识别不出包管理器时 `install` 写“未识别发行版，请用本机包管理器安装”。
+  规则见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
+- `toolchain` 段的编译器命令不存在时，该行显示 `gcc (缺少)`。
 - 首次项目会把 bundle 的 `default_components` 算进方案；`plan` 输出里能直接看到这些节点。
 - dep 的 `configure` 包含未启用 feature 的 `disable` 参数（如 `--without-ssl`）。
 
@@ -158,6 +171,7 @@ build order
     "gxx": "15.3.1",
     "triple": "x86_64-redhat-linux",
     "arch": "x86_64",
+    "missing": [],
     "gcc_band": ">= 9",
     "gxx_band": ">= 9",
     "cflags": "",
@@ -167,6 +181,13 @@ build order
     {"name": "make", "version": "4.4.1", "provider": "host", "prefix": ""},
     {"name": "autoconf", "version": "2.72", "provider": "store", "prefix": "build/tools/autoconf-2.72"}
   ],
+  "host_commands": {
+    "pm": "dnf",
+    "missing": ["gcc", "g++", "cmake", "make", "m4"],
+    "reasons": {},
+    "unmapped": [],
+    "install": "sudo dnf install gcc gcc-c++ cmake make m4"
+  },
   "order": [
     {
       "id": "component:curl",

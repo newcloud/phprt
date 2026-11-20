@@ -58,6 +58,7 @@ phprt scheme php@8.5                        # 打印一条 install 命令（含 
 | 已装 8.5.12、完整，依赖补丁已前进 | `install php@8.5` | **拒绝**：提示“编译配置一致，但解析出的版本与本次不同” |
 | 已装 8.5.12、完整 | `update php@8.5` | 解析到 8.5.13 并构建，成功后 state 记录 8.5.13 |
 | 已装 8.5.12、完整 | `install php@8.5.12` | **拒绝**：说明编译配置一致 / 不一致 |
+| 已装 8.5.12、完整，recipe 的构建参数改了 | `install php@8.5` | **不拒绝**：提示构建参数有变化，保留安装树按签名增量重编 |
 | 已装 8.5.12、完整 | `install php@8.5.12 --targets 'cli' --force` | 下载、解压成功后旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
 | 已装 8.5.12、完整，本次 `--targets` 不同 | `install php@8.5 --targets='cli,fpm'` | **拒绝**：编译配置与已装方案不一致，提示加 `--force` |
 | 已装 8.5.12、完整，只调整 target 配置或顺序 | `install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'` | 顺序不同不影响身份；配置值不同则拒绝并提示 `--force` |
@@ -86,6 +87,10 @@ error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置一致，但解
 
 方案指纹不同时说明“编译配置与本次方案不一致”，并把已装方案和本次方案两条命令都打出来。
 catalog 里的补丁号只代表“本次解析到的目标”，文案里不出现“最新/过期”。
+
+版本和方案都相同、只有 recipe 的构建参数变了时（`configure` / `make` / `mode` /
+feature 等），不拒绝也不备份：打印“构建参数有变化：按签名增量重编”，保留安装树，
+签名一致的节点跳过，只重编受影响的节点。参数相同则仍按 2.2 拒绝。
 
 ### 2.3 完成标记
 
@@ -137,16 +142,20 @@ phprt install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'
   宿主满足区间                                  → host
   build/tools 里已有满足区间的版本               → store（复用）
   catalog 里满足区间的最高版本                   → store（需要构建）
-  都没有                                       → 报错
+  都没有                                       → 记入缺失清单，最后汇总
 ```
 
+- 缺失清单在解析阶段收齐再报，不只在第一个失败处停下；宿主缺命令、catalog 也没有
+  可用 recipe 时，附上按发行版拼好的安装命令，见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
 - 需要构建的工具节点排在最前面；宿主工具不产生节点。
 - 工具源码和产品源码一起进入下载 / 解压清单，`--downloads` 也包含它们。
 - 工具构建失败不写 state，也不写完成标记。
 - gcc / g++ 不是工具：按产品的 `toolchain` 探测、选档、合并 CFLAGS，见
-  [TOOLS.md](TOOLS.md) §4。产品没有声明时跳过编译器版本检查。
-- `plan` 不因工具缺失失败，只在 `tools` 段显示“无法解析”；`install` / `add` /
-  `remove` 走严格解析。
+  [TOOLS.md](TOOLS.md) §4。产品没有声明时跳过编译器版本检查；命令不存在时和工具
+  缺失一起汇总。
+- `plan` 不因工具缺失失败，在 `tools` 段显示“无法解析”，并在 `host commands` 段
+  给出安装命令（工具 recipe 写了 `reason` 时带一句人话说明）；
+  `install` / `add` / `remove` 汇总后一次报错。
 
 ## 3. add
 

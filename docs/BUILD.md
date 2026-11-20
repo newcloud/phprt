@@ -183,11 +183,17 @@ libaom 的 configure 也接受 yasm，但 phprt 只检查 nasm（yasm 已停止�
 解析在下载源码之前执行；`--downloads` 只把本次解析到、需要构建的工具源码加进下载，
 不检查、不构建。版本探测和比较见 [PRODUCT.md](PRODUCT.md)。
 
-Fedora 上系统工具可以一次装好：
+宿主缺命令时，`install` / `add` / `remove` 在下载源码之前一次列出本次方案缺的全部命令，
+并按发行版给出安装命令：
 
-```bash
-sudo dnf install gcc gcc-c++ make cmake nasm binutils pkgconf-pkg-config patchelf tar m4 perl
+```text
+error: 宿主缺少构建命令：gcc g++ cmake make m4
+这些命令 catalog 里没有可用的源码 recipe，phprt 不会自己编译；由系统包提供。
+Fedora Linux 43（dnf）上执行：
+  sudo dnf install gcc gcc-c++ cmake make m4
 ```
+
+只提示，不执行；包名映射和发行版识别规则见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
 
 gd 的图片依赖靠 pkg-config 定位：PHP 8.5 的 `ext/gd/config.m4` 用
 `PKG_CHECK_MODULES` 查找 `libpng` / `libjpeg` / `libwebp` / `libavif` / `freetype2`，

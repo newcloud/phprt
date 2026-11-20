@@ -3,6 +3,9 @@
 **本文是待实施的方案，代码尚未实现。** 实施后按第 12 节的清单同步 README、
 CLI.md、BUILD.md、CONTRACT.md 和 DESIGN.md；本文与代码冲突时以代码实际行为为准。
 
+例外：第 3.1 节的 `[package_maps.*]` 已先用于宿主模式的安装提示，文件和加载器
+随该功能落地，见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。镜像条目 `[images.*]` 仍未实现。
+
 ## 1. 现在的缺口
 
 构建直接跑在宿主机上，产物是 `.phprt/<产品>-<版本>/` 一棵树。它已经能跑，
@@ -38,67 +41,62 @@ CLI.md、BUILD.md、CONTRACT.md 和 DESIGN.md；本文与代码冲突时以代�
 镜像不是写死的常量，而是和补丁号一样的数据：catalog 存、recipe 声明要求、
 bundle 给默认、state 记实际选择。产品 recipe 里永远不出现 `debian:12`。
 
-宿主构建不需要这一节；只有 `--image <线名>`（或 `build` 出镜像）时才用到。
+宿主构建不需要这一节；`[package_maps.*]` 由宿主安装提示和镜像模式共用，镜像条目
+`[images.*]` 只在 `--image <线名>`（或 `build` 出镜像）时用到。
 
 ### 3.1 catalog：`recipes/images.toml`
 
 ```toml
-# 只登记验证过的镜像；digest 必须写，tag 会漂。
-[images.debian12]
-image = "docker.io/library/debian:12"
-digest = "sha256:..."
-pm     = "apt"
-gcc    = "12.2"
-glibc  = "2.36"
-
 [images.fedora43]
-image = "registry.fedoraproject.org/fedora:43"
-digest = "sha256:..."
+image  = "quay.io/fedora/fedora:43"
+digest = "sha256:40e0..."
 pm     = "dnf"
-gcc    = "15.3.1"
+gcc    = "15.3"
 glibc  = "2.42"
 
-[images.rocky8]
-image = "quay.io/rockylinux/rockylinux:8"
-digest = "sha256:..."
-pm     = "dnf"
-gcc    = "8.5"
-glibc  = "2.28"
+[images.debian13]
+image  = "docker.io/library/debian:13"   # 国内可换 docker.m.daocloud.io/…，digest 相同
+digest = "sha256:9c6e..."
+pm     = "apt"
+gcc    = "14.2"
+glibc  = "2.41"
+packages = ["perl"]          # 命令在、包不完整时的兜底（Debian 的 perl-base 缺 FindBin）
+# bootstrap = [              # 自动装包之前、以 root 在容器里按顺序执行
+#   "sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources",
+# ]
 
-# 工具名 -> 发行版包名，按包管理器分组。只写需要在镜像里自动安装的工具；
-# 没写的名字认为基础镜像自带，装完由常规 tools 检查兜底。
-# ld 现在不由 toolchain 声明；如果某个 recipe 把 ld 写进 tools，就按这里装。
-[package_maps.apt]
-gcc        = "gcc"
-gxx        = "g++"
-ld         = "binutils"
-make       = "make"
-perl       = "perl"
-m4         = "m4"
-pkg-config = "pkg-config"
-patchelf   = "patchelf"
-autoconf   = "autoconf"
+[images.ubuntu2604]
+image  = "docker.io/library/ubuntu:26.04"
+digest = "sha256:d66b..."
+pm     = "apt"
+gcc    = "15.2"
+glibc  = "2.43"
+packages = ["perl"]          # 同 debian13：perl-base 缺 FindBin
 
+# 命令名 -> 发行版包名，按包管理器分组。完整内容、未映射规则和校验见
+# HOST-COMMANDS.md §3；没写的名字认为基础镜像自带，装完由常规 tools 检查兜底。
 [package_maps.dnf]
 gcc        = "gcc"
-gxx        = "gcc-c++"
-ld         = "binutils"
-make       = "make"
-perl       = "perl"
-m4         = "m4"
+"g++"      = "gcc-c++"
 pkg-config = "pkgconf"
-patchelf   = "patchelf"
-autoconf   = "autoconf"
 ```
 
-- 一个条目就是一条线，名字是 `debian12` / `fedora43` 这种稳定标识，和补丁号分开。
+- 一个条目就是一条线，名字是 `debian13` / `fedora43` 这种稳定标识，和补丁号分开。
 - `digest` 必填。可复现、签名、探针缓存都按它索引。
 - `gcc` / `glibc` **手写 + 首次使用时探针校验**，不一致就报错，不静默采信。
   理由：纯探针生成的话，加一条镜像必须联网拉镜像，`--offline` 就用不了；
   纯手写不校验的话，tag 漂了或写错了，错误会拖到编译中途才暴露。
-- **`gcc` 是唯一参与构建判断的版本**。`glibc` 只用于显示和运行下限提示，
+  `gcc` 写 major.minor（`15.3`），参与构建判断；`glibc` 只用于显示和运行下限提示，
   选镜像时告诉用户「产物要求目标系统 glibc >= 这个值」，不参与构建是否可用的判断。
 - `pm` 只支持 `apt` / `dnf`；其它包管理器报错，不做通用抽象。
+- `packages`（可选）：跟 phprt 自动装包一起装的额外包，按镜像条目的 `pm` 直接写
+  发行版包名，不走 `[package_maps.*]`。用于“命令存在但包不完整”这类推导不出来的差异
+  （Debian/Ubuntu 的 `perl-base` 缺 `FindBin`），以及派生镜像要预置的包。
+  它和 `bootstrap`、镜像 digest 一起构成**派生 builder 镜像的身份**：改了要重建，
+  不能复用旧层。
+- `bootstrap`（可选）：自动装包之前、以 root 在容器里按顺序执行的命令列表，
+  用来改包源、加 GPG key。**通用机制，不分发行版**：换系统只加数据行，不改语法。
+  约束见 §4.3。
 - 旧条目保留规则同 catalog 补丁：升级某条线的 digest 时把旧条目留在文件里，
   `--lock` 只从这里取。
 - 用户加镜像 = 在这里加一段并跑一次探针校验；加错、验不过由用户自己处理，
@@ -108,10 +106,10 @@ autoconf   = "autoconf"
 
 ```text
 $ phprt list_oci_images
-线名      镜像                                  GCC     glibc  包管理
-debian12  docker.io/library/debian:12          12.2    2.36   apt
-fedora43  registry.fedoraproject.org/fedora:43  15.3.1  2.42   dnf
-rocky8    quay.io/rockylinux/rockylinux:8      8.5     2.28   dnf
+线名        镜像                                  GCC     glibc  包管理
+debian13    docker.io/library/debian:13           14.2    2.41   apt
+fedora43    quay.io/fedora/fedora:43              15.3    2.42   dnf
+ubuntu2604  docker.io/library/ubuntu:26.04        15.2    2.43   apt
 ```
 
 表下一行固定说明：**glibc 是产物能运行的最低 glibc，不参与构建判断。**
@@ -246,11 +244,19 @@ container_runtime = "podman"      # 不写时自动探测 podman → docker
 镜像本身只保证有基础系统；构建工具按 recipe 自动安装，不再维护一份固定的
 builder 包清单。
 
-1. **收集工具名**：`toolchain` 的 `gcc` / `gxx`，加上产品 profile 和各节点
-   `tools` 里的全部名字（make、perl、m4、pkg-config、patchelf、autoconf…）。
-   同名去重。
+0. **bootstrap（可选，先跑）**：镜像条目里的 `bootstrap` 命令按顺序执行，用来改包源、
+   加 GPG key 这类前置动作。只在镜像模式、以 root 在容器里跑；`plan` 只列出不执行；
+   非 0 退出立刻停并给日志路径；命令内容算进 builder 身份（改了就不复用缓存）；
+   `--offline` 不跑（要联网），直接按现有 tools 检查报缺什么。
+1. **收集命令名**：`toolchain` 的 `gcc` / `gxx`（`gxx` 归一成实际 CXX 命令名，如
+   `g++`），加上产品 profile 和各节点 `tools` 里的全部名字（make、perl、m4、
+   pkg-config、patchelf、autoconf…）。同名去重。
 2. **映射包名**：用镜像条目的 `pm` 选 `[package_maps.<pm>]`；没有映射的名字
-   认为基础镜像自带，不安装。
+   认为基础镜像自带，不安装。镜像条目的 `packages` 直接追加在后面，用来补
+   "命令存在但包不完整"（如 Debian/Ubuntu 的 `perl-base` 缺 `FindBin`）。
+   这份包清单（映射结果 + `packages`）是派生 builder 镜像的身份之一：装完
+   `dnf`/`apt` 后生成的 `toolchain + 系统包` 镜像可以按"base digest + 包清单 +
+   bootstrap"缓存复用，任何一项变了就重建。
 3. **安装**：起容器后先执行一次
    - apt：`apt-get update && apt-get install -y --no-install-recommends <包...>`
    - dnf：`dnf install -y <包...>`
@@ -288,6 +294,140 @@ error: build_backend = "container" 需要 podman 或 docker
 - 要在旧宿主上跑：用和宿主同代或更旧的 `--image`。
 
 这条要写进 `build` 的说明和报错，否则用户会以为是构建坏了。
+
+### 4.6 裸镜像手工实测记录（2026-11）
+
+实现镜像模式之前，用三个**未装任何工具链**的基础镜像把"宿主提示 → 按提示装 → 全量构建"
+手工跑通了。这节是给下次开发的现场笔记：哪些是镜像模式要自动做的，哪些只能在容器外处理。
+
+镜像条目见 §3.1：`fedora43`（quay）、`debian13` / `ubuntu2604`（docker.io，国内可换镜像站）。
+
+**三个基础镜像自带什么**
+
+| 镜像 | 自带 | 没有 |
+| --- | --- | --- |
+| `fedora:43` | `sudo` `dnf` `sh` `uname` `tar` `xz` | gcc、g++、ar、ranlib、make、cmake、m4、perl、pkg-config |
+| `debian:13` | `apt-get` `sh` `perl`(5.40，perl-base) `uname` `tar` | `sudo`、binutils、make、cmake、m4、pkg-config |
+| `ubuntu:26.04` | `apt-get` `sh` `perl`(5.40，perl-base) `uname` `tar` | `sudo`、binutils、make、cmake、m4、pkg-config |
+
+**手工流程（镜像模式要自动化的就是这几步）**
+
+```bash
+# 1. 起容器：recipes 只读、安装根可写、phprt 二进制放进安装根
+podman run -d --name phprt-test \
+  -v <recipes>:/recipes:ro,z -v <安装根>:/work:z -w /work <image> sleep infinity
+podman exec phprt-test /work/phprt --recipes /recipes install php@8.5
+
+# 2. 空镜像里这次必然失败：聚合提示 + 退出码 1
+#    debian13：
+#      error: 宿主缺少构建命令：gcc g++ ar cmake m4 make pkg-config ranlib
+#      Debian GNU/Linux 13（apt）上执行：
+#        sudo apt-get install gcc g++ binutils cmake m4 make pkg-config
+#    ubuntu2604 与 debian13 完全相同（都是 apt、都没有 sudo）。
+#    fedora43：少 perl（镜像里有），包名换成 gcc-c++ / pkgconf
+
+# 3. 按提示装（细节见下面"三个坑"）
+podman exec phprt-test sh -c 'apt-get update && apt-get install -y gcc g++ binutils cmake m4 make pkg-config'
+
+# 4. 再跑：host commands 段消失；patchelf 仍是 (store)，由 phprt 用源码构建
+podman exec phprt-test /work/phprt --recipes /recipes install php@8.5
+```
+
+实测结果（同一份 recipe，只换镜像）：编译 10 个节点全过，产物 `php -v` 为 8.5.12 (NTS)，
+`php -m` 列出 43 项（含 `curl` / `openssl` / `pdo_sqlite` 等）；`dep:openssl` 的
+`--openssldir` 按 `ctx["host"].family` 分别落 `/etc/pki/tls`（rpm）和 `/etc/ssl`（deb），
+见 [CONTRACT.md](CONTRACT.md) 的 ctx 一节。
+
+**三个坑（镜像模式的处理方式）**
+
+1. **Debian / Ubuntu 基础镜像没有 `sudo`。** 提示里的 `sudo apt-get install` 原样粘贴会
+   `sudo: not found`。镜像模式在容器里以 root 运行，执行时去掉 `sudo`；宿主提示保持
+   原样（普通用户需要它）。手工验证时同样去掉。
+2. **全新容器必须先 `apt-get update`。** 否则 `apt-get install` 报
+   `Unable to locate package`。这件事 §4.3 已经写进自动装包步骤；宿主机日常不需要。
+   提示里不带 `update`，也不该带——那是包管理器状态，不是缺命令。
+3. **`perl` 命令在、但缺 `FindBin` 模块。** Debian/Ubuntu 的 `perl-base`、Fedora 的
+   `perl-interpreter` 都只带命令不带全部核心模块，openssl 的 `./Configure` 会直接失败。
+   处理方式和实测细节见 §4.7。
+
+**国内网络（实测）**
+
+- `docker.io` 直连拉不动；`docker.m.daocloud.io/library/debian:13` 可以，digest 与
+  官方一致（`sha256:9c6e38…`），所以条目里写官方名、注释写镜像站。
+  `quay.io` 可用且快，Fedora 镜像直接从 `quay.io/fedora/fedora:43` 拉。
+- 镜像内的 apt/dnf 源慢是**另一件事**：用镜像条目的 `bootstrap` 改源（数据，不是语法），
+  它跑在自动装包之前，正好生效。
+- phprt 自己的源码下载与系统源无关（URL 在 `recipes/catalog.toml`）。加速只有两条路：
+  共享 `download_dir` 缓存，或给 catalog 换镜像地址。手工测试时把已有的
+  `/home/z/testphp/downloads/*/*` 硬链接成平铺缓存（v3 的缓存是
+  `<安装根>/.phprt/downloads/<文件名>`，不是按依赖分目录），10 个包 0 下载。
+- phprt 二进制只依赖 `libc` / `libm` / `libgcc_s`，同代发行版可直接拷进容器跑，
+  不需要在容器里重新编译。
+
+**给镜像模式的验收清单**（手工已验，代码实现后应能自动复现）
+
+- 空镜像首次 `install`：一次列出全部缺命令 + 该发行版的安装命令，退出码 1，不下载源码。
+- 装完再跑：`host commands` 段消失；`patchelf` 走 `build/tools` 自建。
+- 全量构建成功；`php -m` 列出预期模块（`curl` / `openssl` / `pdo_sqlite` 等）。
+- `plan` 只列 `bootstrap`、不执行；`--offline` 不执行 `bootstrap`。
+- 换镜像后 `ctx["host"]` 变化会让对应节点重编（走 `inputs` 指纹 + 节点签名）。
+
+### 4.7 已知拆包坑：perl（命令在、包不完整）
+
+容器和宿主都实测到：`perl` 命令存在，`FindBin` 模块却不在，openssl 的 `./Configure`
+第 15 行直接失败：
+
+```text
+Can't locate FindBin.pm in @INC (you may need to install the FindBin module) ... at ./Configure line 15.
+BEGIN failed--compilation aborted at ./Configure line 15.
+```
+
+拆包情况（同一个坑的两种发行版形态）：
+
+| 发行版 | `/usr/bin/perl` 来自 | `FindBin` 在 |
+| --- | --- | --- |
+| Debian 13 / Ubuntu 26.04 | `perl-base` | `perl` 包 |
+| Fedora 43 | `perl-interpreter` | `perl-FindBin` 子包 |
+
+`dnf repoquery --requires perl` 能看到 `perl-FindBin`，所以 `dnf install perl` 能补上；
+Debian/Ubuntu 同理，`apt-get install perl` 即可。
+
+phprt 的两层处理：
+
+1. **宿主/最小系统**：`openssl.star` 声明
+   `tool("perl", min = "5.20", feature_checks = ["findbin"])`，检查定义在
+   `recipes/tools/perl.star`（`run = ["-MFindBin", "-e1"]`，失败
+   `on_fail = need_packages(["perl"], reason = "当前 perl 模块不全，需要安装完整的 perl 包")`）。
+   检查不过就并进统一安装提示：
+
+   ```text
+   error: 宿主缺少构建命令：m4 perl
+   这些命令 catalog 里没有可用的源码 recipe，phprt 不会自己编译；由系统包提供。
+     perl：当前 perl 模块不全，需要安装完整的 perl 包
+   Fedora Linux 43（dnf）上执行：
+     sudo dnf install m4 perl
+   ```
+
+   宿主上也确实有这个问题：Fedora 43 只装了 `perl-interpreter`，phprt 会先拦下来，
+   而不是拖到 openssl 编译中途。
+2. **容器/派生镜像**：镜像条目 `packages = ["perl"]`（§3.1）保证自动装包时就是完整包，
+   并算进派生 builder 镜像的身份。
+
+自检命令：
+
+```bash
+perl -MFindBin -e1                          # 退出码 0 才算可用
+rpm -qf /usr/bin/perl                       # Fedora：perl-interpreter
+dnf repoquery --requires perl | grep FindBin
+```
+
+实测（2026-11）：Fedora 43 宿主机 `sudo dnf install -y m4 perl` 后 `perl 5.42.3 (host)`、
+`m4 1.4.21 (host)`，`plan` 的 `host commands` 段消失。
+
+**同类坑的判断**：命令在 PATH 上只说明"有这个东西"，不说明包完整。再遇到类似情况
+（`pkg-config` 找到的库缺开发文件、只有 `-dev` / `-devel` 包才有的头文件等），
+优先给工具加一条 `feature_checks`（宿主也受益），`packages` 作镜像兜底；不要把发行版的
+拆包规则写进 Rust。
 
 ## 5. 镜像
 
@@ -695,7 +835,7 @@ agent 在真跑之前就能核对。
 
 | 文件 | 改动 |
 | --- | --- |
-| `recipes/images.toml` | 新增：镜像 catalog + `[package_maps.apt]` / `[package_maps.dnf]`（第 3.1 节） |
+| `recipes/images.toml` | 镜像 catalog：新增 `[images.*]` 条目（`[package_maps.apt]` / `[package_maps.dnf]` 已随宿主提示落地，见 [HOST-COMMANDS.md](HOST-COMMANDS.md)） |
 | `src/toolchain.rs` | 新增：读镜像 catalog、按 gcc 区间选线、探针结果缓存 |
 | `src/config.rs` | `build_backend` / `container_runtime`，校验文案对齐 `rpath_backend` |
 | `src/state.rs` | `image` 可选字段 |
@@ -713,6 +853,10 @@ agent 在真跑之前就能核对。
 | 文档 | 本文；DESIGN.md §14；CLI.md 的 `build`、`list_oci_images`、`--image`、退出码；BUILD.md 加「构建环境」一节；CONTRACT.md 的 `toolchain` / `image` 字段与 bundle `[image].line`；PRODUCT.md 的 toolchain 说明；README「目标」一节改成已实现 |
 
 ## 13. 验收（实施后）
+
+实现前已在裸镜像里手工跑过宿主提示 → 装包 → 全量构建的完整流程，踩到的三个坑
+（无 `sudo`、`apt-get update`、`perl-base` 缺 `FindBin`）和国内网络的处理见 §4.6；
+下面是代码实现后的验收命令。
 
 ```bash
 cargo fmt --all
