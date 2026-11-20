@@ -7,6 +7,7 @@ edition = "2024"
 anyhow.workspace = true
 phprt-download.workspace = true
 phprt-source.workspace = true
+phprt-ui.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

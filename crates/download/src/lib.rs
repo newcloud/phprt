@@ -2,7 +2,7 @@ mod candidate;
 mod store;
 mod transfer;
 
-pub use candidate::{GitHubProxy, candidates, is_github_release};
+pub use candidate::{GitHubProxy, candidates, host_bucket, is_github_release};
 pub use store::{archive_name, sha256_file};
 
 use std::collections::{HashMap, VecDeque};
@@ -197,14 +197,15 @@ pub fn fetch_text(url: &str, opts: &Options) -> Result<(String, String)> {
 }
 
 /// 同一站点的并发许可。GitHub 主站和镜像共用一个桶。
-struct HostGate {
+/// catalog 查询也用它限流（10 个并发、同站 2 个，和下载一致）。
+pub struct HostGate {
     limit: usize,
     state: Mutex<HashMap<String, usize>>,
     cv: Condvar,
 }
 
 impl HostGate {
-    fn new(limit: usize) -> Self {
+    pub fn new(limit: usize) -> Self {
         Self {
             limit: limit.max(1),
             state: Mutex::new(HashMap::new()),
@@ -212,7 +213,7 @@ impl HostGate {
         }
     }
 
-    fn acquire(&self, host: &str) {
+    pub fn acquire(&self, host: &str) {
         let mut state = self.state.lock().expect("站点并发锁");
         while state.get(host).copied().unwrap_or(0) >= self.limit {
             state = self.cv.wait(state).expect("站点并发锁");
@@ -220,7 +221,7 @@ impl HostGate {
         *state.entry(host.to_owned()).or_default() += 1;
     }
 
-    fn release(&self, host: &str) {
+    pub fn release(&self, host: &str) {
         let mut state = self.state.lock().expect("站点并发锁");
         if let Some(count) = state.get_mut(host) {
             *count = count.saturating_sub(1);

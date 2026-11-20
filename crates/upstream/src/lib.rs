@@ -9,9 +9,10 @@ mod script;
 mod source;
 mod version;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
 use toml_edit::DocumentMut;
@@ -19,8 +20,9 @@ use toml_edit::DocumentMut;
 pub use report::{Report, Row, Status};
 pub use version::{belongs_to_line, compare, is_unstable};
 
-use phprt_download::Outcome;
+use phprt_download::{HostGate, Outcome, host_bucket};
 use phprt_source::Source;
+use phprt_ui::Tracker;
 
 /// 本次要下载的一条；下载成功后再写进 catalog。
 struct Pending {
@@ -39,7 +41,8 @@ enum Step {
 }
 
 /// 写回前对临时 catalog 的校验函数（main 注入 `Catalog::load`）。
-pub type Validate = dyn Fn(&Path) -> Result<()>;
+/// 查询和下载并行执行，所以要 `Send + Sync`。
+pub type Validate = dyn Fn(&Path) -> Result<()> + Send + Sync;
 
 /// 一次 catalog 更新的全部输入。
 pub struct Options {
@@ -72,79 +75,51 @@ pub fn run(options: Options) -> Result<Report> {
         options.components.clone()
     };
 
-    // 先做完全部判断，再一批下载，最后按原顺序写回：需要下载的文件共享下载器的
-    // 并发队列（10 个文件 / 每站点 2 个），不逐条串行。
-    let mut steps = Vec::new();
+    // 先把任务列出来：每个组件一行，查询和逐条检查都在这行上推进。
+    // 终端里进度框会先显示全部「等待」，查到哪个组件就切到「查询中 / 检查 <线>」；
+    // 非终端（管道、CI）退化成一行一个组件的开始和结束，不会长时间没有输出。
+    let ui = Tracker::new(
+        components
+            .iter()
+            .map(|component| format!("[catalog] {component}"))
+            .collect(),
+        options.download.ui,
+    );
 
-    for component in &components {
-        let lines = match catalog::lines(&doc, component) {
-            Some(lines) => lines,
-            None => {
-                if !options.components.is_empty() {
-                    steps.push(done(
-                        component,
-                        "",
-                        Status::Failed,
-                        "",
-                        "",
-                        "catalog 里没有这个组件".to_owned(),
-                    ));
+    // 查询和下载用同一套并发限制：同时 10 个组件，同一站点最多 2 个。
+    let gate = HostGate::new(options.download.host_jobs);
+    let queue = Mutex::new((0..components.len()).collect::<VecDeque<_>>());
+    let results: Mutex<Vec<Option<Vec<Step>>>> =
+        Mutex::new((0..components.len()).map(|_| None).collect());
+    let jobs = options.download.jobs.max(1).min(components.len().max(1));
+
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| {
+                loop {
+                    let next = queue.lock().expect("查询队列锁").pop_front();
+                    let Some(index) = next else {
+                        break;
+                    };
+                    let steps =
+                        check_component(&options, &doc, &ui, &gate, index, &components[index]);
+                    results.lock().expect("查询结果锁")[index] = Some(steps);
                 }
-                continue;
-            }
-        };
-        let script = match script::Script::load(&options.recipes, component) {
-            Ok(script) => script,
-            Err(err) => {
-                // 全量 sweep 记「跳过」；明确点名要更新、又找不到脚本才算失败。
-                let status = if options.components.is_empty() {
-                    Status::Skipped
-                } else {
-                    Status::Failed
-                };
-                steps.push(done(
-                    component,
-                    "",
-                    status,
-                    "",
-                    "",
-                    format!("没有 upstream 脚本：{err:#}"),
-                ));
-                continue;
-            }
-        };
-
-        // 执行原则：一次查询覆盖全部线；URL 带 {line} 的源按线查（源形态决定）。
-        let fetched_once = if script.url.contains("{line}") {
-            None
-        } else {
-            match source::query(&script, None, &options.download) {
-                Ok(list) => Some(list),
-                Err(err) => {
-                    steps.push(done(
-                        component,
-                        "",
-                        Status::Failed,
-                        "",
-                        "",
-                        format!("查询失败: {err:#}"),
-                    ));
-                    continue;
-                }
-            }
-        };
-
-        for line in &lines {
-            steps.push(plan_line(
-                &options,
-                &doc,
-                component,
-                line,
-                &script,
-                fetched_once.as_ref(),
-            ));
+            });
         }
-    }
+    });
+
+    // 查询阶段的进度框先收掉，下载阶段会建自己的进度框。
+    drop(ui);
+
+    // 按组件原顺序拼回结果，报告顺序和顺序执行时一致。
+    let mut steps: Vec<Step> = results
+        .into_inner()
+        .expect("查询结果锁")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
 
     if options.fill_sha256 {
         plan_fill(&options, &doc, &mut steps);
@@ -156,6 +131,144 @@ pub fn run(options: Options) -> Result<Report> {
         write_back(&options, &catalog_path, &doc)?;
     }
     Ok(report)
+}
+
+/// 判断一个组件：加载脚本、查上游、逐条线检查。返回这个组件的步骤。
+/// 查询也用 `HostGate` 限流；拿不到站点名额时进度行停在「等待」。
+fn check_component(
+    options: &Options,
+    doc: &DocumentMut,
+    ui: &Tracker,
+    gate: &HostGate,
+    index: usize,
+    component: &str,
+) -> Vec<Step> {
+    let mut steps = Vec::new();
+    let lines = match catalog::lines(doc, component) {
+        Some(lines) => lines,
+        None => {
+            if !options.components.is_empty() {
+                steps.push(done(
+                    component,
+                    "",
+                    Status::Failed,
+                    "",
+                    "",
+                    "catalog 里没有这个组件".to_owned(),
+                ));
+                ui.finish(index, "✗", "catalog 里没有这个组件");
+            } else {
+                ui.finish(index, "-", "catalog 里没有这个组件");
+            }
+            return steps;
+        }
+    };
+    let script = match script::Script::load(&options.recipes, component) {
+        Ok(script) => script,
+        Err(err) => {
+            // 全量 sweep 记「跳过」；明确点名要更新、又找不到脚本才算失败。
+            let status = if options.components.is_empty() {
+                Status::Skipped
+            } else {
+                Status::Failed
+            };
+            let note = format!("没有 upstream 脚本：{err:#}");
+            steps.push(done(component, "", status, "", "", note.clone()));
+            ui.finish(
+                index,
+                if status == Status::Failed { "✗" } else { "-" },
+                &note,
+            );
+            return steps;
+        }
+    };
+
+    let host = host_bucket(&script.url);
+    gate.acquire(&host);
+    ui.start(index, "查询中", None);
+
+    // 执行原则：一次查询覆盖全部线；URL 带 {line} 的源按线查（源形态决定）。
+    let per_line = script.url.contains("{line}");
+    let fetched_once = if per_line {
+        None
+    } else {
+        match source::query(&script, None, &options.download) {
+            Ok(list) => Some(list),
+            Err(err) => {
+                let note = format!("查询失败: {err:#}");
+                steps.push(done(component, "", Status::Failed, "", "", note.clone()));
+                gate.release(&host);
+                ui.finish(index, "✗", &note);
+                return steps;
+            }
+        }
+    };
+
+    let before = steps.len();
+    for line in &lines {
+        let verb = if per_line {
+            format!("查询 {line}")
+        } else {
+            format!("检查 {line}")
+        };
+        ui.set_status(index, &verb);
+        steps.push(plan_line(
+            options,
+            doc,
+            component,
+            line,
+            &script,
+            fetched_once.as_ref(),
+        ));
+    }
+    gate.release(&host);
+
+    let (mark, text) = summarize(&steps[before..]);
+    ui.finish(index, mark, &text);
+    steps
+}
+
+/// 一个组件这一轮的结果摘要，用于进度行收尾：`✓ 新增 1 条线，无更新 3 条线`。
+fn summarize(steps: &[Step]) -> (&'static str, String) {
+    let mut new = 0;
+    let mut filled = 0;
+    let mut current = 0;
+    let mut no_candidate = 0;
+    let mut skipped = 0;
+    let mut failed = 0;
+    for step in steps {
+        let status = match step {
+            Step::Done(row) => row.status,
+            Step::Download(item) => item.status,
+        };
+        match status {
+            Status::NewPatch => new += 1,
+            Status::Filled => filled += 1,
+            Status::Current => current += 1,
+            Status::NoCandidate => no_candidate += 1,
+            Status::Skipped => skipped += 1,
+            Status::Failed => failed += 1,
+        }
+    }
+    let mut parts = Vec::new();
+    for (count, label) in [
+        (new, "新增"),
+        (filled, "回填"),
+        (current, "无更新"),
+        (no_candidate, "无候选"),
+        (skipped, "跳过"),
+        (failed, "失败"),
+    ] {
+        if count > 0 {
+            parts.push(format!("{label} {count} 条线"));
+        }
+    }
+    let text = if parts.is_empty() {
+        "完成".to_owned()
+    } else {
+        parts.join("，")
+    };
+    (if failed > 0 { "✗" } else { "✓" }, text)
 }
 
 /// 一条线的判断：取线内最大候选，比当前最大补丁大才排进下载队列。

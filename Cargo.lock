@@ -1443,6 +1443,7 @@ dependencies = [
  "anyhow",
  "phprt-download",
  "phprt-source",
+ "phprt-ui",
  "regex",
  "serde",
  "serde_json",
