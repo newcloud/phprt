@@ -208,6 +208,27 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// 维护 recipes/catalog.toml
+    Catalog {
+        #[command(subcommand)]
+        command: CatalogCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CatalogCmd {
+    /// 查询上游最新补丁，写进 catalog.toml（写前备份）
+    Update {
+        /// 只打印计划，不写文件
+        #[arg(long)]
+        dry_run: bool,
+        // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
+        // /// 回填已有条目缺失的 sha256
+        // #[arg(long = "fill-sha256")]
+        // fill_sha256: bool,
+        /// 只更新这些组件；空表示全部（没有 upstream 脚本的跳过）
+        components: Vec<String>,
+    },
 }
 
 #[derive(Args, Clone, Default)]
@@ -385,6 +406,45 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    // catalog 更新不带产品目标，不需要求解器；逻辑全部在 phprt-upstream 里。
+    if let Cmd::Catalog { command } = &cli.cmd {
+        let report = match command {
+            CatalogCmd::Update {
+                dry_run,
+                components,
+            } => {
+                let backup = match layout::backup_dir_name() {
+                    Some(name) => layout::resolve(&cli.root, name),
+                    None => layout::internal_dir(&cli.root).join("backup"),
+                };
+                phprt_upstream::run(phprt_upstream::Options {
+                    recipes: recipes.clone(),
+                    cache: layout::downloads_dir(&cli.root),
+                    backup_dir: backup,
+                    // 并发 / 分片 / 超时和 install 的默认值一致（docs/DOWNLOAD.md 5）。
+                    download: phprt_download::Options {
+                        jobs: 10,
+                        host_jobs: 2,
+                        connections: 4,
+                        timeout: 900,
+                        proxy: None,
+                        github_proxy: config.github_proxy()?,
+                        offline: false,
+                        ui: Mode::Plain,
+                    },
+                    dry_run: *dry_run,
+                    components: components.clone(),
+                    validate: Box::new(|path| Catalog::load(path).map(|_| ())),
+                })?
+            }
+        };
+        print!("{}", report.text());
+        if report.partial_failure {
+            std::process::exit(3);
+        }
+        return Ok(());
+    }
+
     let mut scheme_list: Option<String> = None;
     let (target_spec, components, target_args, download, goal, json) = match &cli.cmd {
         Cmd::List { target, .. } => (
@@ -499,6 +559,14 @@ fn run() -> Result<()> {
             None,
             None,
             *json,
+        ),
+        Cmd::Catalog { .. } => (
+            String::new(),
+            ComponentArgs::default(),
+            TargetArgs::default(),
+            None,
+            None,
+            false,
         ),
     };
     let cli_targets = if target_args.targets.is_empty() {
@@ -1139,6 +1207,8 @@ fn run() -> Result<()> {
                 );
             }
         }
+        // catalog update 在前面已经 early-return，这里是编译要求的兜底。
+        Cmd::Catalog { .. } => unreachable!("catalog update 已经在前面处理"),
         Cmd::Add { force, .. } => {
             let download = download.expect("add 一定带下载参数");
             let name = raw

@@ -46,7 +46,7 @@ impl Catalog {
         self.lines(name)?
             .get(line)?
             .iter()
-            .max_by(|left, right| crate::version::compare(&left.version, &right.version))
+            .max_by(|left, right| phprt_upstream::compare(&left.version, &right.version))
     }
 
     /// 线里的一个具体补丁；找不到返回 None。

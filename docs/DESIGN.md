@@ -286,6 +286,7 @@ src/
 
 crates/
 ├── download/     下载、镜像、分片续传、进度
+├── upstream/     上游版本查询、upstream star 脚本执行、catalog 写回（CATALOG-UPDATE.md）
 ├── extract/      解压、原子目录、路径安全
 ├── build/        命令执行、签名、日志、产物检查
 ├── source/       下载清单类型
@@ -298,6 +299,7 @@ recipes/
 ├── dep/<名字>.star
 ├── tools/<名字>.star
 ├── bundles/<产品>/<系列>.toml
+├── upstream/<组件>.star
 ├── catalog.toml
 ├── images.toml   镜像条目 [images.*]（镜像模式待实施，见 IMAGE.md）+ 包名映射 [package_maps.*]
 └── defs.star
@@ -350,7 +352,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [STATE.md](STATE.md) | state.json、bindings、line/version |
 | [LOCK.md](LOCK.md) | 解析顺序、`--lock`、`update`、`scheme --lock`、catalog 旧补丁保留 |
 | [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
-| [CATALOG-UPDATE.md](CATALOG-UPDATE.md) | 上游版本查询、每组件 upstream star 脚本、catalog 写回与备份、sha256 获取（待实施，代码未实现） |
+| [CATALOG-UPDATE.md](CATALOG-UPDATE.md) | 上游版本查询、每组件 upstream star 脚本、catalog 写回与备份、sha256 获取 |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |

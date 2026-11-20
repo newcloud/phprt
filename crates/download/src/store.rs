@@ -29,6 +29,20 @@ pub fn size(path: &Path) -> u64 {
     fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// URL 最后一段就是缓存文件名；查询串和锚点不属于文件名。
+///
+/// 实现放在这里，catalog 更新和 install 的缓存命名才不会分叉；
+/// 二进制里的 layout::archive_name 是它的委托。
+pub fn archive_name(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let name = path.rsplit('/').next().unwrap_or("");
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_owned())
+    }
+}
+
 /// 分片续传的元数据。校验值变化时整包重下，避免拼接出坏文件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartMeta {

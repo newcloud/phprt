@@ -605,3 +605,16 @@ fn host_gate_limits_concurrency() {
     });
     assert!(max.load(Ordering::SeqCst) <= 2, "并发超过上限");
 }
+
+#[test]
+fn host_of_strips_scheme_and_port() {
+    assert_eq!(
+        transfer::host_of("https://api.github.com/repos/x/tags"),
+        "api.github.com"
+    );
+    assert_eq!(
+        transfer::host_of("https://user@example.com:8443/a/b"),
+        "example.com"
+    );
+    assert_eq!(transfer::host_of("http://127.0.0.1:8080"), "127.0.0.1");
+}
