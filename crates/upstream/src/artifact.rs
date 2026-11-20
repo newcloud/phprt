@@ -1,16 +1,4 @@
-//! 下载连接的验证、下载和 sha256。
-
-use std::path::Path;
-
-use anyhow::Result;
-
-/// 下载 url 指向的文件到 dest，返回 sha256。
-///
-/// 走和 install 同一条下载路径（候选地址 / 代理 / 续传 / 缓存），
-/// 文件落到 dest（下载缓存里），下次 install 直接命中。
-pub fn download(url: &str, dest: &Path, opts: &phprt_download::Options) -> Result<String> {
-    phprt_download::fetch_file(url, dest, opts)
-}
+//! 下载连接的验证和 sha256。
 
 /// 地址里的文件名版本号必须和 version 一致（docs/CATALOG-UPDATE.md 7）。
 /// catalog 里存的是脚本提取的稳定地址，不是跟随重定向后的临时地址。

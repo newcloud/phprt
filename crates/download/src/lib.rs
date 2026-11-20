@@ -44,8 +44,46 @@ fn finish(ui: &Tracker, index: usize, outcome: &Outcome) {
 }
 
 pub fn run(sources: &[Source], opts: &Options) -> Result<()> {
+    let results = run_outcomes(sources, opts)?;
     if sources.is_empty() {
         return Ok(());
+    }
+    let mut done = 0;
+    let mut skipped = 0;
+    let mut failed = Vec::new();
+    for (index, outcome) in results.iter().enumerate() {
+        match outcome {
+            Outcome::Done(_) => done += 1,
+            Outcome::Skipped(_) => skipped += 1,
+            Outcome::Failed(reason) => failed.push((index, reason.clone())),
+        }
+    }
+
+    if failed.is_empty() {
+        eprintln!("下载完成: {done} 个，已存在 {skipped} 个");
+        return Ok(());
+    }
+
+    eprintln!();
+    eprintln!("下载失败 {} 个（文件保留，下次运行可继续）:", failed.len());
+    for (index, reason) in &failed {
+        let source = &sources[*index];
+        eprintln!("  [{}] {} {}", source.label, source.name, source.version);
+        eprintln!("    {}", source.url);
+        eprintln!("    原因: {reason}");
+        let candidates = candidate::candidates(&source.url, &opts.github_proxy);
+        if candidates.len() > 1 {
+            eprintln!("    镜像: {}", candidates[1]);
+        }
+    }
+    bail!("{} 个源码包下载失败", failed.len())
+}
+
+/// 和 `run` 同一个下载队列，但把每个文件的结果按输入顺序交回调用方，
+/// 单个文件失败不影响其它文件。catalog 更新用来一批下载多个组件。
+pub fn run_outcomes(sources: &[Source], opts: &Options) -> Result<Vec<Outcome>> {
+    if sources.is_empty() {
+        return Ok(Vec::new());
     }
     let cache = sources[0]
         .archive
@@ -110,36 +148,10 @@ pub fn run(sources: &[Source], opts: &Options) -> Result<()> {
     ui.clear();
 
     let results = results.into_inner().expect("下载结果锁");
-    let mut done = 0;
-    let mut skipped = 0;
-    let mut failed = Vec::new();
-    for (index, outcome) in results.iter().enumerate() {
-        match outcome {
-            Some(Outcome::Done(_)) => done += 1,
-            Some(Outcome::Skipped(_)) => skipped += 1,
-            Some(Outcome::Failed(reason)) => failed.push((index, reason.clone())),
-            None => {}
-        }
-    }
-
-    if failed.is_empty() {
-        eprintln!("下载完成: {done} 个，已存在 {skipped} 个");
-        return Ok(());
-    }
-
-    eprintln!();
-    eprintln!("下载失败 {} 个（文件保留，下次运行可继续）:", failed.len());
-    for (index, reason) in &failed {
-        let source = &sources[*index];
-        eprintln!("  [{}] {} {}", source.label, source.name, source.version);
-        eprintln!("    {}", source.url);
-        eprintln!("    原因: {reason}");
-        let candidates = candidate::candidates(&source.url, &opts.github_proxy);
-        if candidates.len() > 1 {
-            eprintln!("    镜像: {}", candidates[1]);
-        }
-    }
-    bail!("{} 个源码包下载失败", failed.len())
+    Ok(results
+        .into_iter()
+        .map(|outcome| outcome.unwrap_or_else(|| Outcome::Failed("没有执行".to_owned())))
+        .collect())
 }
 
 /// 跟随重定向后的最终地址。按候选地址顺序探测（和安装期同一套镜像逻辑），
@@ -158,24 +170,6 @@ pub fn final_url(url: &str, opts: &Options) -> Result<String> {
         }
     }
     bail!("探测不到可达地址: {url}")
-}
-
-/// 下载单个文件到 dest，返回 sha256。复用 `run()` 的候选地址 / 代理 / 续传 / 缓存
-/// 逻辑，catalog 更新和 install 走同一条路径。
-pub fn fetch_file(url: &str, dest: &Path, opts: &Options) -> Result<String> {
-    let name = archive_name(url).unwrap_or_else(|| "source".to_owned());
-    let source = Source {
-        label: "upstream".to_owned(),
-        name,
-        version: String::new(),
-        url: url.to_owned(),
-        sha256: String::new(),
-        archive: dest.to_path_buf(),
-        unpack: dest.to_path_buf(),
-        unpack_display: String::new(),
-    };
-    run(&[source], opts)?;
-    store::sha256_file(dest)
 }
 
 /// 拿一个地址的文本内容，跟重定向，返回 (最终地址, 正文)。

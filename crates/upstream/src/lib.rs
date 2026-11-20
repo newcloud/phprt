@@ -18,6 +18,25 @@ use toml_edit::DocumentMut;
 pub use report::{Report, Row, Status};
 pub use version::{belongs_to_line, compare, is_unstable};
 
+use phprt_download::Outcome;
+use phprt_source::Source;
+
+/// 本次要下载的一条；下载成功后再写进 catalog。
+struct Pending {
+    component: String,
+    line: String,
+    status: Status,
+    version: String,
+    url: String,
+    dest: PathBuf,
+}
+
+/// 按组件 / 线的处理顺序排好的步骤：已有结论的直接出报告，要下载的等整批跑完。
+enum Step {
+    Done(Row),
+    Download(Pending),
+}
+
 /// 写回前对临时 catalog 的校验函数（main 注入 `Catalog::load`）。
 pub type Validate = dyn Fn(&Path) -> Result<()>;
 
@@ -52,19 +71,23 @@ pub fn run(options: Options) -> Result<Report> {
         options.components.clone()
     };
 
+    // 先做完全部判断，再一批下载，最后按原顺序写回：需要下载的文件共享下载器的
+    // 并发队列（10 个文件 / 每站点 2 个），不逐条串行。
+    let mut steps = Vec::new();
+
     for component in &components {
         let lines = match catalog::lines(&doc, component) {
             Some(lines) => lines,
             None => {
                 if !options.components.is_empty() {
-                    report.push(
+                    steps.push(done(
                         component,
                         "",
                         Status::Failed,
                         "",
                         "",
                         "catalog 里没有这个组件".to_owned(),
-                    );
+                    ));
                 }
                 continue;
             }
@@ -78,14 +101,14 @@ pub fn run(options: Options) -> Result<Report> {
                 } else {
                     Status::Failed
                 };
-                report.push(
+                steps.push(done(
                     component,
                     "",
                     status,
                     "",
                     "",
                     format!("没有 upstream 脚本：{err:#}"),
-                );
+                ));
                 continue;
             }
         };
@@ -97,35 +120,36 @@ pub fn run(options: Options) -> Result<Report> {
             match source::query(&script, None, &options.download) {
                 Ok(list) => Some(list),
                 Err(err) => {
-                    report.push(
+                    steps.push(done(
                         component,
                         "",
                         Status::Failed,
                         "",
                         "",
                         format!("查询失败: {err:#}"),
-                    );
+                    ));
                     continue;
                 }
             }
         };
 
         for line in &lines {
-            update_line(
+            steps.push(plan_line(
                 &options,
-                &mut doc,
-                &mut report,
+                &doc,
                 component,
                 line,
                 &script,
                 fetched_once.as_ref(),
-            );
+            ));
         }
     }
 
     if options.fill_sha256 {
-        fill_sha256(&options, &mut doc, &mut report);
+        plan_fill(&options, &doc, &mut steps);
     }
+
+    apply_steps(&options, &mut doc, &mut report, steps)?;
 
     if report.changed() && !options.dry_run {
         write_back(&options, &catalog_path, &doc)?;
@@ -133,23 +157,21 @@ pub fn run(options: Options) -> Result<Report> {
     Ok(report)
 }
 
-/// 一条线的更新：取线内最大候选，比当前最大补丁大才下载、写回。
-#[allow(clippy::too_many_arguments)]
-fn update_line(
+/// 一条线的判断：取线内最大候选，比当前最大补丁大才排进下载队列。
+fn plan_line(
     options: &Options,
-    doc: &mut DocumentMut,
-    report: &mut Report,
+    doc: &DocumentMut,
     component: &str,
     line: &str,
     script: &script::Script,
     once: Option<&Vec<source::Candidate>>,
-) {
+) -> Step {
     let candidates = match once {
         Some(list) => list.clone(),
         None => match source::query(script, Some(line), &options.download) {
             Ok(list) => list,
             Err(err) => {
-                report.push(
+                return done(
                     component,
                     line,
                     Status::Failed,
@@ -157,7 +179,6 @@ fn update_line(
                     "",
                     format!("查询失败: {err:#}"),
                 );
-                return;
             }
         },
     };
@@ -171,7 +192,7 @@ fn update_line(
         .iter()
         .max_by(|a, b| version::compare(&a.version, &b.version))
     else {
-        report.push(
+        return done(
             component,
             line,
             Status::Current,
@@ -179,12 +200,11 @@ fn update_line(
             "",
             "该线没有候选".to_owned(),
         );
-        return;
     };
     if let Some(cur) = &current
         && version::compare(&best.version, cur) != std::cmp::Ordering::Greater
     {
-        report.push(
+        return done(
             component,
             line,
             Status::Current,
@@ -192,12 +212,11 @@ fn update_line(
             "",
             format!("已是最新 {cur}"),
         );
-        return;
     }
 
     // 先核对文件名版本，再探测可达性；dry-run 到此为止，不下载文件。
     if !artifact::filename_matches(&best.url, &best.version) {
-        report.push(
+        return done(
             component,
             line,
             Status::Failed,
@@ -205,10 +224,9 @@ fn update_line(
             &best.url,
             "下载连接里的文件名版本号和提取出的版本不一致，不写入".to_owned(),
         );
-        return;
     }
     if let Err(err) = phprt_download::final_url(&best.url, &options.download) {
-        report.push(
+        return done(
             component,
             line,
             Status::Failed,
@@ -216,10 +234,9 @@ fn update_line(
             &best.url,
             format!("连接不可达: {err:#}"),
         );
-        return;
     }
     if options.dry_run {
-        report.push(
+        return done(
             component,
             line,
             Status::NewPatch,
@@ -227,117 +244,217 @@ fn update_line(
             &best.url,
             "dry-run：未写文件".to_owned(),
         );
-        return;
     }
-    let name = phprt_download::archive_name(&best.url)
-        .unwrap_or_else(|| format!("{component}-{line}-download"));
-    let dest = options.cache.join(&name);
-    let digest = match artifact::download(&best.url, &dest, &options.download) {
-        Ok(digest) => digest,
-        Err(err) => {
-            report.push(
-                component,
-                line,
-                Status::Failed,
-                &best.version,
-                &best.url,
-                format!("下载失败: {err:#}"),
-            );
-            return;
-        }
-    };
-    match catalog::append_patch(
-        doc,
+    download_step(
+        options,
         component,
         line,
-        &catalog::Patch {
-            version: best.version.clone(),
-            url: best.url.clone(),
-            sha256: digest,
-        },
-    ) {
-        Ok(true) => report.push(
-            component,
-            line,
-            Status::NewPatch,
-            &best.version,
-            &best.url,
-            String::new(),
-        ),
-        Ok(false) => report.push(
-            component,
-            line,
-            Status::Current,
-            &best.version,
-            "",
-            "catalog 里已有这个版本".to_owned(),
-        ),
-        Err(err) => report.push(
-            component,
-            line,
-            Status::Failed,
-            &best.version,
-            "",
-            format!("写 catalog 失败: {err:#}"),
-        ),
-    }
+        Status::NewPatch,
+        &best.version,
+        &best.url,
+    )
 }
 
 /// 回填已有条目缺失的 sha256；已有值的条目不动。
 /// 传了组件名时只处理这些组件（和更新范围一致，docs/CATALOG-UPDATE.md 15）。
-fn fill_sha256(options: &Options, doc: &mut DocumentMut, report: &mut Report) {
+fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
     let missing = catalog::missing_sha256(doc);
     for (component, line, version, url) in missing {
         if !options.components.is_empty() && !options.components.contains(&component) {
             continue;
         }
-        let name = phprt_download::archive_name(&url)
-            .unwrap_or_else(|| format!("{component}-{version}-download"));
-        let dest = options.cache.join(&name);
-        let digest = match artifact::download(&url, &dest, &options.download) {
-            Ok(digest) => digest,
-            Err(err) => {
-                report.push(
-                    &component,
-                    &line,
-                    Status::Failed,
-                    &version,
-                    "",
-                    format!("下载失败: {err:#}"),
-                );
-                continue;
-            }
-        };
         if options.dry_run {
-            report.push(
+            steps.push(done(
                 &component,
                 &line,
                 Status::Filled,
                 &version,
                 "",
                 "dry-run：未写文件".to_owned(),
-            );
+            ));
             continue;
         }
-        match catalog::fill_sha256(doc, &component, &line, &version, &digest) {
+        steps.push(download_step(
+            options,
+            &component,
+            &line,
+            Status::Filled,
+            &version,
+            &url,
+        ));
+    }
+}
+
+fn done(
+    component: &str,
+    line: &str,
+    status: Status,
+    version: &str,
+    url: &str,
+    note: String,
+) -> Step {
+    Step::Done(Row {
+        component: component.to_owned(),
+        line: line.to_owned(),
+        status,
+        version: version.to_owned(),
+        url: url.to_owned(),
+        note,
+    })
+}
+
+fn download_step(
+    options: &Options,
+    component: &str,
+    line: &str,
+    status: Status,
+    version: &str,
+    url: &str,
+) -> Step {
+    let name = phprt_download::archive_name(url)
+        .unwrap_or_else(|| format!("{component}-{version}-download"));
+    Step::Download(Pending {
+        component: component.to_owned(),
+        line: line.to_owned(),
+        status,
+        version: version.to_owned(),
+        url: url.to_owned(),
+        dest: options.cache.join(name),
+    })
+}
+
+/// 一批下载结束后，按判断顺序逐条算哈希、写进 catalog。
+fn apply_steps(
+    options: &Options,
+    doc: &mut DocumentMut,
+    report: &mut Report,
+    steps: Vec<Step>,
+) -> Result<()> {
+    let pending: Vec<(usize, &Pending)> = steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| match step {
+            Step::Download(item) => Some((index, item)),
+            Step::Done(_) => None,
+        })
+        .collect();
+
+    let mut outcomes: Vec<Option<Outcome>> = (0..steps.len()).map(|_| None).collect();
+    if !pending.is_empty() {
+        let sources: Vec<Source> = pending
+            .iter()
+            .map(|(_, item)| Source {
+                label: "upstream".to_owned(),
+                name: phprt_download::archive_name(&item.url)
+                    .unwrap_or_else(|| format!("{}-{}-download", item.component, item.version)),
+                version: item.version.clone(),
+                url: item.url.clone(),
+                sha256: String::new(),
+                archive: item.dest.clone(),
+                unpack: item.dest.clone(),
+                unpack_display: String::new(),
+            })
+            .collect();
+        let results = phprt_download::run_outcomes(&sources, &options.download)?;
+        for ((index, _), outcome) in pending.iter().zip(results) {
+            outcomes[*index] = Some(outcome);
+        }
+    }
+
+    for (index, step) in steps.into_iter().enumerate() {
+        match step {
+            Step::Done(row) => report.push_row(row),
+            Step::Download(item) => {
+                let outcome = outcomes[index].take().expect("下载结果");
+                apply_one(doc, report, &item, outcome);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome: Outcome) {
+    if let Outcome::Failed(reason) = outcome {
+        report.push(
+            &item.component,
+            &item.line,
+            Status::Failed,
+            &item.version,
+            &item.url,
+            format!("下载失败: {reason}"),
+        );
+        return;
+    }
+    let digest = match phprt_download::sha256_file(&item.dest) {
+        Ok(digest) => digest,
+        Err(err) => {
+            report.push(
+                &item.component,
+                &item.line,
+                Status::Failed,
+                &item.version,
+                &item.url,
+                format!("算 sha256 失败: {err:#}"),
+            );
+            return;
+        }
+    };
+    if item.status == Status::Filled {
+        match catalog::fill_sha256(doc, &item.component, &item.line, &item.version, &digest) {
             Ok(true) => report.push(
-                &component,
-                &line,
+                &item.component,
+                &item.line,
                 Status::Filled,
-                &version,
+                &item.version,
                 "",
                 String::new(),
             ),
             Ok(false) => {}
             Err(err) => report.push(
-                &component,
-                &line,
+                &item.component,
+                &item.line,
                 Status::Failed,
-                &version,
+                &item.version,
                 "",
                 format!("回填失败: {err:#}"),
             ),
         }
+        return;
+    }
+    match catalog::append_patch(
+        doc,
+        &item.component,
+        &item.line,
+        &catalog::Patch {
+            version: item.version.clone(),
+            url: item.url.clone(),
+            sha256: digest,
+        },
+    ) {
+        Ok(true) => report.push(
+            &item.component,
+            &item.line,
+            Status::NewPatch,
+            &item.version,
+            &item.url,
+            String::new(),
+        ),
+        Ok(false) => report.push(
+            &item.component,
+            &item.line,
+            Status::Current,
+            &item.version,
+            "",
+            "catalog 里已有这个版本".to_owned(),
+        ),
+        Err(err) => report.push(
+            &item.component,
+            &item.line,
+            Status::Failed,
+            &item.version,
+            "",
+            format!("写 catalog 失败: {err:#}"),
+        ),
     }
 }
 

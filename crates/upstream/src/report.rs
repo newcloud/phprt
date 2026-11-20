@@ -47,10 +47,7 @@ impl Report {
         url: &str,
         note: String,
     ) {
-        if status == Status::Failed {
-            self.partial_failure = true;
-        }
-        self.rows.push(Row {
+        self.push_row(Row {
             component: component.to_owned(),
             line: line.to_owned(),
             status,
@@ -58,6 +55,14 @@ impl Report {
             url: url.to_owned(),
             note,
         });
+    }
+
+    /// 直接放一条已经拼好的结果。
+    pub fn push_row(&mut self, row: Row) {
+        if row.status == Status::Failed {
+            self.partial_failure = true;
+        }
+        self.rows.push(row);
     }
 
     /// 本轮有没有对 catalog 做改动（新增或回填）。

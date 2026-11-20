@@ -1442,6 +1442,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "phprt-download",
+ "phprt-source",
  "regex",
  "serde",
  "serde_json",

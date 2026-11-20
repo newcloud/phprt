@@ -1,6 +1,6 @@
 # catalog 自动更新
 
-状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源 / webp / aom 共 23 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
+状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源 / webp / aom / 9 个 GitHub Releases 组件共 32 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
 
 目标读者：维护 `recipes/catalog.toml` 的人，以及实现这个功能的 agent。
 
@@ -129,8 +129,9 @@ php.net 的 URL 带线，属于源形态决定的按线访问；其余形态一�
       → 核对文件名版本与提取版本一致
       → Range 0-0 探测连接可达（跟重定向，复用镜像候选）
       → --dry-run 到此为止，只打印计划
-      → 下载文件算 sha256 → 追加到线数组末尾
-  → --fill-sha256：已有条目里 sha256 为空的逐个下载补齐
+      → 全部线判断完，把要下载的条目一次交给下载队列算 sha256（10 个文件 / 每站点 2 个）
+      → 按原顺序追加到线数组末尾
+  → --fill-sha256：已有条目里 sha256 为空的进入同一个下载批次补齐
   → 有改动且非 dry-run：备份 catalog → 写临时文件 → Catalog::load 复检 → 原子替换
   → 打印报告（新增 / 回填 / 无更新 / 跳过 / 失败）；有组件失败退出码 3
 ```
@@ -225,7 +226,7 @@ v == line
 
 - 新增条目：下载成功且 sha256 非空才写；下载失败就跳过这条并报告。
 - 已有条目：默认不动。
-- 回填：`--fill-sha256` 遍历 catalog 里所有 `sha256` 为空的条目，逐个下载补齐；已经是 64 位十六进制的跳过。
+- 回填：`--fill-sha256` 遍历 catalog 里所有 `sha256` 为空的条目，逐个下载补齐；已经是 64 位十六进制的跳过。`--dry-run` 只列出待回填条目，不下载。
 - 回填和新增条目共用同一份下载缓存。
 
 ### 8.3 缓存文件名
@@ -281,7 +282,7 @@ v == line
 
 - 比较逻辑是两个目标共用的（第 6.3 节）。已落在 `crates/upstream/src/version.rs`（带单测）；`src/version.rs::compare` 已删除，`src/catalog.rs` 改调 `phprt_upstream::compare`。
 - star 脚本求值复用现有 starlark 依赖：`crates/upstream` 直接依赖 `starlark`，脚本解析在 `script.rs::Script::parse`；recipe 的 `eval_meta` / `eval_target` 仍在二进制里，两处不共享代码。
-- 下载复用 `phprt-download`：`final_url` / `fetch_file` / `fetch_text` / `archive_name` 已导出为 `pub`，catalog 更新和 install 走同一条下载路径，不复制第二份。
+- 下载复用 `phprt-download`：`final_url` / `run_outcomes` / `fetch_text` / `archive_name` 已导出为 `pub`，catalog 更新和 install 走同一条下载路径，不复制第二份；需要下载的条目先全部收进一个批次，一次交给下载队列（10 个文件 / 每站点 2 个），不逐条串行。
 - GitHub 匿名 API 每小时 60 次。一个仓库一次请求，约 15 个 GitHub 组件，够用；`fetch_text` 对 github.com URL 自动带 `GITHUB_TOKEN` Bearer，限流失败按组件报告。
 
 ## 12. 测试计划
@@ -355,6 +356,11 @@ cargo run -- catalog update --fill-sha256 xdebug
   autoconf（GNU FTP）/ libyaml（pyyaml.org）/ libsodium，全部是目录索引页 + join。
 - 4.3 已完成（2026-11-20）：aom（GCS S3 XML 列表）/ webp（GCS 目录是 2014 年的空
   对象、没有列表页，改走 GitHub tags API + GCS join 模板，与 PECL 同构）。
+- 4.4 已完成（2026-11-20）：pcre2 / c-ares / libssh2 / nghttp2 / patchelf / jpeg /
+  libheif / libde265 / oniguruma 共 9 个 GitHub Releases 源。asset 前缀各写各的
+  （`pcre2-`、`c-ares-`、`libssh2-`、`nghttp2-`、`patchelf-`、`libjpeg-turbo-`、
+  `libheif-`、`libde265-`、`onig-`），`patchelf-<版本>-x86_64.tar.gz` 这类平台变体
+  靠版本正则排除。下载从逐条串行改成整批进下载队列（10 文件 / 每站点 2）。
 
 ## 13. 决策与讨论记录
 
@@ -493,6 +499,26 @@ cargo run -- catalog update --dry-run openssl zlib
   没有漏进低线（线归属过滤端到端验证）；
 - `--fill-sha256` 回填 1.5.0 / 3.12.0 的哈希，并用独立 curl 下载核验逐字一致；
 - 第二遍「无更新」、catalog 字节不变；全量 sweep `--dry-run` 无下载、无备份。
+
+第五轮实测（2026-11-20，4.4 批次，直接在 `recipes/catalog.toml` 上把 9 条线改旧）：
+
+- 夹具：pcre2 10.48 / c-ares 1.34.8 / libssh2 1.11.0 / patchelf 0.19.2 / jpeg 3.1.0 /
+  libheif 1.23.6 / libde265 1.1.2 / oniguruma 6.9.9 改旧后一轮全部补回最新补丁；
+  nghttp2 线内只有 1.64.0，把条目临时写成 1.63.0 后补回 1.64.0；
+- 线归属反例：nghttp2 全仓 136 条 Release（`per_page=100` 只取第一页），全局最高
+  1.71.0 没漏进 1.64 线；jpeg 全局最高 3.2.1（beta，`3.1.90` 类）没进 3.1 线，补的
+  是 3.1.4.1；
+- 哈希：libssh2 / patchelf / jpeg / libheif / oniguruma 补出的值与原 catalog 逐字一致；
+  pcre2 `929f0b20…`、c-ares `9364b70a…`、nghttp2 `20e73f3c…`、libde265 `554228bd…`
+  原来没写 sha256，`--fill-sha256` 回填后用缓存文件独立 `sha256sum` 核验一致；
+- 第二遍 9 个组件全部「无更新」，catalog 字节不变，无新备份；
+- 清空下载缓存重跑：5 个补丁同时进队列（「并发: 10 个文件（每站点 2）」），全部
+  下载成功，sha256 与 catalog 原值一致；
+- 全量 sweep `--dry-run`（49 个组件、32 个有脚本、17 个跳过）用 `GITHUB_TOKEN` 跑完：
+  40 条线「无更新」、17 个组件「跳过」、0 失败；8 条线发现上游新补丁（php 8.2.36 /
+  8.3.37 / 8.4.28 / 8.5.13、openssl 3.0.22 / 4.0.3、swoole 5.1.8 / 6.2.6），dry-run
+  不写文件，catalog 字节不变、零下载、零备份。这些补丁留给专门的一次不带 `--dry-run`
+  的运行，不混进本批次提交。
 
 ## 15. 风险
 

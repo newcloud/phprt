@@ -421,7 +421,7 @@ fn run() -> Result<()> {
                     cache: layout::downloads_dir(&cli.root),
                     backup_dir: backup,
                     download: phprt_download::Options {
-                        jobs: 1,
+                        jobs: 10,
                         host_jobs: 2,
                         connections: 1,
                         timeout: 120,
