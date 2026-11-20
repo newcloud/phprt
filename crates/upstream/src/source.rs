@@ -36,11 +36,17 @@ pub fn extract(script: &Script, body: &str, line: Option<&str>) -> Result<Vec<Ca
         let Some(link) = cap.name("link").map(|m| m.as_str().to_owned()) else {
             continue;
         };
-        let Some(version) = script
-            .version
-            .captures(&link)
-            .and_then(|cap| cap.name("version"))
+        let Some(version) = cap
+            .name("version")
             .map(|m| m.as_str().to_owned())
+            .or_else(|| {
+                script
+                    .version
+                    .as_ref()
+                    .and_then(|regex| regex.captures(&link))
+                    .and_then(|cap| cap.name("version"))
+                    .map(|m| m.as_str().to_owned())
+            })
         else {
             continue;
         };
@@ -123,6 +129,28 @@ UPSTREAM = {
         );
         let body = r#"<a href="README.md">README</a>"#;
         assert!(extract(&script, body, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn version_can_come_from_the_link_regex() {
+        // sqlite 的下载页里版本和相对地址在同一行，没有单独的 version 槽位。
+        let script = script(
+            r#"
+UPSTREAM = {
+    "url": "https://www.sqlite.org/download.html",
+    "link": r'PRODUCT,(?P<version>[0-9.]+),(?P<link>[^,\n]*sqlite-autoconf-[0-9]+\.tar\.gz),',
+    "join": "https://www.sqlite.org/{link}",
+}
+"#,
+        );
+        let body = "PRODUCT,3.54.1,2026/sqlite-autoconf-3540100.tar.gz,3332984,abc\n";
+        let list = extract(&script, body, None).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].version, "3.54.1");
+        assert_eq!(
+            list[0].url,
+            "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz"
+        );
     }
 
     #[test]

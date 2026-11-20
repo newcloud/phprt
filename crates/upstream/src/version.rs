@@ -104,15 +104,16 @@ pub fn is_unstable(version: &str) -> bool {
     digits.parse::<u64>().is_ok_and(|number| number >= 90)
 }
 
-/// 候选版本是否属于 catalog 已有的线：相等、以「线.」开头，
-/// 或以线开头且下一个字符是字母（openssl 1.1.1w 属于 1.1.1 线）。
+/// 候选版本是否属于 catalog 已有的线：相等、以「线.」开头、以线开头且下一个
+/// 字符是字母（openssl 1.1.1w），或以「线-数字」开头（luajit 的
+/// `2.1-20261117` 日期快照）。
 pub fn belongs_to_line(version: &str, line: &str) -> bool {
     version == line
         || version.starts_with(&format!("{line}."))
-        || (version.starts_with(line)
-            && version
-                .get(line.len()..)
-                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_alphabetic())))
+        || version.strip_prefix(line).is_some_and(|rest| {
+            rest.starts_with(|c: char| c.is_ascii_alphabetic())
+                || (rest.starts_with('-') && rest[1..].starts_with(|c: char| c.is_ascii_digit()))
+        })
 }
 
 #[cfg(test)]
@@ -162,6 +163,8 @@ mod tests {
         assert!(belongs_to_line("8.5.13", "8.5"));
         assert!(belongs_to_line("1.1.1w", "1.1.1"));
         assert!(belongs_to_line("1.1.1", "1.1.1"));
+        assert!(belongs_to_line("2.1-20261117", "2.1"));
+        assert!(!belongs_to_line("1.0-alpha1", "1.0"));
         assert!(!belongs_to_line("4.1.0", "4.0"));
         assert!(!belongs_to_line("3.50.1", "3.5"));
         assert!(!belongs_to_line("1.3.2", "1.2"));

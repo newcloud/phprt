@@ -1,6 +1,6 @@
 # catalog 自动更新
 
-状态：已实现 openssl / zlib / php / 13 个 PECL 扩展 / 5 个目录索引源 / webp / aom / 9 个 GitHub Releases 组件 / 6 个 GitHub tag 归档组件共 38 源并过验收（2026-11-20，第 14 节有实测结果）；其余源按 12.4 分批。
+状态：已实现 catalog 里全部 49 个组件的 upstream 脚本并过验收（2026-11-20，第 14 节有实测结果）。
 
 目标读者：维护 `recipes/catalog.toml` 的人，以及实现这个功能的 agent。
 
@@ -93,13 +93,14 @@ v2 把查询规则写在 recipe 里（`upstream=` / `versions()`），v3 不沿�
 | 槽位 | 必需 | 内容 |
 | --- | --- | --- |
 | `url` | 是 | 访问哪个地址拿版本和下载连接列表；可含 `{line}`，只有 URL 本身按线划分的源才写（如 php.net） |
-| `link` | 是 | 从返回内容抽下载连接的正则，必须有命名组 `link` |
-| `version` | 是 | 从下载连接抽版本的正则，必须有命名组 `version`（`v2.1.33` 这类前缀在正则里过滤掉） |
+| `link` | 是 | 从返回内容抽下载连接的正则，必须有命名组 `link`；版本和连接在同一行时（如 sqlite 的 `PRODUCT,<版本>,<相对地址>`）可以再给一个命名组 `version` |
+| `version` | 否 | 从下载连接抽版本的正则，必须有命名组 `version`（`v2.1.33` 这类前缀在正则里过滤掉）；`link` 已给 `version` 组时省略 |
 | `join` | 否 | 连接是相对地址时拼绝对地址的模板，如 `"https://x/fossils/{link}"`；源按线分目录时可含 `{line}`（此时 `url` 必须也带 `{line}`） |
 
 槽位缺名、类型不对、正则不合法都在加载时报错，不静默忽略。示例见
 `recipes/upstream/openssl.star`（GitHub Releases API）、`zlib.star`（目录索引 + join）
-和 `libxml2.star`（GNOME 按线分目录，url 和 join 都带 `{line}`）。
+和 `libxml2.star`（GNOME 按线分目录，url 和 join 都带 `{line}`）；
+`sqlite.star` 是版本和连接同一行的写法。
 
 ### 4.2 上游源的形态（事实记录）
 
@@ -171,6 +172,7 @@ catalog 已有线做归属过滤；同一组件的多条线（如 openssl 的 `1
 v == line
 或 v 以 "line." 开头
 或 v 以 line 开头且下一个字符是 ASCII 字母（处理 openssl 1.1.1w）
+或 v 以 "line-" 开头且连字符后是数字（处理 luajit 的 2.1-20261117 日期快照）
 ```
 
 线本身不改名、不新增。该线没有新补丁时输出「无更新」。
@@ -206,6 +208,9 @@ v == line
 写进 catalog 前要满足：
 
 - 地址里的文件名版本号必须和 `version` 一致；
+- 版本和连接从同一行提取时（`link` 自带 `version` 组、没有 `version` 槽位，如 sqlite
+  的 `PRODUCT,3.54.1,2026/sqlite-autoconf-3540100.tar.gz`）不做这项核对：两者同源，
+  `3540100` 和 `3.54.1` 的对应关系由脚本在同一行声明；
 - 写进 catalog 的是脚本提取的**稳定地址**：GitHub Release asset 的最终地址是带签名的临时 URL，会过期，不落盘；下载期由下载器自己跟重定向；
 - 可达性用 `Range: bytes=0-0` 探测（接受 200 / 206 / 416），复用下载器的镜像候选和代理逻辑，不另写一套；
 - 检查失败就不写这一条，报告失败原因。
@@ -344,6 +349,7 @@ cargo run -- catalog update --fill-sha256 xdebug
 | 4.5 | GitHub tag 归档（avif、libmemcached、rabbitmq-c、librdkafka 等） | tag 无直链，必须模板拼 |
 | 4.6 | curl、sqlite、libpng | 页面特殊、文件名与版本不直接对应 |
 | 4.7 | luajit、lua-resty-*、ImageMagick | tag 形式不规则；接每个源时同步加上它的比较器分类 |
+| 4.8 | libtiff、libzip、nginx | 都是目录索引，按 4.2 的做法补 |
 
 每批完成后跑同一套夹具：把已知最新补丁清掉 → 抓回 → 比对；再跑一遍确认幂等。全部批次完成后再做一次全量回填和全量「无更新」检查。
 
@@ -366,6 +372,18 @@ cargo run -- catalog update --fill-sha256 xdebug
   地址按 `archive/refs/tags/{link}.tar.gz` 拼；version 正则带首尾锚点，`rc` /
   `-RC4` / `R1` 这类后缀 tag 不进候选。libimagequant 的 4.x tag 不属于 catalog
   的 2.18 线，靠线归属过滤。
+- 4.6 已完成（2026-11-20）：libcurl（curl.se `/download/` 目录索引，下载页只列
+  最新）、sqlite（官方下载页末尾的 `PRODUCT,<版本>,<相对地址>` 行）、libpng
+  （SourceForge RSS，拼 `downloads.sourceforge.net` 稳定直链）。sqlite 的版本和
+  地址在同一行，`link` 正则直接给 `version` 组，不写 `version` 槽位；这种同源
+  提取不做文件名版本核对（见 4.1、7）。
+- 4.7 已完成（2026-11-20）：luajit（日期快照 tag `v2.1-20261117`，版本保留完整
+  快照号，线归属增加「line-数字」规则）/ lua-resty-core / lua-resty-lrucache /
+  lua-nginx-module（rc 与 `R1` tag 过滤）/ imagemagick（`7.1.2-36` 连字符后缀按
+  数值比较）。catalog 里 imagemagick 的「只能手工改」注释已同步删掉。
+- 4.8 已完成（2026-11-20）：libtiff（osgeo 目录索引，rc 包靠版本正则排除）/
+  libzip（libzip.org 下载页，绝对和相对 href 都接）/ nginx（nginx.org 目录索引）。
+  至此 catalog 的 49 个组件全部有 upstream 脚本。
 
 ## 13. 决策与讨论记录
 
@@ -538,6 +556,46 @@ cargo run -- catalog update --dry-run openssl zlib
 - 六个文件一次进队列同时下载（10 文件 / 每站点 2 个上限），全部成功；
 - 空数组线的插入格式正确（`"1.3" = [ { version = ..., url = ... } ]`），catalog 可被
   `Catalog::load` 复检通过。
+
+第七轮实测（2026-11-20，4.7 批次，夹具 `/tmp/upstream-fixture-4.7`）：
+
+- 改旧后一轮补回：luajit `2.1-20261117`（原来写整线 `2.1`，现在记完整快照号）、
+  lua-resty-core 0.1.32、lua-resty-lrucache 0.15、lua-nginx-module 0.10.31、
+  imagemagick 7.1.2-36；
+- luajit 的 `2.1-20261117` 通过新增的「line-数字」线归属规则进入 2.1 线，
+  `v2.1.0-beta3` 被 link 正则排除；
+- imagemagick 的连字符后缀走数值比较（`7.1.2-36 > 7.1.2-35`），补丁号和 url
+  都对；
+- 真实 catalog 上 `--dry-run` 只报出这三条真实更新（luajit / lua-nginx-module /
+  imagemagick），lua-resty-core / lua-resty-lrucache 报「无更新」；
+- 5 个文件同时下载（10 文件 / 每站点 2 个），全部成功。
+
+第八轮实测（2026-11-20，4.6 + 4.8 批次，夹具 `/tmp/upstream-fixture-4.6`）：
+
+- 七条线清空后一轮补回：libcurl 8.23.0、libcurl 7.88.1、sqlite 3.54.1、
+  libpng 1.6.59、libtiff 4.7.2、libzip 1.12.1、nginx 1.29.8；url 与 catalog
+  原值逐字一致；
+- libcurl 的 `/download/` 目录索引同时命中 8.23.0 和 7.88 线的 7.88.1（一个真实
+  的新补丁）；下载页 download.html 只列最新，不能当数据源；
+- sqlite 从 `PRODUCT,3.54.1,2026/sqlite-autoconf-3540100.tar.gz` 同一行取版本和
+  地址；文件名不含 `3.54.1`，靠「同源提取不做文件名核对」通过；
+- libpng 走 SourceForge RSS，url 与 catalog 的 `downloads.sourceforge.net` 直链
+  一致；libtiff 的 `tiff-4.7.2rc4.tar.gz` 不进候选；
+- 哈希：libcurl 8.23.0 `8dadd7d2…`、sqlite `926ef8d3…`、libpng `d80dd2a3…`、
+  libtiff `672bd7d1…`、libzip `3b66fe92…` 与 catalog 原值一致；nginx 原来没写
+  sha256，本次补出 `7f1b985d…`；
+- 一次写入触发复检失败（sqlite 线没补上导致空数组），报错保留原文件并留备份，
+  修正文件名核对后重跑成功——写回前的 `Catalog::load` 复检按设计拦住了半成品。
+
+第九轮实测（2026-11-20，49 个脚本齐全后的全量 sweep）：
+
+- `phprt catalog update --dry-run` 在真实 `recipes/catalog.toml` 上跑完：53 条线
+  「无更新」、0 跳过、0 失败、退出码 0；catalog 字节不变、零下载、备份目录没有新文件；
+- 13 条线报出真实新补丁：php 8.2.36 / 8.3.37 / 8.4.28 / 8.5.13、openssl 3.0.22 /
+  4.0.3、swoole 5.1.8 / 6.2.6、libcurl 7.88.1、libmemcached 1.1.5、imagemagick
+  7.1.2-36、luajit 2.1-20261117、lua-nginx-module 0.10.31；
+- 这批更新留给一次不带 `--dry-run` 的 `phprt catalog update` 写入；写完后按需
+  `phprt update <产品>@<系列>` 才跟到新补丁。
 
 ## 15. 风险
 

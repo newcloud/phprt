@@ -178,7 +178,8 @@
 [libmemcached]
 "1.1" = [ { version = "1.1.4", url = "https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz", sha256 = "c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a" } ]
 
-# ImageMagick 的 tag 是 7.1.2-35 这种带连字符的形式，版本比较工具只认纯数字，升级时手工改。
+# ImageMagick 的 tag 是 7.1.2-35 这种带连字符的形式；比较器按数值比后缀，
+# catalog update 可以自动升补丁（见 docs/CATALOG-UPDATE.md 6.3）。
 [imagemagick]
 "7.1" = [ { version = "7.1.2-35", url = "https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-35.tar.gz", sha256 = "40b6fefa88fe16ca5a4b3d3db5133eaebfb0157f21f98530bde8aec5dd5b0776" } ]
 

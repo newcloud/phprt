@@ -215,7 +215,9 @@ fn plan_line(
     }
 
     // 先核对文件名版本，再探测可达性；dry-run 到此为止，不下载文件。
-    if !artifact::filename_matches(&best.url, &best.version) {
+    // 版本和连接从同一行提取时（link 自带 version 组，如 sqlite）不核对：
+    // 两者同源，文件名和版本不直接对应是源本身的编码，脚本已经声明了对应关系。
+    if script.version.is_some() && !artifact::filename_matches(&best.url, &best.version) {
         return done(
             component,
             line,

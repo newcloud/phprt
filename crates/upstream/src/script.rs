@@ -28,8 +28,9 @@ pub struct Script {
     pub url: String,
     /// 从返回内容抽下载连接的正则（命名组 link）。
     pub link: Regex,
-    /// 从下载连接抽版本的正则（命名组 version）。
-    pub version: Regex,
+    /// 从下载连接抽版本的正则（命名组 version）；`link` 自带 `version` 组时
+    /// 为 None（版本和连接从同一行一起提取，如 sqlite 的 PRODUCT 行）。
+    pub version: Option<Regex>,
     /// 相对连接拼成绝对地址的模板；没有则连接本身是绝对地址。
     pub join: Option<String>,
 }
@@ -64,10 +65,21 @@ impl Script {
         let url = string_field(fields, "url")?.to_owned();
         let link = Regex::new(string_field(fields, "link")?)
             .with_context(|| format!("{component} 的 link 不是合法正则"))?;
-        let version = Regex::new(string_field(fields, "version")?)
-            .with_context(|| format!("{component} 的 version 不是合法正则"))?;
         require_group(&link, "link", component)?;
-        require_group(&version, "version", component)?;
+        let version = match fields.get("version") {
+            Some(Value::String(_)) => {
+                let regex = Regex::new(string_field(fields, "version")?)
+                    .with_context(|| format!("{component} 的 version 不是合法正则"))?;
+                require_group(&regex, "version", component)?;
+                Some(regex)
+            }
+            Some(_) => bail!("{component} 的 version 必须是字符串"),
+            None => {
+                // 没有 version 槽位时，版本必须和连接一起从 link 正则里抽出来。
+                require_group(&link, "version", component)?;
+                None
+            }
+        };
         let join = match fields.get("join") {
             Some(Value::String(join)) => Some(join.clone()),
             Some(_) => bail!("{component} 的 join 必须是字符串"),
@@ -148,6 +160,8 @@ UPSTREAM = {
             .unwrap();
         let version = script
             .version
+            .as_ref()
+            .unwrap()
             .captures(&link)
             .and_then(|cap| cap.name("version"))
             .map(|m| m.as_str().to_owned())
@@ -168,6 +182,8 @@ UPSTREAM = {
         let script = Script::parse("demo", src).unwrap();
         let version = script
             .version
+            .as_ref()
+            .unwrap()
             .captures("v2.1.33")
             .and_then(|cap| cap.name("version"))
             .map(|m| m.as_str().to_owned())
