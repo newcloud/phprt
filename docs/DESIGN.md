@@ -297,6 +297,7 @@ recipes/
 ├── dep/<名字>.star
 ├── tools/<名字>.star
 ├── bundles/<产品>/<系列>.toml
+├── upstream/<组件>.star
 ├── catalog.toml
 └── defs.star
 ```

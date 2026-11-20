@@ -546,7 +546,8 @@ fn request(
 }
 
 /// 带额外请求头的版本；其余行为和 `request` 一致。
-/// catalog 更新给 GitHub API 带 `GITHUB_TOKEN` 用。
+/// catalog 更新给 GitHub API 带 `GITHUB_TOKEN` 用。跳到别的站点时丢掉
+/// `Authorization`，避免把 token 发给重定向目标。
 pub fn request_with(
     agent: &Agent,
     method: Method,
@@ -554,6 +555,7 @@ pub fn request_with(
     range: Option<&str>,
     headers: &[(&str, &str)],
 ) -> Result<(String, Response<Body>)> {
+    let origin = host_of(url).to_owned();
     let mut current = url.to_owned();
     for _ in 0..MAX_REDIRECTS {
         let mut req = if method == Method::GET {
@@ -564,7 +566,11 @@ pub fn request_with(
         if let Some(range) = range {
             req = req.header("Range", range);
         }
+        let same_host = host_of(&current) == origin;
         for (name, value) in headers.iter().copied() {
+            if !same_host && name.eq_ignore_ascii_case("authorization") {
+                continue;
+            }
             req = req.header(name, value);
         }
         let resp = req.call().with_context(|| format!("请求失败: {current}"))?;
@@ -582,6 +588,14 @@ pub fn request_with(
         current = join_url(&current, &location)?;
     }
     bail!("重定向次数过多: {url}")
+}
+
+/// URL 的 host（去掉 userinfo 和端口）；解析不出来时退回空串。
+pub(crate) fn host_of(url: &str) -> &str {
+    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    authority.split(':').next().unwrap_or(authority)
 }
 
 fn join_url(base: &str, location: &str) -> Result<String> {

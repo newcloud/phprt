@@ -9,10 +9,11 @@ mod script;
 mod source;
 mod version;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use toml_edit::DocumentMut;
 
 pub use report::{Report, Row, Status};
@@ -52,8 +53,9 @@ pub struct Options {
     pub download: phprt_download::Options,
     /// 只打印计划，不写文件。
     pub dry_run: bool,
-    /// 回填已有条目缺失的 sha256。
-    pub fill_sha256: bool,
+    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
+    // /// 回填已有条目缺失的 sha256。
+    // pub fill_sha256: bool,
     /// 只更新这些组件；空表示全部。
     pub components: Vec<String>,
     /// 写回前对临时文件做和加载时一样的校验（main 传 Catalog::load）。
@@ -95,8 +97,8 @@ pub fn run(options: Options) -> Result<Report> {
         let script = match script::Script::load(&options.recipes, component) {
             Ok(script) => script,
             Err(err) => {
-                // 回填不需要脚本；只有明确点名要更新、又找不到脚本才算失败。
-                let status = if options.components.is_empty() || options.fill_sha256 {
+                // 全量 sweep 记「跳过」；明确点名要更新、又找不到脚本才算失败。
+                let status = if options.components.is_empty() {
                     Status::Skipped
                 } else {
                     Status::Failed
@@ -145,9 +147,10 @@ pub fn run(options: Options) -> Result<Report> {
         }
     }
 
-    if options.fill_sha256 {
-        plan_fill(&options, &doc, &mut steps);
-    }
+    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
+    // if options.fill_sha256 {
+    //     plan_fill(&options, &doc, &mut steps);
+    // }
 
     apply_steps(&options, &mut doc, &mut report, steps)?;
 
@@ -195,10 +198,10 @@ fn plan_line(
         return done(
             component,
             line,
-            Status::Current,
+            Status::NoCandidate,
             "",
             "",
-            "该线没有候选".to_owned(),
+            "上游返回里没有属于这条线的版本（接口可能只返回最近若干条）".to_owned(),
         );
     };
     if let Some(cur) = &current
@@ -257,35 +260,36 @@ fn plan_line(
     )
 }
 
-/// 回填已有条目缺失的 sha256；已有值的条目不动。
-/// 传了组件名时只处理这些组件（和更新范围一致，docs/CATALOG-UPDATE.md 15）。
-fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
-    let missing = catalog::missing_sha256(doc);
-    for (component, line, version, url) in missing {
-        if !options.components.is_empty() && !options.components.contains(&component) {
-            continue;
-        }
-        if options.dry_run {
-            steps.push(done(
-                &component,
-                &line,
-                Status::Filled,
-                &version,
-                "",
-                "dry-run：未写文件".to_owned(),
-            ));
-            continue;
-        }
-        steps.push(download_step(
-            options,
-            &component,
-            &line,
-            Status::Filled,
-            &version,
-            &url,
-        ));
-    }
-}
+// 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
+// /// 回填已有条目缺失的 sha256；已有值的条目不动。
+// /// 传了组件名时只处理这些组件（和更新范围一致）。
+// fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
+//     let missing = catalog::missing_sha256(doc);
+//     for (component, line, version, url) in missing {
+//         if !options.components.is_empty() && !options.components.contains(&component) {
+//             continue;
+//         }
+//         if options.dry_run {
+//             steps.push(done(
+//                 &component,
+//                 &line,
+//                 Status::Filled,
+//                 &version,
+//                 "",
+//                 "dry-run：未写文件".to_owned(),
+//             ));
+//             continue;
+//         }
+//         steps.push(download_step(
+//             options,
+//             &component,
+//             &line,
+//             Status::Filled,
+//             &version,
+//             &url,
+//         ));
+//     }
+// }
 
 fn done(
     component: &str,
@@ -325,6 +329,27 @@ fn download_step(
     })
 }
 
+/// 同一批里两个不同地址落到同一个缓存文件名时直接失败：否则两个任务写同一个
+/// 文件，最后都会对同一个文件算哈希，把其中一条的 sha256 写错。install 的清单
+/// 生成也有同样的检查（src/sources.rs）。
+fn check_cache_names(pending: &[(usize, &Pending)]) -> Result<()> {
+    let mut seen: BTreeMap<&Path, (&str, &str)> = BTreeMap::new();
+    for (_, item) in pending {
+        if let Some((other_component, other_url)) =
+            seen.insert(item.dest.as_path(), (&item.component, &item.url))
+            && other_url != item.url
+        {
+            bail!(
+                "缓存文件名冲突: {}（{other_component} 用 {other_url}，{} 用 {}）",
+                item.dest.display(),
+                item.component,
+                item.url
+            );
+        }
+    }
+    Ok(())
+}
+
 /// 一批下载结束后，按判断顺序逐条算哈希、写进 catalog。
 fn apply_steps(
     options: &Options,
@@ -340,6 +365,8 @@ fn apply_steps(
             Step::Done(_) => None,
         })
         .collect();
+
+    check_cache_names(&pending)?;
 
     let mut outcomes: Vec<Option<Outcome>> = (0..steps.len()).map(|_| None).collect();
     if !pending.is_empty() {
@@ -401,28 +428,29 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
             return;
         }
     };
-    if item.status == Status::Filled {
-        match catalog::fill_sha256(doc, &item.component, &item.line, &item.version, &digest) {
-            Ok(true) => report.push(
-                &item.component,
-                &item.line,
-                Status::Filled,
-                &item.version,
-                "",
-                String::new(),
-            ),
-            Ok(false) => {}
-            Err(err) => report.push(
-                &item.component,
-                &item.line,
-                Status::Failed,
-                &item.version,
-                "",
-                format!("回填失败: {err:#}"),
-            ),
-        }
-        return;
-    }
+    // 已停用 --fill-sha256：回填会连带升补丁，行为待定；代码保留，不删除。
+    // if item.status == Status::Filled {
+    //     match catalog::fill_sha256(doc, &item.component, &item.line, &item.version, &digest) {
+    //         Ok(true) => report.push(
+    //             &item.component,
+    //             &item.line,
+    //             Status::Filled,
+    //             &item.version,
+    //             "",
+    //             String::new(),
+    //         ),
+    //         Ok(false) => {}
+    //         Err(err) => report.push(
+    //             &item.component,
+    //             &item.line,
+    //             Status::Failed,
+    //             &item.version,
+    //             "",
+    //             format!("回填失败: {err:#}"),
+    //         ),
+    //     }
+    //     return;
+    // }
     match catalog::append_patch(
         doc,
         &item.component,
@@ -436,7 +464,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
         Ok(true) => report.push(
             &item.component,
             &item.line,
-            Status::NewPatch,
+            item.status,
             &item.version,
             &item.url,
             String::new(),
@@ -477,4 +505,49 @@ fn write_back(options: &Options, path: &Path, doc: &DocumentMut) -> Result<()> {
     println!("已备份: {}", saved.display());
     println!("已写入: {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending(component: &str, url: &str) -> Pending {
+        let name = phprt_download::archive_name(url).expect("URL 有文件名");
+        Pending {
+            component: component.to_owned(),
+            line: "1.0".to_owned(),
+            status: Status::NewPatch,
+            version: "1.0.0".to_owned(),
+            url: url.to_owned(),
+            dest: PathBuf::from("/cache").join(name),
+        }
+    }
+
+    #[test]
+    fn different_urls_with_the_same_cache_name_are_rejected() {
+        // GitHub tag 归档的文件名是裸的 <tag>.tar.gz，两个仓库同 tag 就会撞名。
+        let items = [
+            pending(
+                "avif",
+                "https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.4.2.tar.gz",
+            ),
+            pending(
+                "other",
+                "https://github.com/someone/other/archive/refs/tags/v1.4.2.tar.gz",
+            ),
+        ];
+        let steps: Vec<(usize, &Pending)> = items.iter().enumerate().collect();
+        let err = check_cache_names(&steps).unwrap_err();
+        assert!(err.to_string().contains("缓存文件名冲突"), "{err}");
+    }
+
+    #[test]
+    fn the_same_url_shares_one_cache_file() {
+        let items = [
+            pending("avif", "https://x/v1.4.2.tar.gz"),
+            pending("avif", "https://x/v1.4.2.tar.gz"),
+        ];
+        let steps: Vec<(usize, &Pending)> = items.iter().enumerate().collect();
+        assert!(check_cache_names(&steps).is_ok());
+    }
 }

@@ -24,6 +24,8 @@ pub enum Status {
     Filled,
     /// 线内没有更大的补丁。
     Current,
+    /// 上游返回里没有属于这条线的版本（可能超出接口返回范围）；不是失败，但要人看。
+    NoCandidate,
     /// 组件没有 upstream 脚本，跳过。
     Skipped,
     /// 查询、解析或下载失败。
@@ -111,6 +113,7 @@ fn status_label(status: Status) -> &'static str {
         Status::NewPatch => "新增补丁",
         Status::Filled => "回填 sha256",
         Status::Current => "无更新",
+        Status::NoCandidate => "无候选",
         Status::Skipped => "跳过",
         Status::Failed => "失败",
     }

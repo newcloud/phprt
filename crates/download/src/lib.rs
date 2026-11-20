@@ -173,7 +173,8 @@ pub fn final_url(url: &str, opts: &Options) -> Result<String> {
 }
 
 /// 拿一个地址的文本内容，跟重定向，返回 (最终地址, 正文)。
-/// GitHub 接口在 GITHUB_TOKEN 环境变量存在时带 Bearer 鉴权（提升限流额度）。
+/// GitHub API 在 GITHUB_TOKEN 环境变量存在时带 Bearer 鉴权（提升限流额度）；
+/// token 只发给 api.github.com，别的站点和源码下载都不带。
 pub fn fetch_text(url: &str, opts: &Options) -> Result<(String, String)> {
     let agents = transfer::agents(opts)?;
     let agent = if is_github_release(url) {
@@ -181,7 +182,7 @@ pub fn fetch_text(url: &str, opts: &Options) -> Result<(String, String)> {
     } else {
         &agents.normal
     };
-    let token = if url.contains("github.com") {
+    let token = if transfer::host_of(url) == "api.github.com" {
         std::env::var("GITHUB_TOKEN").ok()
     } else {
         None
