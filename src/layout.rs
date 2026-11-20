@@ -135,14 +135,9 @@ pub fn backup_dir_name() -> Option<&'static str> {
 }
 
 /// URL 最后一段就是缓存文件名；查询串和锚点不属于文件名。
+/// 实现在 phprt-download::store，和下载缓存同一套命名。
 pub fn archive_name(url: &str) -> Option<String> {
-    let path = url.split(['?', '#']).next().unwrap_or(url);
-    let name = path.rsplit('/').next().unwrap_or("");
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_owned())
-    }
+    phprt_download::archive_name(url)
 }
 
 /// 去掉压缩后缀，得到解压目录名。

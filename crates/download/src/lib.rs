@@ -2,7 +2,8 @@ mod candidate;
 mod store;
 mod transfer;
 
-pub use candidate::GitHubProxy;
+pub use candidate::{GitHubProxy, candidates, is_github_release};
+pub use store::{archive_name, sha256_file};
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
 
 use anyhow::{Context, Result, bail};
+use ureq::http::Method;
 
 use phprt_source::Source;
 use phprt_ui::{Mode, Tracker, human, tag};
@@ -138,6 +140,70 @@ pub fn run(sources: &[Source], opts: &Options) -> Result<()> {
         }
     }
     bail!("{} 个源码包下载失败", failed.len())
+}
+
+/// 跟随重定向后的最终地址。按候选地址顺序探测（和安装期同一套镜像逻辑），
+/// 发 `Range: bytes=0-0` 只读 1 字节，接受 200 / 206 / 416；全部不可达才报错。
+pub fn final_url(url: &str, opts: &Options) -> Result<String> {
+    let agents = transfer::agents(opts)?;
+    for (position, candidate) in candidates(url, &opts.github_proxy).into_iter().enumerate() {
+        let direct = position == 0 && is_github_release(url);
+        let agent = if direct {
+            &agents.direct
+        } else {
+            &agents.normal
+        };
+        if let Ok(probe) = transfer::probe(agent, &candidate) {
+            return Ok(probe.url);
+        }
+    }
+    bail!("探测不到可达地址: {url}")
+}
+
+/// 下载单个文件到 dest，返回 sha256。复用 `run()` 的候选地址 / 代理 / 续传 / 缓存
+/// 逻辑，catalog 更新和 install 走同一条路径。
+pub fn fetch_file(url: &str, dest: &Path, opts: &Options) -> Result<String> {
+    let name = archive_name(url).unwrap_or_else(|| "source".to_owned());
+    let source = Source {
+        label: "upstream".to_owned(),
+        name,
+        version: String::new(),
+        url: url.to_owned(),
+        sha256: String::new(),
+        archive: dest.to_path_buf(),
+        unpack: dest.to_path_buf(),
+        unpack_display: String::new(),
+    };
+    run(&[source], opts)?;
+    store::sha256_file(dest)
+}
+
+/// 拿一个地址的文本内容，跟重定向，返回 (最终地址, 正文)。
+/// GitHub 接口在 GITHUB_TOKEN 环境变量存在时带 Bearer 鉴权（提升限流额度）。
+pub fn fetch_text(url: &str, opts: &Options) -> Result<(String, String)> {
+    let agents = transfer::agents(opts)?;
+    let agent = if is_github_release(url) {
+        &agents.direct
+    } else {
+        &agents.normal
+    };
+    let token = if url.contains("github.com") {
+        std::env::var("GITHUB_TOKEN").ok()
+    } else {
+        None
+    };
+    let auth = token.map(|token| format!("Bearer {token}"));
+    let mut headers: Vec<(&str, &str)> = Vec::new();
+    if let Some(value) = &auth {
+        headers.push(("Authorization", value.as_str()));
+    }
+    let (final_url, resp) = transfer::request_with(agent, Method::GET, url, None, &headers)?;
+    let status = resp.status().as_u16();
+    if status >= 400 {
+        bail!("HTTP {status}")
+    }
+    let body = resp.into_body().read_to_string()?;
+    Ok((final_url, body))
 }
 
 /// 同一站点的并发许可。GitHub 主站和镜像共用一个桶。

@@ -135,6 +135,7 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `add <产品>@<系列> <组件> [--force] [--lock]` | 把组件加入方案并立即增量构建 | 是 |
 | `remove <产品>@<系列> <组件> [--force] [--lock]` | 移出方案并删掉产物；静态组件重编 | 是 |
 | `audit <产品>@<系列> [--json]` | 对照上游选项清单检查 recipe 的处置 | 否 |
+| `catalog update [--dry-run] [--fill-sha256] [组件名...]` | 查上游最新补丁，写进 `catalog.toml`（写前备份） | 否（改 catalog.toml） |
 | `list_oci_images` | 打印镜像 catalog：线名、镜像、GCC、glibc、包管理器（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
 | `build <产品>@<系列> [--image <线名>]` | 构建并输出 OCI 镜像（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
 
@@ -561,6 +562,25 @@ phprt audit nginx@1.29
 - 依赖库只给数量统计：库的选项大多由 recipe 固定，不要求全部做成 feature。
 - 详见 [FEATURES.md](FEATURES.md)。
 
+## catalog update
+
+查询上游最新补丁，把 url 和 sha256 写进 `recipes/catalog.toml`（写前备份）。只改
+catalog，不改 recipe、bundle、state。查询规则在 `recipes/upstream/<组件名>.star`，
+同一组件的多条线共享一次查询；sha256 一律下载文件后计算；不新增版本线。完整方案见
+[CATALOG-UPDATE.md](CATALOG-UPDATE.md)。
+
+```bash
+phprt catalog update                              # 全部有脚本的组件
+phprt catalog update openssl zlib                 # 只更新点名的组件
+phprt catalog update --dry-run                    # 只打印计划，不下载不写文件
+phprt catalog update --fill-sha256 xdebug         # 回填已有条目缺失的 sha256
+```
+
+- 只在线内升补丁；候选版本不属于 catalog 已有线时不写入。
+- 没有 upstream 脚本的组件：全量 sweep 记「跳过」，点名更新记「失败」。
+- 单个组件失败不中断其它组件；报告按组件列出「新增 / 回填 / 无更新 / 跳过 / 失败」。
+- 退出码：全部成功 0；备份或写入失败 1；有组件失败但其余成功 3。
+
 ## 版本线
 
 `--component` / `add` 的 `version:` 选的是**版本线**，不是补丁号：
@@ -665,4 +685,5 @@ xdebug           external  shared             3.5.3      available
 | 压缩包越界路径 | `压缩包里有越界路径: ../x` |
 | 解压失败 | `解压 <文件> 失败: ...`（退出码 1，不写状态） |
 
-除 Ctrl-C（130）外，任何错误都退出码 1。
+除 Ctrl-C（130）外，任何错误都退出码 1；`catalog update` 有组件失败但其余成功时
+退出码 3。

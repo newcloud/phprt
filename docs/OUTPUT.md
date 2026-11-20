@@ -368,3 +368,22 @@ component:openssl
   `{option, state, detail?}`，`state` 为 `configure` / `feature` / `ignored` / `missing`。
 - `features[]` 带 `default_on`（当前系列 bundle 是否默认开）和 `available`（requires 是否满足）。
 - `audited=false` 的组件（产品 profile 的 `audit=none`）不要求处置选项。
+
+## 10. catalog update
+
+```text
+$ phprt catalog update openssl zlib
+已备份: .phprt/backup/20261120-101010_catalog.toml
+已写入: recipes/catalog.toml
+openssl 3.5: 新增补丁 3.5.9
+  url: https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz
+zlib 1.3: 无更新
+```
+
+- 每行一个「组件 [线]: 状态 [版本]」；状态标签是「新增补丁 / 回填 sha256 /
+  无更新 / 跳过 / 失败」。
+- `url` 行只在非空时打印；note 行打印失败原因、「该线没有候选」「已是最新 <版本>」
+  等，非空才打印。
+- `已备份:` / `已写入:` 两行只在真正写文件时打印；`--dry-run` 不打印，也不下载。
+- 没有任何行时打印「没有组件可更新（catalog 为空，或全部组件没有 upstream 脚本）」。
+- 有组件失败但其余成功时退出码 3；其余错误仍是 1。

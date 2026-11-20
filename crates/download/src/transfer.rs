@@ -247,11 +247,11 @@ fn transfer_once(
     single(agent, item, &probe, ui, index)
 }
 
-struct Probe {
+pub struct Probe {
     /// 用户给出的候选地址（不含跳转后的签名参数），用于续传比对。
     origin: String,
     /// 跳转后的最终地址，实际请求用它。
-    url: String,
+    pub url: String,
     total: Option<u64>,
     ranges: bool,
     etag: String,
@@ -259,7 +259,7 @@ struct Probe {
 }
 
 /// 用 `Range: bytes=0-0` 探测总长和分片能力；只读 1 字节。
-fn probe(agent: &Agent, url: &str) -> Result<Probe> {
+pub fn probe(agent: &Agent, url: &str) -> Result<Probe> {
     let (final_url, mut resp) = request(agent, Method::GET, url, Some("bytes=0-0"))?;
     let status = resp.status().as_u16();
     let etag = header(&resp, "etag");
@@ -542,6 +542,18 @@ fn request(
     url: &str,
     range: Option<&str>,
 ) -> Result<(String, Response<Body>)> {
+    request_with(agent, method, url, range, &[])
+}
+
+/// 带额外请求头的版本；其余行为和 `request` 一致。
+/// catalog 更新给 GitHub API 带 `GITHUB_TOKEN` 用。
+pub fn request_with(
+    agent: &Agent,
+    method: Method,
+    url: &str,
+    range: Option<&str>,
+    headers: &[(&str, &str)],
+) -> Result<(String, Response<Body>)> {
     let mut current = url.to_owned();
     for _ in 0..MAX_REDIRECTS {
         let mut req = if method == Method::GET {
@@ -551,6 +563,9 @@ fn request(
         };
         if let Some(range) = range {
             req = req.header("Range", range);
+        }
+        for (name, value) in headers.iter().copied() {
+            req = req.header(name, value);
         }
         let resp = req.call().with_context(|| format!("请求失败: {current}"))?;
         if !resp.status().is_redirection() {
