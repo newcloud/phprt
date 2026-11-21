@@ -23,8 +23,9 @@ CLI.md、BUILD.md、CONTRACT.md 和 DESIGN.md；本文与代码冲突时以代�
 
 ## 2. 两个依赖，不要混
 
-- **容器化构建**需要一个容器运行时来执行命令（podman / docker）。这是外部命令
-  依赖，性质和 gcc 一样，不是可选项。
+- **容器化构建**需要一个容器运行时来执行命令（podman / docker / kiri）。
+  这是外部命令依赖，性质和 gcc 一样，不是可选项。怎么选、怎么拼命令、各家差在哪，
+  见 [CONTAINER.md](CONTAINER.md)。
 - **打包镜像**不需要 daemon 来做 `docker build`。用 Rust 的 `oci-spec` 出类型，
   `tar` + `flate2` 写层，`sha2` 算 digest。
 
@@ -42,7 +43,7 @@ CLI.md、BUILD.md、CONTRACT.md 和 DESIGN.md；本文与代码冲突时以代�
 bundle 给默认、state 记实际选择。产品 recipe 里永远不出现 `debian:12`。
 
 宿主构建不需要这一节；`[package_maps.*]` 由宿主安装提示和镜像模式共用，镜像条目
-`[images.*]` 只在 `--image <线名>`（或 `build` 出镜像）时用到。
+`[images.*]` 只在 `--buildbyimage`（或 `build` 出镜像）时用到。
 
 ### 3.1 catalog：`recipes/images.toml`
 
@@ -168,35 +169,40 @@ line = "fedora43"
 
 ```json
 "image": {
-  "line": "debian12",
-  "image": "docker.io/library/debian:12",
+  "line": "debian13",
+  "image": "docker.io/library/debian:13",
   "digest": "sha256:...",
-  "gcc": "12.2",
-  "glibc": "2.36"
+  "gcc": "14.2",
+  "glibc": "2.41",
+  "toolchain": "phprt-toolchain:php-8.5-debian13"
 }
 ```
 
 - 新增可选字段，旧 state 没有时按 bundle 默认处理，schema 版本不升。
-- 构建签名新增两项：镜像的 **digest** 和 `build_backend`。
+- 构建签名新增：原镜像的 **digest** 和「本地 / 镜像」两种构建方式。
   用 digest 不用线名，因为同一行的 tag 会漂；glibc 不单独进签名，digest 已经覆盖。
+- 工具链镜像的 ID 不进签名：累加工具不改变原镜像的 libc，不应该触发全量重编。
+  state 里只记 tag，下次复用和排查用。
 - 影响：签名输入变了，已有安装树在升级后会判定签名变化并重编一次。
   这是必要的一次性成本，切换后端却不重编会拿到另一套 libc 编出来的产物。
-- `--lock` 复用 state 里的镜像 digest。该 digest 在 catalog 里查不到时报错，
-  不偷偷换回当前线，规则同 [LOCK.md](LOCK.md)。
+- `--lock` 复用 state 里的镜像 digest。catalog 线按 catalog 查；用户镜像按本地
+  `image inspect` 查，查不到就报错提示重新 pull，不偷偷换回默认线，规则同
+  [LOCK.md](LOCK.md)。
 
 ### 3.5 求解与优先级
 
 和现有五层优先级一致：catalog < recipe < bundle < state < CLI。
 
-1. **默认**：宿主构建（`build_backend = "local"`），不选镜像。
-   `build_backend = "container"` 或给了 `--image` 时进入镜像模式。
-2. **指定**：`--image <线名>`。只查 `recipes/images.toml`；查不到就报错，
-   并提示 `phprt list_oci_images`。
-3. **`build` 出镜像**：没给 `--image` 就用 bundle 的 `[image].line`；
-   没有默认线时报错。
-4. **gcc 匹配**：产品声明了 `toolchain` 时，用镜像条目的 `gcc` 匹配区间：
-   - 匹配：继续，按选中档位合并 CFLAGS；
-   - 不匹配：报错，写清镜像 gcc、产品要求的区间，并列出 catalog 里满足的线。
+1. **默认**：宿主构建，不进入镜像模式。
+2. **`--buildbyimage`**：进入镜像模式。
+   - 空值：用 bundle 的 `[image].line`；没有默认线时报错。
+   - catalog 线名（`debian13`）：用条目的 image / digest / pm / gcc / glibc。
+   - 完整镜像 ref：当作用户自己 pull 的镜像；digest 从本地 `image inspect` 取，
+     pm 和工具版本在容器里探测。没有 gcc 预检，构建完工具链镜像后再验证。
+3. **原镜像必须在本地**：三种来源都先 `image inspect`，没有就报错，不自动 pull。
+4. **gcc 匹配**：产品声明了 `toolchain` 时：
+   - catalog 线：用条目 `gcc` 匹配区间，不匹配直接报错并列出满足的线；
+   - 用户镜像：无法预检，工具链镜像构建完跑 `gcc --version` 验证，不满足报错。
 
    产品没有 `toolchain` 声明时跳过这一条。
 5. **glibc 只提示**：
@@ -208,81 +214,89 @@ line = "fedora43"
 
    不阻塞、不需要 `--force`。用户选这个镜像就代表接受这个运行下限。
 
-第一版不做“拿任意镜像名直接构建”的兜底，也不做自动挑线；`--image` 只认 catalog
-里的线名。将来要自动选时，仍然用同一套 gcc 区间当筛选条件。
-
 ## 4. 容器化构建
 
-### 4.1 接缝在命令执行层
+### 4.1 不是长驻容器，而是工具链镜像
 
-[DESIGN.md](DESIGN.md) 第 11 节写明：`crates/build` 只接收「工作目录 + 命令 +
-环境 + 产物」，不关心产品。容器化就改这一层：
+`--buildbyimage` 进入镜像构建模式。流程不是「起一个容器逐条 exec」，而是：
 
-```toml
-# phprt.toml
-build_backend = "local"           # local（默认）/ container
-container_runtime = "podman"      # 不写时自动探测 podman → docker
+```text
+plan（在原镜像或已有工具链镜像里）
+  → 工具状态 + 安装命令 + Dockerfile
+宿主构建工具链镜像
+在工具链镜像里跑 phprt install
 ```
 
-`local` 保持现在的行为，一行不改。`container` 时每条构建命令包成一次容器执行。
-**求解、拓扑、签名、日志格式、日志路径全部不动。** 如果容器化需要动 `plan.rs`
-或构建流程，说明接缝选错了。
+- phprt 本身进容器跑，容器里就是本地模式；`crates/build` 一行不改。
+- 宿主只做三件事：`image inspect` 检查镜像、`build` 生成工具链镜像、`run` 起
+  plan / install 容器。不逐条拼 `exec`，也不关心产品。
+- 原镜像必须由用户自己 pull；phprt 只检查本地有没有，不自动拉。
+- 完整流程、挂载、状态文件、复用规则见 [CONTAINER.md](CONTAINER.md)。
 
-### 4.2 一次安装 = 一个容器
+### 4.2 两种镜像
 
-不要每个节点起一个容器。做法是：`install` / `build` 开始时起一个常驻容器，
-项目根 bind mount 进去，所有节点按拓扑序在里面执行，结束销毁。
+| 镜像 | 谁产生 | 作用 |
+| --- | --- | --- |
+| 原镜像（base） | 用户 `podman pull` / `docker pull` | 只读底座 |
+| 工具链镜像（toolchain） | phprt 生成 | 带 gcc / make / perl 等工具，可复用、可累加 |
 
-- `build/`、`.phprt/`、`.phprt/downloads/` 都在挂载里，所以**下载和解压仍然在宿主
-  做**。镜像站、代理、分片续传、`--offline` 全部原样复用，不在容器里再实现一遍。
-- 容器内用当前 uid/gid 跑（`--user $(id -u):$(id -g)`）。否则宿主上会留下一堆
-  root 拥有的文件，下一次本地构建就动不了。
-- `tools` 检查照旧在容器内执行。缺 gcc 就报缺 gcc，不跳过。
+默认 tag：
 
-### 4.3 builder 镜像内容：从 recipe 自动装依赖
+```text
+phprt-toolchain:<产品>-<系列>-<原镜像标识>
+例：phprt-toolchain:php-8.5-debian13
+```
 
-镜像本身只保证有基础系统；构建工具按 recipe 自动安装，不再维护一份固定的
-builder 包清单。
+第二次用同一个原镜像时，默认复用上次的工具链镜像，只补新增工具；装工具链太慢，
+不重复装。复用选择、兼容判断、`--no-accumulate` 见 [CONTAINER.md](CONTAINER.md) §4。
 
-0. **bootstrap（可选，先跑）**：镜像条目里的 `bootstrap` 命令按顺序执行，用来改包源、
-   加 GPG key 这类前置动作。只在镜像模式、以 root 在容器里跑；`plan` 只列出不执行；
-   非 0 退出立刻停并给日志路径；命令内容算进 builder 身份（改了就不复用缓存）；
-   `--offline` 不跑（要联网），直接按现有 tools 检查报缺什么。
-1. **收集命令名**：`toolchain` 的 `gcc` / `gxx`（`gxx` 归一成实际 CXX 命令名，如
-   `g++`），加上产品 profile 和各节点 `tools` 里的全部名字（make、perl、m4、
-   pkg-config、patchelf、autoconf…）。同名去重。
-2. **映射包名**：用镜像条目的 `pm` 选 `[package_maps.<pm>]`；没有映射的名字
-   认为基础镜像自带，不安装。镜像条目的 `packages` 直接追加在后面，用来补
-   "命令存在但包不完整"（如 Debian/Ubuntu 的 `perl-base` 缺 `FindBin`）。
-   这份包清单（映射结果 + `packages`）是派生 builder 镜像的身份之一：装完
-   `dnf`/`apt` 后生成的 `toolchain + 系统包` 镜像可以按"base digest + 包清单 +
-   bootstrap"缓存复用，任何一项变了就重建。
-3. **安装**：起容器后先执行一次
-   - apt：`apt-get update && apt-get install -y --no-install-recommends <包...>`
-   - dnf：`dnf install -y <包...>`
-4. **照常检查**：装完继续跑现有 `tools` 检查。**版本是否满足不由包管理器保证**：
-   发行版自带的版本可能低于 `tool.min`，这时按现有逻辑报错，用户换镜像或自己处理。
-   不自动降级/升级，也不猜包版本。
+### 4.3 工具链镜像装什么
 
-- 第一版每次起容器安装一次；按「base digest + 包列表」缓存派生镜像属于后续优化，
-  不影响语义。
+镜像本身只保证有基础系统；构建工具按 recipe 自动装。
+
+1. **plan 在容器里实际探测**：工具命令在不在、版本满不满足 `tool.min`、
+   `feature_checks` 过不过。不是在宿主上猜镜像里有什么。
+2. **分四类**：
+   - 满足 → 不动；
+   - 缺 / 版本不够 / 检查不过，但有包名映射 → 写进 Dockerfile；
+   - 有 catalog recipe、没有可用包 → 宿主下载，编译时在 `build/tools` 里构建；
+   - 既没有包映射也没有 recipe → 报错，点名补 `[package_maps.<pm>]`。
+3. **生成 Dockerfile**：
+
+   ```dockerfile
+   FROM docker.io/library/debian:13@sha256:9c6e…
+   RUN apt-get update && apt-get install -y --no-install-recommends \
+       gcc g++ binutils make m4 perl pkg-config
+   ```
+
+   apt 先 `update`；dnf 直接 `install`。镜像条目的 `bootstrap` 排在装包之前，
+   用来改包源、加 GPG key。
+4. **累加**：复用时新 Dockerfile 从旧工具链镜像接着装：
+
+   ```dockerfile
+   FROM phprt-toolchain:php-8.5-debian13
+   RUN apt-get update && apt-get install -y --no-install-recommends cmake
+   ```
+
+   没有新增工具就不构建，直接用。
+5. **构建完再验一次**：工具版本和 `feature_checks` 在成品镜像里跑一遍。发行版包
+   版本不够就报错，不自动降级、不换源。
+
 - 包名映射会随发行版改名、拆包、EOL 腐化，这是数据问题：改
   `recipes/images.toml`，不改 Rust。映射写错的表现为装不上或装完检查失败，
   错误里带包名。
-- 镜像里没有对应包、也不自带某个工具：`tools` 检查会报缺什么；用户补映射
-  或换镜像，不静默跳过。
+- Dockerfile 每次需要构建时新生成，按 tag 和时间戳留档，只增不删；phprt 不复用
+  旧文件，复用只看镜像标签和索引。见 [CONTAINER.md](CONTAINER.md) §5。
 
 ### 4.4 运行时依赖
 
-探测 `podman` → `docker`，`phprt.toml` 的 `container_runtime` 可覆盖。
-都找不到时在下载源码之前报错：
+按 `phprt.toml` 的 `container_runtime` 选；没写时依次试 `podman` → `docker` →
+`kiri`。都找不到时在下载源码之前报错，并列出每个候选的失败原因。
+显式指定的运行时连不上时直接报错，不自动换下一个。
 
-```text
-error: build_backend = "container" 需要 podman 或 docker
-```
-
-写法对齐 [RPATH.md](RPATH.md) 第 7 节对 patchelf 的前置检查：失败要快，
-不要跑到一半才发现。
+三种运行时只用 `info` 探测，再加 `image inspect` / `build` / `run` 三个工作命令，
+Dockerfile 是共同语言。
+完整规则（探测、挂载、用户、失败文案、测试矩阵）见 [CONTAINER.md](CONTAINER.md) §7。
 
 ### 4.5 容器里编的产物在宿主上不一定能跑
 
@@ -291,14 +305,15 @@ error: build_backend = "container" 需要 podman 或 docker
 
 - 宿主和 builder 同发行版同代际：本地 `myphp` 照常用；
 - 宿主比 builder 旧：产物只当镜像素材，本地跑不了；
-- 要在旧宿主上跑：用和宿主同代或更旧的 `--image`。
+- 要在旧宿主上跑：用和宿主同代或更旧的 `--buildbyimage`。
 
 这条要写进 `build` 的说明和报错，否则用户会以为是构建坏了。
 
 ### 4.6 裸镜像手工实测记录（2026-11）
 
-实现镜像模式之前，用三个**未装任何工具链**的基础镜像把"宿主提示 → 按提示装 → 全量构建"
-手工跑通了。这节是给下次开发的现场笔记：哪些是镜像模式要自动做的，哪些只能在容器外处理。
+实现镜像模式之前，用三个**未装任何工具链**的基础镜像手工验证了「缺什么、装什么、
+装完能不能编过」。这节只记镜像事实和踩坑；自动化流程（plan → Dockerfile → 工具链镜像
+→ install）见 [CONTAINER.md](CONTAINER.md)。
 
 镜像条目见 §3.1：`fedora43`（quay）、`debian13` / `ubuntu2604`（docker.io，国内可换镜像站）。
 
@@ -310,28 +325,9 @@ error: build_backend = "container" 需要 podman 或 docker
 | `debian:13` | `apt-get` `sh` `perl`(5.40，perl-base) `uname` `tar` | `sudo`、binutils、make、cmake、m4、pkg-config |
 | `ubuntu:26.04` | `apt-get` `sh` `perl`(5.40，perl-base) `uname` `tar` | `sudo`、binutils、make、cmake、m4、pkg-config |
 
-**手工流程（镜像模式要自动化的就是这几步）**
-
-```bash
-# 1. 起容器：recipes 只读、安装根可写、phprt 二进制放进安装根
-podman run -d --name phprt-test \
-  -v <recipes>:/recipes:ro,z -v <安装根>:/work:z -w /work <image> sleep infinity
-podman exec phprt-test /work/phprt --recipes /recipes install php@8.5
-
-# 2. 空镜像里这次必然失败：聚合提示 + 退出码 1
-#    debian13：
-#      error: 宿主缺少构建命令：gcc g++ ar cmake m4 make pkg-config ranlib
-#      Debian GNU/Linux 13（apt）上执行：
-#        sudo apt-get install gcc g++ binutils cmake m4 make pkg-config
-#    ubuntu2604 与 debian13 完全相同（都是 apt、都没有 sudo）。
-#    fedora43：少 perl（镜像里有），包名换成 gcc-c++ / pkgconf
-
-# 3. 按提示装（细节见下面"三个坑"）
-podman exec phprt-test sh -c 'apt-get update && apt-get install -y gcc g++ binutils cmake m4 make pkg-config'
-
-# 4. 再跑：host commands 段消失；patchelf 仍是 (store)，由 phprt 用源码构建
-podman exec phprt-test /work/phprt --recipes /recipes install php@8.5
-```
+**当时的手工验证**：起一个长驻容器，先在空镜像里跑一次 `install` 拿到缺命令和
+安装命令，再装包、重跑 `install`。最终实现不用长驻容器，改成 plan → Dockerfile →
+工具链镜像 → install，见 [CONTAINER.md](CONTAINER.md)；下面只保留实测到的事实。
 
 实测结果（同一份 recipe，只换镜像）：编译 10 个节点全过，产物 `php -v` 为 8.5.12 (NTS)，
 `php -m` 列出 43 项（含 `curl` / `openssl` / `pdo_sqlite` 等）；`dep:openssl` 的
@@ -341,8 +337,8 @@ podman exec phprt-test /work/phprt --recipes /recipes install php@8.5
 **三个坑（镜像模式的处理方式）**
 
 1. **Debian / Ubuntu 基础镜像没有 `sudo`。** 提示里的 `sudo apt-get install` 原样粘贴会
-   `sudo: not found`。镜像模式在容器里以 root 运行，执行时去掉 `sudo`；宿主提示保持
-   原样（普通用户需要它）。手工验证时同样去掉。
+   `sudo: not found`。Dockerfile 的 `RUN` 本身就是 root，不写 `sudo`；宿主提示保持
+   原样（普通用户需要它）。
 2. **全新容器必须先 `apt-get update`。** 否则 `apt-get install` 报
    `Unable to locate package`。这件事 §4.3 已经写进自动装包步骤；宿主机日常不需要。
    提示里不带 `update`，也不该带——那是包管理器状态，不是缺命令。
@@ -364,13 +360,16 @@ podman exec phprt-test /work/phprt --recipes /recipes install php@8.5
 - phprt 二进制只依赖 `libc` / `libm` / `libgcc_s`，同代发行版可直接拷进容器跑，
   不需要在容器里重新编译。
 
-**给镜像模式的验收清单**（手工已验，代码实现后应能自动复现）
+**给镜像模式的验收清单**（基础镜像的缺包和装完能否编过已手工验证；流程本身待实现）
 
-- 空镜像首次 `install`：一次列出全部缺命令 + 该发行版的安装命令，退出码 1，不下载源码。
-- 装完再跑：`host commands` 段消失；`patchelf` 走 `build/tools` 自建。
-- 全量构建成功；`php -m` 列出预期模块（`curl` / `openssl` / `pdo_sqlite` 等）。
+- 原镜像不在本地时报错，提示用户先 pull，不自动拉。
+- plan 在原镜像里给出的包清单，和手工实测的缺包一致。
+- 生成的 Dockerfile 装完包后，工具版本和 `feature_checks` 通过。
+- 工具链镜像跑 `install` 全量构建成功；`php -m` 列出预期模块。
+- 第二次 `install` / `add` 复用同一个工具链镜像，不重复装 gcc / make。
+- Dockerfile 按时间戳留档；删掉它不影响任何复用。
 - `plan` 只列 `bootstrap`、不执行；`--offline` 不执行 `bootstrap`。
-- 换镜像后 `ctx["host"]` 变化会让对应节点重编（走 `inputs` 指纹 + 节点签名）。
+- 换原镜像后 `ctx["host"]` 变化会让对应节点重编（走 `inputs` 指纹 + 节点签名）。
 
 ### 4.7 已知拆包坑：perl（命令在、包不完整）
 
@@ -749,39 +748,59 @@ services:
 
 ```bash
 phprt list_oci_images
+phprt install php@8.5 --buildbyimage
+phprt install php@8.5 --buildbyimage debian13
+phprt install php@8.5 --buildbyimage docker.io/library/debian:13
+phprt plan php@8.5 --buildbyimage --json > .phprt/plan/php-8.5.json
+phprt install php@8.5 --buildbyimage --from-plan .phprt/plan/php-8.5.json
 phprt build php@8.5
-phprt install php@8.4 --image debian12
 ```
 
 - `list_oci_images` 只读 `recipes/images.toml`，不联网、不拉镜像；输出见 §3.1。
-- `install --image <线名>` 用该镜像的容器做构建；镜像的 `gcc` 必须落在产品
-  `toolchain` 的区间里，`glibc` 只打印提示。
-- `build` 内部走完整安装流程：已装且签名一致就跳过编译，直接出镜像；
-  所以没装过的机器上这一条命令就够。
-- 给了 `--image` 就按 container 后端跑；没给就按 `phprt.toml` 的
-  `build_backend`。显式指定镜像却继续用宿主工具链会让人误解，所以不做「静默忽略」。
-- `--image`、`--force` 对 `install` 和 `build` 都生效（容器化构建对两者都适用）；
-  `--runtime-base`、`--load`、`--tag` 只对 `build` 生效。
+- `--buildbyimage` 进入镜像构建模式：
+  - 空值：用 bundle 的 `[image].line`；没有默认线时报错。
+  - catalog 线名：用条目里的 image / digest / pm / gcc / glibc。
+  - 完整镜像 ref：当作用户自己 pull 的镜像，digest 从本地 `image inspect` 取，
+    pm 和工具版本在容器里探测。
+- **原镜像必须在本地**，没有就报错提示先 pull，phprt 不自动拉。
+- `plan --buildbyimage --json` 只跑到工具状态，不下载、不编译；标准输出就是状态
+  文件，宿主把它存到 `.phprt/plan/<产品>-<系列>.json`。
+- `--from-plan <文件>` 读状态，宿主补 catalog / 下载 / 解压，再进工具链镜像编译。
+- 复用旧工具链镜像时默认自动选；`--toolchain <tag>` 指定，`--no-accumulate`
+  从原镜像重新装一套。规则见 [CONTAINER.md](CONTAINER.md) §4。
+- 镜像模式记录在 state 里；之后的 `install` / `add` / `remove` / `update` 沿用，
+  不用每次带 `--buildbyimage`。
+- `build` 总是镜像模式：没给 `--buildbyimage` 就用 bundle 默认线；已经装过且签名
+  一致时跳过编译，直接出镜像。
+- `--force` 对 `install` 和 `build` 都生效；`--runtime-base`、`--load`、`--tag`
+  只对 `build` 生效。
 - base 和 manifest 都命中缓存时，出镜像不需要网络，也不需要起容器。
-- 默认 tag 是 `<产品>:<补丁>`，例如 `php:8.5.12`；`--tag` 覆盖。
+- 默认 OCI tag 是 `<产品>:<补丁>`，例如 `php:8.5.12`；`--tag` 覆盖。
 - 不加 `phprt image` / `phprt export` / `phprt run` 之类的第二条命令。
 
-`plan --json` 新增 `image` 段：镜像线、digest、gcc、glibc、自动安装的包列表、
-base 裁剪出的文件数、manifest、估算大小、入口、会不会生成 compose。
-agent 在真跑之前就能核对。
+`plan --json` 新增 `image` 段：原镜像、digest、gcc、glibc、工具链 tag、包清单、
+Dockerfile 路径，以及能不能复用。`plan --buildbyimage` 只预览，不写 Dockerfile、
+不构建镜像。
 
 ## 8. 失败模式
 
-- `--image` 的值不在 catalog 里：报错，并提示 `phprt list_oci_images`。
+- `--buildbyimage` 的值既不是 catalog 线名、本地也没有同名镜像：报错，提示
+  `phprt list_oci_images`，或直接给完整的 `镜像@digest`。
+- 原镜像不在本地：报错，提示先 `podman pull` / `docker pull`；不自动拉。
 - catalog 里没有满足产品 gcc 区间的线：报错，列出每条线的 gcc 和产品要求的区间。
-- catalog 声明和探针不一致（gcc / glibc）：报错，提示 tag 可能漂了或条目写错。
-- glibc 比目标系统新：**不报错**，只在选镜像和 `plan` 时提示运行下限。
+- catalog 线名的本地镜像 digest / gcc 和条目对不上：报错，提示重新 pull 或条目过期。
+- 用户给的镜像无法预检 gcc：工具链镜像构建完再验，不满足报错，不回滚。
 - 镜像里没有包管理器：`pm` 写错或镜像不对，报错。
-- 包映射缺失、包名写错：安装失败或装完 `tools` 检查报缺工具，错误里带包名；
+- 包映射缺失、包名写错：装包失败或装完 `tools` 检查报缺工具，错误里带包名；
   用户补 `package_maps` 或换镜像。
+- 工具链镜像和原镜像不匹配（digest 不同）：报错，提示 `--no-accumulate` 或换回
+  原来的原镜像。
+- phprt 二进制在镜像里跑不起来（glibc 不够）：报错，提示换同代镜像。
+- 没有容器运行时：下载源码之前报错。
+- 工具链镜像构建失败：Dockerfile 保留，路径写进错误；不写安装 state。
+- glibc 比目标系统新：**不报错**，只在选镜像和 `plan` 时提示运行下限。
 - runtime base 的 libc 比 builder 旧：报错。
 - manifest 校验缺 soname：报错，写清缺哪个、被谁需要。
-- 没有容器运行时：下载源码之前报错。
 - 镜像写出失败：不写 state 的镜像相关记录，安装状态保留，重跑只重做镜像。
 - `compose.yml` 写出失败：镜像 tar 保留，报错提示路径和原因，不静默跳过。
 
@@ -801,9 +820,9 @@ agent 在真跑之前就能核对。
 
 - 推 registry（第一版只出 tar）；
 - 多架构、交叉编译（与 DESIGN.md 的非目标一致）；
-- 生成 Dockerfile；
+- 自动 pull 原镜像；
+- 长驻容器 + 逐条 `exec`；
 - 镜像分层缓存优化（先正确，层共享是后面的事）；
-- 派生 builder 镜像的缓存（第一版每次起容器装包，后续再优化）；
 - 「产物能在老系统跑」的兼容矩阵；
 - `cmd` / `stopsignal` / `healthcheck` 等镜像字段；
 - 非 root 运行和 `--read-only` 的属主处理；
@@ -815,18 +834,22 @@ agent 在真跑之前就能核对。
 
 每步独立验收，都不依赖下一步：
 
-1. **image catalog + 声明 + 求解**。纯数据处理，不碰容器。验收：
-   `phprt list_oci_images` 输出表格、`php@8.5` 用默认线、catalog 里没有满足
-   gcc 区间的线时报错并列出缺项、`--image no-such-line` 报错并提示命令。
-2. **执行后端 + 探针 + 自动装包**。容器跑通一个产品，签名带上 digest。验收：
-   镜像里缺 make/perl 时自动装上，tools 检查通过；包版本低于 `min` 时按现有
-   逻辑报错；产物和 `local` 后端都能跑，切后端触发重编。
-3. **manifest + 配置覆盖 + 静态校验**。纯宿主侧。验收：缺文件时报错而不是生成
+1. **image catalog + 原镜像选择 + 记录**。不碰编译器。验收：
+   `phprt list_oci_images` 输出表格；`--buildbyimage` 空值 / 线名 / 完整 ref 都能
+   解析；原镜像不在本地时报错且不自动 pull；默认工具链 tag 和记录写对。
+2. **plan 进容器 + 状态文件**。验收：空镜像里 plan 给出缺包清单；`plan --json`
+   输出可存成状态文件、不下载；工具分成 `ok` / `package` / `source` / `error` 四类。
+3. **工具链镜像 + 复用累加**。验收：Dockerfile 生成并按时间戳留档；镜像构建成功；
+   第二次 `install` 复用；`add swoole` 只补差量；`--no-accumulate` 用新 tag；
+   删掉 Dockerfile 不影响复用。
+4. **容器内 install + 一次 / 二次跑**。验收：一次跑完能编出 PHP；
+   `plan --json` + `--from-plan` 两段跑通；签名含原镜像 digest；`--offline` 可用。
+5. **manifest + 配置覆盖 + 静态校验**。纯宿主侧。验收：缺文件时报错而不是生成
    坏镜像；`image.config` 只改镜像不改树。
-4. **OCI tar 输出**。验收：`podman load` 后能跑，两次构建字节一致，层是 gzip。
-5. **compose + 运行提示**。验收：`docker compose up` 一条命令起服务，
+6. **OCI tar 输出**。验收：`podman load` 后能跑，两次构建字节一致，层是 gzip。
+7. **compose + 运行提示**。验收：`docker compose up` 一条命令起服务，
    `podman logs` 能看到 nginx 的 access log。
-6. **`phprt build` 串起来**，入口从 recipe 读。验收：新机器一条命令出镜像，
+8. **`phprt build` 串起来**，入口从 recipe 读。验收：新机器一条命令出镜像，
    并打印下一步命令。
 
 第 1 步可以完全离线做，最容易先对齐语义。
@@ -835,46 +858,73 @@ agent 在真跑之前就能核对。
 
 | 文件 | 改动 |
 | --- | --- |
-| `recipes/images.toml` | 镜像 catalog：新增 `[images.*]` 条目（`[package_maps.apt]` / `[package_maps.dnf]` 已随宿主提示落地，见 [HOST-COMMANDS.md](HOST-COMMANDS.md)） |
-| `src/toolchain.rs` | 新增：读镜像 catalog、按 gcc 区间选线、探针结果缓存 |
-| `src/config.rs` | `build_backend` / `container_runtime`，校验文案对齐 `rpath_backend` |
-| `src/state.rs` | `image` 可选字段 |
-| `src/build.rs` | 签名加入镜像 digest 与后端；命令执行走执行后端 |
-| `crates/build/` | 加 `exec` 模块：`Local` / `Container` 两个执行后端 |
+| `recipes/images.toml` | 镜像 catalog：`[images.*]` 条目、`[package_maps.*]` 补全容器用到的工具 |
+| `src/toolchain.rs` | 读镜像 catalog、按 gcc 区间选线 |
+| `src/container.rs` | 新增：运行时探测、原镜像 / 工具链镜像检查、Dockerfile 生成、`build` / `run`、属主探针、复用记录，见 [CONTAINER.md](CONTAINER.md) |
+| `src/config.rs` | `container_runtime` 解析 |
+| `src/state.rs` | 记录原镜像 ref / digest、工具链 tag、状态文件路径 |
+| `src/build.rs` | 签名加入原镜像 digest 与「本地 / 镜像」方式；容器内走本地后端 |
+| `src/main.rs` | `--buildbyimage` / `--from-plan` / `--toolchain` / `--no-accumulate`；`build`、`list_oci_images` |
+| `src/render.rs` | `plan --json` 的 `image` / `builder` 段、Dockerfile 预览 |
 | `crates/image/` | 新增：manifest、ELF `NEEDED` 解析、base 裁剪、gzip 层、OCI 写出 |
 | `src/image.rs` | 新增：从 profile 的 `image` 声明生成 OCI config 和文件覆盖 |
 | `src/compose.rs` | 新增：按 `ports` 生成 `compose.yml` 和运行提示 |
-| `src/main.rs` | `build` 子命令、`list_oci_images` 子命令、`--image` / `--runtime-base` / `--load` / `--tag` |
-| `src/render.rs` | `plan --json` 的 `image` 段 |
 | `recipes/products/*/_profile.star` | `toolchain(...)`、`image(...)`（不再写 `libc`） |
 | `recipes/products/*/*.image.conf` / `*.ini` | 镜像配置模板（5.2） |
 | `recipes/bundles/*/<系列>.toml` | `[image].line` |
 | `Cargo.toml` | `oci-spec`、`tar`、`flate2`、`sha2` |
-| 文档 | 本文；DESIGN.md §14；CLI.md 的 `build`、`list_oci_images`、`--image`、退出码；BUILD.md 加「构建环境」一节；CONTRACT.md 的 `toolchain` / `image` 字段与 bundle `[image].line`；PRODUCT.md 的 toolchain 说明；README「目标」一节改成已实现 |
+| 文档 | 本文；[CONTAINER.md](CONTAINER.md)；DESIGN.md §14；CLI.md 的 `build`、`list_oci_images`、`--buildbyimage`、退出码；BUILD.md 加「构建环境」一节；CONTRACT.md 的 `toolchain` / `image` 字段与 bundle `[image].line`；PRODUCT.md 的 toolchain 说明；README「目标」一节改成已实现 |
 
 ## 13. 验收（实施后）
 
-实现前已在裸镜像里手工跑过宿主提示 → 装包 → 全量构建的完整流程，踩到的三个坑
-（无 `sudo`、`apt-get update`、`perl-base` 缺 `FindBin`）和国内网络的处理见 §4.6；
-下面是代码实现后的验收命令。
+实现前已在裸镜像里手工验证过缺包清单和装完能否编过，踩到的三个坑
+（无 `sudo`、`apt-get update`、`perl-base` 缺 `FindBin`）见 §4.6；下面是代码
+实现后的验收命令。
 
 ```bash
 cargo fmt --all
 cargo test --workspace
 cargo clippy --workspace --all-targets
 
-# 一条命令出镜像（新机器，未装过任何工具链）
+# 原镜像必须本地已有
+cargo run -- install php@8.5 --buildbyimage docker.io/library/debian:12   # 报错：先 pull
+podman pull docker.io/library/debian:13
+
+# 一次跑完：plan → 工具链镜像 → install
+cargo run -- install php@8.5 --buildbyimage debian13
+ls .phprt/images/toolchain/php-8.5-debian13/*/Dockerfile
+.phprt/php-8.5.12/bin/php -v
+.phprt/php-8.5.12/bin/php -m | grep -E 'openssl|curl|pdo_sqlite'
+
+# 复用：同一原镜像不重装工具链
+cargo run -- add php@8.5 swoole
+cargo run -- install php@8.5
+.phprt/php-8.5.12/bin/php -m | grep swoole
+
+# 累加：新增工具才生成新的 Dockerfile
+cargo run -- install php@8.5 --component 'gd=feature:[jpeg]'
+ls .phprt/images/toolchain/php-8.5-debian13/          # 至少两份 Dockerfile
+
+# 二段跑
+cargo run -- plan php@8.5 --buildbyimage --json > .phprt/plan/php-8.5.json
+cargo run -- install php@8.5 --buildbyimage --from-plan .phprt/plan/php-8.5.json
+
+# 不累加：新 tag，旧镜像不动
+cargo run -- install php@8.5 --buildbyimage --no-accumulate
+
+# 计划可校验
+cargo run -- plan php@8.5 --buildbyimage --json | jq .image
+
+# 一条命令出镜像
 cargo run -- build php@8.5
 podman load -i .phprt/images/php-8.5.12/image.tar
 podman run --rm php:8.5.12 --version
 podman run --rm php:8.5.12 -r 'echo PHP_VERSION;'
-test ! -e .phprt/images/php-8.5.12/compose.yml   # CLI 不生成 compose
 
 # nginx：一条命令起服务
 cargo run -- build nginx@1.29 --load
 docker compose -f .phprt/images/nginx-1.29.8/compose.yml up -d
 curl -fsS http://127.0.0.1:8080/ | head -1
-docker compose -f .phprt/images/nginx-1.29.8/compose.yml logs --tail 5
 docker compose -f .phprt/images/nginx-1.29.8/compose.yml down
 
 # 可复现：两次完整构建，tar 字节一致
@@ -891,29 +941,11 @@ file /tmp/phprt-oci/blobs/sha256/* | grep gzip
 grep -q 'display_errors = On' .phprt/php-8.5.12/etc/php.ini
 podman run --rm php:8.5.12 -i | grep display_errors   # Off
 
-# 日志走 stdout
-podman run --rm -d --name phprt-nginx -p 8081:80 nginx:1.29.8
-curl -fsS http://127.0.0.1:8081/ >/dev/null
-podman logs phprt-nginx | grep -q 'GET /'
-podman stop phprt-nginx
-
-# 镜像目录
-cargo run -- list_oci_images
-
-# 镜像选择
-cargo run -- build php@8.5 --image fedora43
-cargo run -- install php@7.4 --image debian12    # gcc 12.2 落在 4.8..13 档
-cargo run -- install php@7.4 --image fedora43    # gcc 15.3.1 落在 >=14 档
-cargo run -- build php@8.5 --image no-such-line  # 报错：不在 catalog，提示 list_oci_images
-# 临时把 7.4 的 toolchain 改成 gcc >= 16，再试：
-cargo run -- install php@7.4 --image fedora43    # 报错：gcc 15.3.1 不满足 >=16，列出满足的线
-
-# 计划可校验
-cargo run -- plan php@8.5 --json | jq .image
-
-# 切后端重编
-# phprt.toml: build_backend = "container"
-cargo run -- install php@8.5
+# 镜像选择 / gcc 区间
+cargo run -- build php@8.5 --buildbyimage fedora43
+cargo run -- install php@7.4 --buildbyimage debian13    # gcc 14.2 落在 4.8..13 档
+cargo run -- install php@7.4 --buildbyimage fedora43    # gcc 15.3.1 落在 >=14 档
+cargo run -- build php@8.5 --buildbyimage no-such-line  # 报错：不在 catalog，提示 list_oci_images
 ```
 
 ## 14. 和现有文档的关系
@@ -921,6 +953,7 @@ cargo run -- install php@8.5
 - [DESIGN.md](DESIGN.md) 是设计主入口，本文挂 §14；四层数据模型、不变量、
   非目标以主文档为准。
 - [BUILD.md](BUILD.md) 讲现有构建；容器化只是换执行环境，顺序和签名规则不变。
+- [CONTAINER.md](CONTAINER.md) 讲容器运行时怎么选、怎么拼命令、各家差在哪。
 - [RPATH.md](RPATH.md) 的 `$ORIGIN` 相对 rpath 是镜像里整树平移、不进 bash 算路径的前提。
 - [CONTRACT.md](CONTRACT.md) 的 profile 字段表要加 `toolchain`、`image`；
   bundle 要加 `[image].line`。

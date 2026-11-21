@@ -286,6 +286,7 @@ src/
 ├── tools.rs      构建期工具解析（宿主 / build/tools / catalog）、版本探测
 ├── toolchain.rs  编译器探测、档位选择、CFLAGS 合并
 ├── host_commands.rs  宿主识别（包管理器 / 发行版 id / family）、包名映射、缺命令提示；向 recipe 注入 host ctx
+├── container.rs  容器运行时探测、原镜像 / 工具链镜像、Dockerfile 生成、build / run（CONTAINER.md，待实施）
 ├── version.rs    版本区间比较（tool / toolchain 共用）
 ├── layout.rs     源码 / 安装路径
 ├── sources.rs    下载清单
@@ -365,8 +366,9 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [CATALOG-SNAPSHOT.md](CATALOG-SNAPSHOT.md) | 快照 id、manifest、minisign 签名、CDN 与镜像（未排期） |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
+| [CONTAINER.md](CONTAINER.md) | 容器构建：原镜像与工具链镜像、复用与累加、Dockerfile、一次跑完 / 二次跑、podman / docker / kiri（待实施方案） |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |
-| [IMAGE.md](IMAGE.md) | 镜像线（`recipes/images.toml`、gcc/glibc facts、包名映射、`bootstrap`/`packages`、`--image`）、容器化构建、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）、裸镜像实测记录（待实施，代码未实现） |
+| [IMAGE.md](IMAGE.md) | 镜像线（`recipes/images.toml`、gcc/glibc facts、包名映射、`bootstrap`/`packages`、`--buildbyimage`）、容器化构建、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）、裸镜像实测记录（待实施，代码未实现） |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |

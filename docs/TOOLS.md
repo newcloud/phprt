@@ -522,18 +522,19 @@ toolchain = TOOLCHAIN,
 - Toolchain facts 写进产品 marker，供 `plan` / `audit` 展示，不参与 scheme 和
   `resolution_digest`。
 - 工具的签名另行处理：`tool-sig` 包含实际编译器版本，见 §3.7。
-- 容器化后镜像 digest 进节点签名，规则见 [IMAGE.md](IMAGE.md) 第 3.4 节。
+- 容器化后原镜像 digest 进节点签名；工具链镜像 ID 不进，规则见 [IMAGE.md](IMAGE.md) 第 3.4 节。
 
 ### 4.6 镜像模式
 
 - 宿主模式：只做断言和选档；不满足就报错。
-- 镜像模式：从镜像 catalog 的条目取 `gcc`，用它匹配同一套档位区间。
-  匹配就继续，不匹配就报错并列出 catalog 里满足的线。
+- 镜像模式：
+  - catalog 线：用条目的 `gcc` 匹配同一套档位区间，不匹配报错并列出满足的线；
+  - 用户自己 pull 的镜像：无法预检，工具链镜像构建完再跑 `gcc --version` 验证。
 - **glibc 不参与判断**：镜像条目里的 glibc 只在选镜像和 `plan` 时提示
   “产物要求运行系统 glibc >= X”。用户选这个镜像就代表接受这个运行下限。
-- 镜像里缺 make / perl / patchelf 等工具时，按镜像 catalog 的包名映射自动安装；
-  装完照常跑 `tools` 检查，版本不满足按现有逻辑报错。细节见
-  [IMAGE.md](IMAGE.md) 第 4.3 节。
+- 镜像里缺 make / perl / patchelf 等工具时，plan 在容器里实际探测，按包名映射写进
+  Dockerfile；装完照常跑 `tools` 检查和 `feature_checks`，版本不满足按现有逻辑报错。
+  细节见 [IMAGE.md](IMAGE.md) 第 4.3 节和 [CONTAINER.md](CONTAINER.md) 第 6 节。
 - bundle 继续只约束依赖版本线，不声明 toolchain。
 - 产品声明的 gcc 范围覆盖整次构建；bundle 里选的依赖线必须在这个范围内可编，
   这是 recipe / bundle 的验收责任。
@@ -558,7 +559,7 @@ toolchain = TOOLCHAIN,
 | `docs/OUTPUT.md` | `plan --json` 的 `tools` / `toolchain` 字段 |
 | `docs/FLOW.md` | 下载前解析工具；工具构建失败不写 state；add/remove 不接收工具参数 |
 | `docs/DESIGN.md` | 第 14 节登记本文；四层数据补充 Tool / Toolchain |
-| `docs/IMAGE.md` | 第 3 节改为 `recipes/images.toml`：条目字段 `image` / `digest` / `pm` / `gcc` / `glibc`；gcc 是唯一构建筛选条件，glibc 只提示运行下限；新增 `[package_maps.apt]` / `[package_maps.dnf]`、`phprt list_oci_images`、`--image <线名>`；删除 `libc` 声明和 `--builder` |
+| `docs/IMAGE.md` | 第 3 节改为 `recipes/images.toml`：条目字段 `image` / `digest` / `pm` / `gcc` / `glibc`；gcc 是唯一构建筛选条件，glibc 只提示运行下限；新增 `[package_maps.apt]` / `[package_maps.dnf]`、`phprt list_oci_images`、`--buildbyimage [镜像]`；删除 `libc` 声明和 `--builder` |
 | `docs/ADD-RECIPE.md` | 新增 Tool recipe、添加 toolchain 档位的步骤 |
 | `docs/HOST-COMMANDS.md` | 宿主缺命令时的安装提示、`[package_maps.*]`、包管理器识别、聚合与输出 |
 | `AGENTS.md` / `README.md` | 简要说明 `recipes/tools/`、`build/tools/`、host-first、toolchain 档位 |

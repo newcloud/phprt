@@ -308,8 +308,8 @@ toolchain
 | apt | `sudo apt-get install <包...>` |
 | dnf | `sudo dnf install <包...>` |
 
-镜像模式在容器里装包不加 `sudo`、加 `-y`，模板仍按 IMAGE.md §4.3 单独写；本表只管
-宿主提示。
+镜像模式在 Dockerfile 的 `RUN` 里装包，不写 `sudo`，apt 先 `update`；模板按
+IMAGE.md §4.3 单独写。本表只管宿主提示。
 
 ## 8. 文件清单
 

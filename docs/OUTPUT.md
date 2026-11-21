@@ -5,7 +5,7 @@
 `plan` 的输出是 `Sim`：
 
 ```text
-Sim { root, tree, targets, toolchain, tools, host_commands, order: [Node] }
+Sim { root, tree, targets, toolchain, tools, host_commands, image, builder, order: [Node] }
 ```
 
 | 字段 | 说明 |
@@ -16,6 +16,8 @@ Sim { root, tree, targets, toolchain, tools, host_commands, order: [Node] }
 | `toolchain` | 实际编译器档位；产品没有 `toolchain` 声明时为 `null` |
 | `tools` | 本次用到的构建工具（host + built）以及解析失败项 |
 | `host_commands` | 宿主缺少的构建命令、安装命令，以及工具 recipe 写的一句话说明（`reasons`）；没有缺失项时为 `null` |
+| `image` | 镜像模式（待实施）：原镜像、digest、gcc、glibc、工具链 tag、能不能复用；非镜像模式为 `null` |
+| `builder` | 镜像模式（待实施）：要装进工具链镜像的包、每个工具的状态、Dockerfile 内容；真正生成后的落盘路径在 `install` / `build` 的输出里给；非镜像模式为 `null` |
 | `order` | 拓扑序节点数组；需要构建的工具节点排在最前面 |
 
 `Node` 字段：

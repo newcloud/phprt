@@ -170,7 +170,7 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `catalog update [--dry-run] [--fill-sha256] [组件名...]` | 查上游最新补丁，写进 `catalog.toml`（写前备份） | 否（改 catalog.toml） |
 | `catalog publish --out <目录>` | 把 `catalog.toml` 拆成 `<目录>/latest/components/<组件>.toml`，供用户在线获取 | 否（写发布目录） |
 | `list_oci_images` | 打印镜像 catalog：线名、镜像、GCC、glibc、包管理器（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
-| `build <产品>@<系列> [--image <线名>]` | 构建并输出 OCI 镜像（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
+| `build <产品>@<系列> [--buildbyimage [镜像]]` | 构建并输出 OCI 镜像（待实施，见 [IMAGE.md](IMAGE.md)、[CONTAINER.md](CONTAINER.md)） | 否 |
 
 `install` / `update` / `plan` / `build` 另外支持：
 
@@ -180,7 +180,10 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `--dep <NAME=LINE>` | 绑定依赖库版本线；可重复 |
 | `--disable-default-component <NAME>` | 禁用该产品系列的默认组件；可重复 |
 | `--targets <SPEC>` | 产品构建目标；如 `cli`、`cli,fpm=user:www-data,group:www-data`。见 [TARGETS.md](TARGETS.md) |
-| `--image <线名>` | 用镜像 catalog 里的镜像做容器构建（待实施，见 [IMAGE.md](IMAGE.md)）；`install` / `build` / `plan` |
+| `--buildbyimage [镜像]` | 进入镜像构建模式；空值用默认线，写线名用 catalog，写完整 ref 用本地镜像。`install` / `build` / `plan`（待实施，见 [CONTAINER.md](CONTAINER.md)） |
+| `--from-plan <文件>` | 读状态文件，宿主补 catalog / 下载 / 解压后进工具链镜像编译；`install` / `build`（待实施） |
+| `--toolchain <tag>` | 指定复用的工具链镜像；`install` / `build` / `plan`（待实施） |
+| `--no-accumulate` | 不复用旧工具链，从原镜像重新装一套；`install` / `build`（待实施） |
 
 持久化组件方案用 `add` / `remove`；`install --component` 只影响这一次构建。
 `--targets` 在 `install` / `update` / `plan` 上接收；`add` / `remove` 沿用 state 里的选择。
@@ -591,24 +594,38 @@ phprt install nginx@1.29
 
 ## 镜像（待实施）
 
-镜像 catalog、执行后端和 OCI 产出的完整方案见 [IMAGE.md](IMAGE.md)。命令只加两个：
+镜像 catalog、工具链镜像和 OCI 产出的完整方案见 [IMAGE.md](IMAGE.md) 与
+[CONTAINER.md](CONTAINER.md)。
 
 ```bash
 phprt list_oci_images
-phprt install php@8.4 --image debian12
-phprt build php@8.5 --image fedora43
+phprt install php@8.5 --buildbyimage
+phprt install php@8.5 --buildbyimage debian13
+phprt install php@8.5 --buildbyimage docker.io/library/debian:13
+phprt plan php@8.5 --buildbyimage --json > .phprt/plan/php-8.5.json
+phprt install php@8.5 --buildbyimage --from-plan .phprt/plan/php-8.5.json
+phprt build php@8.5
 ```
 
 - `list_oci_images` 读 `recipes/images.toml`，打印线名、镜像、GCC、glibc、包管理器；
   不联网、不拉镜像。
-- `--image <线名>` 只接受 catalog 里的线名；查不到时报错并提示 `list_oci_images`。
-- 产品声明了 `toolchain` 时，镜像条目的 `gcc` 必须落在声明的区间内；不满足直接报错，
-  并列出 catalog 里满足的线。产品没有 `toolchain` 时跳过这一条。
+- `--buildbyimage` 空值用 bundle 的 `[image].line`；写 catalog 线名用该条目的
+  image / digest / pm / gcc / glibc；写完整镜像 ref 当作用户自己 pull 的镜像。
+- 原镜像必须在本地。没有就报错提示先 pull，phprt 不自动拉。
+- 镜像模式记录在 state 里，之后的 `install` / `add` / `remove` / `update` 沿用，
+  不用每次带 `--buildbyimage`。
+- `plan --buildbyimage --json` 在容器里只跑到工具状态，不下载、不编译；标准输出
+  存成 `.phprt/plan/<产品>-<系列>.json`，就是后续要用的状态文件。
+- `--from-plan` 读这个文件继续：宿主补下载 / 解压，再进镜像编译。
+- 默认复用上次的工具链镜像；`--toolchain <tag>` 指定，`--no-accumulate` 从原镜像
+  重新装一套（新 tag，旧镜像不动）。
+- 产品声明了 `toolchain` 时，catalog 线用条目的 `gcc` 预检；用户给的镜像在工具链
+  镜像构建完再验，不满足报错。
 - `glibc` 只打印“产物要求运行系统 glibc >= X”的提示，不做构建判断。
-- 镜像里缺的 make / perl / patchelf 等按 `[package_maps.<pm>]` 自动安装；装完照常
-  做工具版本检查，版本不满足按现有规则报错，交给用户换镜像或自己处理。
-- `--image` 对 `install` 和 `build` 都生效；`plan --json` 的 `image` 段给出线、
-  digest、gcc、glibc 和将要安装的包。
+- 镜像里缺的 make / perl / patchelf 等按 `[package_maps.<pm>]` 和
+  `[images.*].packages` 处理；装完照常做工具版本和 `feature_checks` 检查。
+- `--buildbyimage` 对 `install` / `build` / `plan` 都生效；`plan --json` 的
+  `image` / `builder` 段给出原镜像、digest、工具链 tag、包清单和 Dockerfile 路径。
 
 ## audit
 
