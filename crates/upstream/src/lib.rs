@@ -63,6 +63,9 @@ pub struct Options {
     pub fill_sha256: bool,
     /// 只更新这些组件；空表示全部。
     pub components: Vec<String>,
+    /// 只检查这些 (组件, 线)；空表示跟随 `components` 的全部线。
+    /// 用户路径按方案里的主线传值，维护者命令不传。
+    pub lines: Vec<(String, String)>,
     /// 写回前对临时文件做和加载时一样的校验（main 传 Catalog::load）。
     pub validate: Box<Validate>,
 }
@@ -147,7 +150,7 @@ fn check_component(
     component: &str,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
-    let lines = match catalog::lines(doc, component) {
+    let all = match catalog::lines(doc, component) {
         Some(lines) => lines,
         None => {
             if !options.components.is_empty() {
@@ -167,6 +170,12 @@ fn check_component(
             return steps;
         }
     };
+    // 用户路径只更新方案用到的线；维护者命令不传 lines，检查组件下的全部线。
+    let lines = selected_lines(all, component, &options.lines);
+    if lines.is_empty() {
+        ui.finish(index, "-", "本次不用");
+        return steps;
+    }
     let script = match script::Script::load(&options.recipes, component) {
         Ok(script) => script,
         Err(err) => {
@@ -234,7 +243,7 @@ fn check_component(
     };
 
     let before = steps.len();
-    for line in &lines {
+    for line in lines {
         let verb = if per_line {
             format!("查询 {line}")
         } else {
@@ -245,7 +254,7 @@ fn check_component(
             options,
             doc,
             component,
-            line,
+            &line,
             &script,
             fetched_once.as_ref(),
         ));
@@ -259,6 +268,20 @@ fn check_component(
         ui.finish_block(index, mark, &details);
     }
     steps
+}
+
+/// 按 (组件, 线) 过滤要检查的线；`wanted` 为空时保留全部。
+fn selected_lines(all: Vec<String>, component: &str, wanted: &[(String, String)]) -> Vec<String> {
+    if wanted.is_empty() {
+        return all;
+    }
+    all.into_iter()
+        .filter(|line| {
+            wanted
+                .iter()
+                .any(|(name, target)| name == component && target == line)
+        })
+        .collect()
 }
 
 /// 一个组件这一轮的结果：每条版本线一行，`6.2  6.2.5 → 6.2.6` / `6.0  无更新 6.0.2`。
@@ -408,6 +431,14 @@ fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
     let missing = catalog::missing_sha256(doc);
     for (component, line, version, url) in missing {
         if !options.components.is_empty() && !options.components.contains(&component) {
+            continue;
+        }
+        if !options.lines.is_empty()
+            && !options
+                .lines
+                .iter()
+                .any(|(name, wanted)| name == &component && wanted == &line)
+        {
             continue;
         }
         if options.dry_run {
@@ -777,5 +808,17 @@ mod tests {
         )];
         let (_, details) = summarize(&doc, "swoole", &steps);
         assert_eq!(details, ["6.0  无候选（本地 6.0.2）"]);
+    }
+
+    #[test]
+    fn line_filter_keeps_only_the_requested_component_and_line() {
+        let all = vec!["1.1.1".to_owned(), "3.0".to_owned(), "3.5".to_owned()];
+        let wanted = vec![("openssl".to_owned(), "3.5".to_owned())];
+        assert_eq!(
+            selected_lines(all.clone(), "openssl", &wanted),
+            vec!["3.5".to_owned()]
+        );
+        assert!(selected_lines(all.clone(), "curl", &wanted).is_empty());
+        assert_eq!(selected_lines(all, "openssl", &[]).len(), 3);
     }
 }

@@ -41,7 +41,7 @@ pub struct Config {
     /// 编译并发数；不写时取 CPU 数 - 1，最少 1。命令行 `--parallel` 优先。
     #[serde(default)]
     pub parallel: Option<usize>,
-    /// catalog 在线检查的交互开关；不记录产品、版本或组件。
+    /// 主线补丁检查的交互开关；不记录产品、版本或组件。
     #[serde(default)]
     pub catalog: CatalogConfig,
 }
@@ -50,7 +50,7 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
-    /// true 时在真正构建前询问一次；false 时不问、不取，直接用本地。
+    /// true 时在真正构建前询问一次；false 时不问、不查，直接用本地。
     #[serde(default = "default_true")]
     pub ask_before_online_update: bool,
     /// 交互式询问的默认答案，只能是 y 或 n。

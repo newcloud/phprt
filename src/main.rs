@@ -4,14 +4,13 @@ mod bind;
 mod build;
 mod bundle;
 mod catalog;
-mod catalog_publish;
-mod catalog_remote;
 mod config;
 mod host_commands;
 mod layout;
 mod lock;
 mod manage;
 mod marker;
+mod patch_check;
 mod plan;
 mod recipe;
 mod render;
@@ -210,7 +209,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// 维护 recipes/catalog.toml：查上游、写回、发布组件分片
+    /// 维护 recipes/catalog.toml：查上游、写回
     Catalog {
         #[command(subcommand)]
         command: CatalogCmd,
@@ -229,12 +228,6 @@ enum CatalogCmd {
         fill_sha256: bool,
         /// 只更新这些组件；空表示全部（没有 upstream 脚本的跳过）
         components: Vec<String>,
-    },
-    /// 把 catalog.toml 拆成每个组件一个分片，供用户在线获取
-    Publish {
-        /// 输出目录；实际写到 <out>/latest/components/
-        #[arg(long)]
-        out: PathBuf,
     },
 }
 
@@ -281,10 +274,10 @@ struct DownloadArgs {
     /// 只用缓存，不联网
     #[arg(long)]
     offline: bool,
-    /// 跳过询问，直接获取最新 catalog；失败按错误处理
+    /// 跳过询问，直接检查上游最新补丁并写回 catalog；失败按错误处理
     #[arg(long, conflicts_with_all = ["no_refresh", "offline"])]
     refresh: bool,
-    /// 跳过询问，不获取 catalog
+    /// 跳过询问，不检查上游补丁
     #[arg(long = "no-refresh")]
     no_refresh: bool,
     /// 进度显示方式
@@ -404,14 +397,10 @@ fn run() -> Result<()> {
                 fill_sha256,
                 components,
             } => {
-                let backup = match layout::backup_dir_name() {
-                    Some(name) => layout::resolve(&cli.root, name),
-                    None => layout::internal_dir(&cli.root).join("backup"),
-                };
                 let report = phprt_upstream::run(phprt_upstream::Options {
                     recipes: recipes.clone(),
                     cache: layout::downloads_dir(&cli.root),
-                    backup_dir: backup,
+                    backup_dir: patch_check::backup_dir(&cli.root),
                     // 并发 / 分片 / 超时和 install 的默认值一致（docs/DOWNLOAD.md 5）。
                     download: phprt_download::Options {
                         jobs: 10,
@@ -427,21 +416,13 @@ fn run() -> Result<()> {
                     dry_run: *dry_run,
                     fill_sha256: *fill_sha256,
                     components: components.clone(),
+                    lines: Vec::new(),
                     validate: Box::new(|path| Catalog::load(path).map(|_| ())),
                 })?;
                 print!("{}", report.text());
                 if report.partial_failure {
                     std::process::exit(3);
                 }
-            }
-            CatalogCmd::Publish { out } => {
-                let summary = catalog_publish::run(&recipes.join("catalog.toml"), out)?;
-                println!(
-                    "已发布 {} 个组件分片到 {}",
-                    summary.components,
-                    summary.out.display()
-                );
-                println!("数据时间 {}", summary.stamp);
             }
         }
         return Ok(());
@@ -622,11 +603,8 @@ fn run_body(
     };
     let (product_name, requested) = split_target(&target_spec)?;
 
-    let catalog = Catalog::load_layered(
-        &recipes.join("catalog.toml"),
-        &layout::catalog_dir(&cli.root).join("components"),
-    )
-    .with_context(|| format!("加载 {}", recipes.display()))?;
+    let catalog = Catalog::load(&recipes.join("catalog.toml"))
+        .with_context(|| format!("加载 {}", recipes.display()))?;
     // 先按 catalog 把 `php@8.5` / `php@8.5.12` 归一成系列，recipe 和 bundle 都按系列找。
     let series = catalog.find_product_series(&product_name, &requested)?;
     let explicit_patch = requested != series;
@@ -931,11 +909,12 @@ fn run_body(
             check_closure_change(&inputs_before, &inputs_after, lock)?;
         }
     }
-    // 在线检查放在真正下载/编译之前；取到新数据后整条命令重跑一遍，
-    // 让版本选择、绑定和方案都按新 catalog 重新算。
+    // 上游补丁检查放在真正下载/编译之前；查到新补丁后整条命令重跑一遍，
+    // 让版本选择、绑定和方案都按新 catalog 重新算。只查本次方案用到的组件主线。
     if allow_online
+        && !explicit_patch
         && let Some(download) = download.as_ref()
-        && let Some(kind) = remote_kind(&cli.cmd)
+        && let Some(kind) = patch_kind(&cli.cmd)
     {
         if download.refresh && lock {
             bail!("--refresh 不能和 --lock 一起用");
@@ -993,15 +972,9 @@ fn run_body(
             )?,
             _ => false,
         };
-        let items = remote_items(
-            &order,
-            &catalog,
-            &bindings,
-            &project,
-            &product_name,
-            &series,
-        );
-        let request = catalog_remote::Request {
+        let cache = layout::downloads_dir(&cli.root);
+        let backup = patch_check::backup_dir(&cli.root);
+        let request = patch_check::Request {
             kind,
             product: &product_name,
             series: &series,
@@ -1009,27 +982,40 @@ fn run_body(
                 Cmd::Add { component, .. } => component.split(['=', ',']).next(),
                 _ => None,
             },
-            items,
+            items: patch_items(
+                &order,
+                &catalog,
+                &bindings,
+                &project,
+                &product_name,
+                &series,
+            ),
             will_build,
             enabled: config.catalog.ask_before_online_update
                 && !download.no_refresh
                 && !download.offline
                 && !lock,
             force: download.refresh,
-            default_yes: if kind == catalog_remote::Kind::Remove {
+            default_yes: if kind == patch_check::Kind::Remove {
                 false
             } else {
                 config.catalog_default_answer()?
             },
-            mode: download.ui,
-            jobs: download.download_jobs,
-            host_jobs: download.download_host_jobs,
-            proxy: download.proxy.clone(),
-            github_proxy: config.github_proxy()?,
-            root: &cli.root,
-            catalog: &catalog,
+            recipes,
+            cache: &cache,
+            backup_dir: &backup,
+            download: phprt_download::Options {
+                jobs: download.download_jobs,
+                host_jobs: download.download_host_jobs,
+                connections: download.connections,
+                timeout: download.timeout,
+                proxy: download.proxy.clone(),
+                github_proxy: config.github_proxy()?,
+                offline: false,
+                ui: download.ui,
+            },
         };
-        if catalog_remote::refresh(&request)?.changed {
+        if patch_check::check(request)?.changed {
             return Ok(RunOutcome::Retry);
         }
     }
@@ -2236,18 +2222,18 @@ fn select_product_patch(
         })
 }
 
-/// online 检查只对这台命令开放。
-fn remote_kind(cmd: &Cmd) -> Option<catalog_remote::Kind> {
+/// 上游补丁检查只对这几条命令开放。
+fn patch_kind(cmd: &Cmd) -> Option<patch_check::Kind> {
     match cmd {
-        Cmd::Install { .. } => Some(catalog_remote::Kind::Install),
-        Cmd::Update { .. } => Some(catalog_remote::Kind::Update),
-        Cmd::Add { .. } => Some(catalog_remote::Kind::Add),
-        Cmd::Remove { .. } => Some(catalog_remote::Kind::Remove),
+        Cmd::Install { .. } => Some(patch_check::Kind::Install),
+        Cmd::Update { .. } => Some(patch_check::Kind::Update),
+        Cmd::Add { .. } => Some(patch_check::Kind::Add),
+        Cmd::Remove { .. } => Some(patch_check::Kind::Remove),
         _ => None,
     }
 }
 
-/// `install` 这次会不会真的下载或构建；不会时不弹在线检查。
+/// `install` 这次会不会真的下载或构建；不会时不查上游补丁。
 #[allow(clippy::too_many_arguments)]
 fn install_would_build(
     project: &ProjectState,
@@ -2338,15 +2324,15 @@ fn remove_needs_rebuild(
     Ok(reg.product_mode(component, &facts.mode)?.strategy_kind()? == Strategy::Fold)
 }
 
-/// 当前闭包里能取分片的组件：有 catalog 条目、绑定了线。
-fn remote_items(
+/// 当前闭包里需要检查上游补丁的主线：有 catalog 条目、绑定了线。
+fn patch_items(
     order: &[&Target],
     catalog: &Catalog,
     bindings: &bind::Bindings,
     project: &ProjectState,
     product: &str,
     series: &str,
-) -> Vec<catalog_remote::Item> {
+) -> Vec<patch_check::Item> {
     let mut items = Vec::new();
     let mut seen = BTreeSet::new();
     // 产品排第一，后面按构建顺序；进度行和提示清单都更容易读。
@@ -2391,7 +2377,7 @@ fn remote_items(
         } else {
             String::new()
         };
-        items.push(catalog_remote::Item {
+        items.push(patch_check::Item {
             name: target.name.clone(),
             line: line.to_owned(),
             installed,
@@ -2868,19 +2854,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_publish_requires_out() {
-        assert!(Cli::try_parse_from(["phprt", "catalog", "publish"]).is_err());
-        let cli = Cli::try_parse_from(["phprt", "catalog", "publish", "--out", "dist"]).unwrap();
-        assert!(matches!(
-            cli.cmd,
-            Cmd::Catalog {
-                command: CatalogCmd::Publish { .. }
-            }
-        ));
-    }
-
-    #[test]
-    fn remote_items_put_the_product_first_and_dedupe() {
+    fn patch_items_put_the_product_first_and_dedupe() {
         let catalog = Catalog::parse(
             r#"
 [php]
@@ -2915,7 +2889,7 @@ mod tests {
         bindings
             .lines
             .insert("openssl".to_owned(), "3.5".to_owned());
-        let items = remote_items(
+        let items = patch_items(
             &order,
             &catalog,
             &bindings,

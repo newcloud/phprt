@@ -2,12 +2,12 @@
 
 状态：已实现 catalog 里全部 49 个组件的 upstream 脚本并过验收（2026-11-20，第 14 节有实测结果）。
 
-本文只讲「怎么查上游、怎么写回」。两类使用者的分工、用户侧检查和组件分片发布见
-[CATALOG-MODEL.md](CATALOG-MODEL.md)；快照、manifest 和签名见
-[CATALOG-SNAPSHOT.md](CATALOG-SNAPSHOT.md)（未排期）。
+本文讲维护者的全量命令：怎么查上游、怎么写回。用户命令里的主线补丁检查见
+[CATALOG-MODEL.md](CATALOG-MODEL.md)：两边共用 `recipes/upstream/*.star`、版本比较和
+写回逻辑，但用户路径只查本次方案用到的组件主线，也不使用 `--fill-sha256`。
 
-这是维护者命令：`install` / `update` / `add` / `remove` 不会调用它。用户侧的在线检查
-只取维护者发布的组件分片，不查上游、不下载补丁包算哈希，也不使用 `--fill-sha256`。
+`catalog update` 是维护者入口；`install` / `update` / `add` / `remove` 不会调用这条命令，
+而是走自己的主线补丁检查。
 
 目标读者：维护 `recipes/catalog.toml` 的人，以及实现这个功能的 agent。
 
@@ -74,11 +74,11 @@ v2 把查询规则写在 recipe 里（`upstream=` / `versions()`），v3 不沿�
 - 新增版本线（openssl 4.0 → 4.1、PHP 8.5 → 8.6 等）。新线由开发人员按 [ADD-RECIPE.md](ADD-RECIPE.md) 主动添加，工具不写、不改。
 - 修改 `bundles/`、recipe 的 `LINES` / 兼容性约束。
 - 自动执行 `phprt update` 或 `install`。
-- 被 `install` / `update` / `add` / `remove` 调用；用户侧的在线检查只取发布分片，见
-  [CATALOG-MODEL.md](CATALOG-MODEL.md) 的「交互检查」。
+- 被 `install` / `update` / `add` / `remove` 调用；用户命令只走按主线范围的补丁检查，
+  见 [CATALOG-MODEL.md](CATALOG-MODEL.md) 的「主线补丁检查」。
 - 验证 catalog 更新后 `add` / `update` 的行为；这不在本次范围。
-- 独立 lock 文件；工具内自带的后台调度。定时更新由外部 CI 负责，`update` + `publish`
-  的定时用法见 [CATALOG-SNAPSHOT.md](CATALOG-SNAPSHOT.md) 的「定时更新」。
+- 独立 lock 文件；工具内自带的后台调度。定时更新由外部 CI 负责，直接调用
+  `phprt catalog update`。
 
 ## 4. 数据结构
 
@@ -491,8 +491,8 @@ cargo run -- catalog update --fill-sha256 xdebug
 
 只补当前 `sha256` 为空的条目；默认（不加参数）完全不碰，也不为已有条目下载。
 连已有哈希的条目全部重算（下载量大，但能发现哈希漂移）不做。回填受组件名过滤：
-命令行点名了组件就只处理这些组件。这个参数是维护用的，普通使用不需要；用户侧的在线
-刷新也不调用它，不下载补丁包补哈希。
+命令行点名了组件就只处理这些组件。这个参数是维护用的，普通使用不需要；用户命令的
+主线补丁检查也不调用它，只为新补丁下载源码包，不补旧条目的哈希。
 
 ## 14. 验收
 

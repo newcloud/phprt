@@ -392,7 +392,46 @@ component:openssl
 - `features[]` 带 `default_on`（当前系列 bundle 是否默认开）和 `available`（requires 是否满足）。
 - `audited=false` 的组件（产品 profile 的 `audit=none`）不要求处置选项。
 
-## 10. catalog update
+## 10. 主线补丁检查
+
+`install` / `update` / `add` / `remove` 在会下载或编译时先询问，只查方案用到的组件主线：
+
+```text
+准备安装 php 8.5，会用到这些组件：
+  php 8.5        本地 8.5.13
+  openssl 3.5    本地 3.5.9
+  libcurl 8.23   本地 8.23.0
+
+安装前是否检查上游这条主线的最新补丁？(y/n，回车默认 y)
+只查上面这些主线；有新补丁会下载源码包计算 sha256，写回 recipes/catalog.toml。
+```
+
+回答 `y` 后逐条线推进；查询阶段和非终端输出与 catalog update 相同：
+
+```text
+[catalog] php ✓
+    8.5  8.5.12 → 8.5.13
+[catalog] openssl ✓
+    3.5  无更新 3.5.9
+```
+
+有新补丁时先下载源码包算 sha256，再写回并打印备份：
+
+```text
+已备份: .phprt/backup/20261121-175336_catalog.toml
+已写入: recipes/catalog.toml
+php 8.5: 8.5.12 → 8.5.13
+  url: https://www.php.net/distributions/php-8.5.13.tar.gz
+openssl 3.5: 无更新 3.5.9
+catalog 已更新，继续。
+```
+
+- 没有变化时不写文件，也不打印 `已备份:` / `已写入:`。
+- 单条线失败打印 `✗` 和原因，保留本地数据；交互式安装继续，`--refresh` 按错误退出。
+- 跳过检查时打印一行：`非交互环境，跳过上游补丁检查，使用本地 catalog`。
+- 回答 `n` 时打印 `不检查，使用本地版本继续。`。
+
+## 11. catalog update
 
 ```text
 $ phprt catalog update openssl zlib
