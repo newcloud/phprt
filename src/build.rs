@@ -44,7 +44,6 @@ pub fn run(
     let tree = tree_path.display().to_string();
     let product_build = root.join(layout::build_dir_of(product));
     let parallel = opts.parallel;
-    let vendor = fs::canonicalize(opts.recipes.join("../vendor/perl")).ok();
     let host = HostEnv::from_process();
     let mut dep_sigs: BTreeMap<String, String> = BTreeMap::new();
     let mut tool_sigs: BTreeMap<(String, String), String> = BTreeMap::new();
@@ -94,14 +93,13 @@ pub fn run(
         let tool_prefixes: Vec<PathBuf> = opts.tools.prefixes(&target.id());
 
         let mut env = if target.kind == Kind::Tool {
-            tool_build_env(&tool_prefixes, vendor.as_deref())
+            tool_build_env(&tool_prefixes)
         } else {
             build_env(
                 &tree,
                 &product.profile.runtime.lib_dir,
                 &link_prefixes,
                 &tool_prefixes,
-                vendor.as_deref(),
             )
         };
         let node_ctx = ctx(&tree, &work, &prefix);
@@ -597,7 +595,7 @@ fn signature(reg: &Registry, target: &Target, inputs: &SigInputs<'_>) -> Result<
 
 /// 工具节点的签名：只算和工具产物有关的输入。
 ///
-/// 不进签名：PATH、PKG_CONFIG_PATH、LD_LIBRARY_PATH、PERL5LIB、MAKEFLAGS、
+/// 不进签名：PATH、PKG_CONFIG_PATH、LD_LIBRARY_PATH、MAKEFLAGS、
 /// CMAKE_BUILD_PARALLEL_LEVEL，以及执行时才追加的宿主 CFLAGS / CPPFLAGS / LDFLAGS。
 /// 编译器版本进签名：工具目录跨产品共享，换编译器要重编。
 fn tool_signature(
@@ -671,7 +669,7 @@ fn append_env(env: &mut BTreeMap<String, String>, key: &str, extra: &str) {
 
 /// 工具节点的构建环境：不带产品树、不带库路径；只把自己依赖的 built 工具
 /// 的 bin 前置，宿主 PATH 由 `add_host_env` 在执行时兜底。
-fn tool_build_env(tools: &[PathBuf], vendor: Option<&Path>) -> BTreeMap<String, String> {
+fn tool_build_env(tools: &[PathBuf]) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let path: Vec<String> = tools
         .iter()
@@ -680,9 +678,6 @@ fn tool_build_env(tools: &[PathBuf], vendor: Option<&Path>) -> BTreeMap<String, 
     env.insert("PATH".to_owned(), path.join(":"));
     env.insert("CFLAGS".to_owned(), "-O2".to_owned());
     env.insert("CXXFLAGS".to_owned(), "-O2".to_owned());
-    if let Some(vendor) = vendor {
-        env.insert("PERL5LIB".to_owned(), vendor.display().to_string());
-    }
     env
 }
 
@@ -819,7 +814,6 @@ fn build_env(
     runtime_lib_dir: &str,
     deps: &[PathBuf],
     tools: &[PathBuf],
-    vendor: Option<&Path>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let mut cpp = String::new();
@@ -849,9 +843,6 @@ fn build_env(
     env.insert("PATH".to_owned(), path.join(":"));
     env.insert("CFLAGS".to_owned(), "-O2".to_owned());
     env.insert("CXXFLAGS".to_owned(), "-O2".to_owned());
-    if let Some(vendor) = vendor {
-        env.insert("PERL5LIB".to_owned(), vendor.display().to_string());
-    }
     env
 }
 
@@ -864,7 +855,6 @@ struct HostEnv {
     ldflags: Option<String>,
     cflags: Option<String>,
     cxxflags: Option<String>,
-    perl5lib: Option<String>,
 }
 
 impl HostEnv {
@@ -880,7 +870,6 @@ impl HostEnv {
             ldflags: get("LDFLAGS"),
             cflags: get("CFLAGS"),
             cxxflags: get("CXXFLAGS"),
-            perl5lib: get("PERL5LIB"),
         }
     }
 }
@@ -936,11 +925,6 @@ fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv, parallel: us
             format!("{base}:{path}")
         };
         env.insert("PATH".to_owned(), value);
-    }
-    if let Some(perl) = &host.perl5lib
-        && let Some(base) = env.get("PERL5LIB").cloned()
-    {
-        env.insert("PERL5LIB".to_owned(), format!("{base}:{perl}"));
     }
 }
 
@@ -1501,7 +1485,7 @@ mod tests {
 
     #[test]
     fn build_env_uses_profile_runtime_lib_dir() {
-        let env = build_env("/tree", "lib/custom", &[], &[], None);
+        let env = build_env("/tree", "lib/custom", &[], &[]);
         assert_eq!(
             env["LD_LIBRARY_PATH"].split(':').next(),
             Some("/tree/lib/custom")
@@ -1510,20 +1494,19 @@ mod tests {
         assert!(!env.contains_key("PHP_AUTOHEADER"));
 
         let deps = vec![PathBuf::from("/deps/zlib")];
-        let env = build_env("/tree", "", &deps, &[], None);
+        let env = build_env("/tree", "", &deps, &[]);
         assert!(!env["LD_LIBRARY_PATH"].contains("/tree/"));
         assert!(env["LD_LIBRARY_PATH"].starts_with("/deps/zlib/lib"));
     }
 
     #[test]
     fn signature_env_has_no_host_values() {
-        let env = build_env("/tree", "", &[], &[], None);
+        let env = build_env("/tree", "", &[], &[]);
         assert_eq!(env["PATH"], "/tree/bin");
         assert_eq!(env["CFLAGS"], "-O2");
         assert_eq!(env["CXXFLAGS"], "-O2");
         assert_eq!(env["CPPFLAGS"], "");
         assert_eq!(env["LDFLAGS"], "");
-        assert!(!env.contains_key("PERL5LIB"));
         // 并行度是机器属性，不进签名：换机器、改 parallel 都不触发重编。
         assert!(!env.contains_key("MAKEFLAGS"));
         assert!(!env.contains_key("CMAKE_BUILD_PARALLEL_LEVEL"));
@@ -1531,14 +1514,13 @@ mod tests {
 
     #[test]
     fn host_env_is_added_for_execution_only() {
-        let mut env = build_env("/tree", "", &[], &[], None);
+        let mut env = build_env("/tree", "", &[], &[]);
         let host = HostEnv {
             path: Some("/host/bin".into()),
             cflags: Some("-march=native".into()),
             cxxflags: Some("-fPIC".into()),
             cppflags: Some("-DHOST".into()),
             ldflags: Some("-L/host/lib".into()),
-            perl5lib: Some("/host/perl".into()),
         };
         add_host_env(&mut env, &host, 4);
         assert_eq!(env["MAKEFLAGS"], "-j4");
@@ -1548,14 +1530,11 @@ mod tests {
         assert_eq!(env["CPPFLAGS"], "-DHOST");
         assert_eq!(env["LDFLAGS"], "-L/host/lib");
         assert_eq!(env["PATH"], "/tree/bin:/host/bin");
-        // build_env 没给 PERL5LIB 时，宿主的也不补：和原来一致。
-        assert!(!env.contains_key("PERL5LIB"));
 
         let deps = vec![PathBuf::from("/deps/zlib")];
-        let mut env = build_env("/tree", "", &deps, &[], Some(Path::new("/vendor/perl")));
+        let mut env = build_env("/tree", "", &deps, &[]);
         add_host_env(&mut env, &host, 4);
         assert_eq!(env["CPPFLAGS"], "-I/deps/zlib/include -DHOST");
-        assert_eq!(env["PERL5LIB"], "/vendor/perl:/host/perl");
     }
 
     #[test]

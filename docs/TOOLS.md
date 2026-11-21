@@ -315,7 +315,7 @@ recipe 的 `env` 里。
   ```
 
 - 以下输入**不进** tool-sig：`PATH`、`PKG_CONFIG_PATH`、`LD_LIBRARY_PATH`、
-  `PERL5LIB`、`MAKEFLAGS`、`CMAKE_BUILD_PARALLEL_LEVEL`，以及宿主执行时才追加的
+  `MAKEFLAGS`、`CMAKE_BUILD_PARALLEL_LEVEL`，以及宿主执行时才追加的
   `CFLAGS` / `CPPFLAGS` / `LDFLAGS`。理由：工具没有 `needs`，库路径只可能来自
   内部依赖或宿主；内部依赖已经由 `tool-dep` 的 sig 覆盖。
 - 宿主工具不写版本/路径，也不改 env；所以宿主机 autoconf 升级不会触发重编。

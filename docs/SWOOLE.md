@@ -351,10 +351,10 @@ def target(ctx):
 
 - `--enable-zstd` 默认 `no`，打开后用 `PKG_CHECK_MODULES([ZSTD], [libzstd >= 1.4.0])`；
   依赖 `zstd` 通过 `make -C lib install` 安装 `libzstd.pc`。
-- `libpq` 的消费者是 PHP 的 `pdo_pgsql`（§4.5），不是 swoole。libpq 构建要跑 PG 的
-  perl 脚本（生成 catalog 头需要 `FindBin.pm` 等核心模块）。phprtv3 不需要像 phprtv2
-  那样建 perlshim 依赖：仓库的 `vendor/perl` 已经放了这些纯 perl 模块，构建时对每个
-  节点注入 `PERL5LIB`（见 `docs/BUILD.md` §3）。
+- `libpq` 的消费者是 PHP 的 `pdo_pgsql`（§4.5），不是 swoole。libpq 构建会连带跑
+  PG 的 perl 脚本生成 catalog 头，需要 `FindBin`、`File::Compare`、`Getopt::Long`
+  等核心模块；宿主 perl 不全时按 tools 的 `perl` 预检提示装完整的 perl 包
+  （见 `docs/BUILD.md` §7）。
 
 ## 6. 默认值判据
 

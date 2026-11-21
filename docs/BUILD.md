@@ -67,11 +67,10 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 | `CFLAGS` / `CXXFLAGS` | `-O2`，再接 recipe / env，最后追加选中的 toolchain 档位参数 |
 | `MAKEFLAGS` | `-j<parallel>`，默认 CPU 数 - 1（最少 1），见 `phprt.toml` |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | 同上的并发数，给 `cmake --build` 用 |
-| `PERL5LIB` | 仓库的 `vendor/perl`（补系统 perl 缺的纯 Perl 模块），再接用户已有的值 |
 
 表格里“再接原有 PATH”只发生在执行时；宿主的 `CFLAGS` / `CXXFLAGS` 也在执行时
 **前置**到工具生成的值前面，保证 toolchain 档位参数最后生效。宿主 `PATH` /
-`CPPFLAGS` / `LDFLAGS` / `CFLAGS` / `CXXFLAGS` / `PERL5LIB` 不参与签名，所以换 shell、
+`CPPFLAGS` / `LDFLAGS` / `CFLAGS` / `CXXFLAGS` 不参与签名，所以换 shell、
 上 CI、`.bashrc` 里多一条路径都不会让整棵树重编；反过来，改了这些值也不会自动触发
 重编，要重编用 `install --force` 或删 `build/`。
 
@@ -111,7 +110,7 @@ fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_IN
 工具的签名 `tool-sig` 是单独一份：节点 id、版本、url / sha256、实际编译器的
 `cc + 版本 + triple`、configure / make 程序与参数、编译相关环境（`CFLAGS` /
 `CXXFLAGS` / `CPPFLAGS` / `LDFLAGS` 白名单），以及依赖工具的签名。`PATH` /
-`PKG_CONFIG_PATH` / `LD_LIBRARY_PATH` / `PERL5LIB` / `MAKEFLAGS` /
+`PKG_CONFIG_PATH` / `LD_LIBRARY_PATH` / `MAKEFLAGS` /
 `CMAKE_BUILD_PARALLEL_LEVEL` 和宿主执行时追加的值不进 `tool-sig`。工具签名变化只重编
 实际使用它的节点；工具不是版本解析的一部分，不进 `resolution=` 和方案指纹。
 
@@ -169,7 +168,6 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
 | dep / component / tool 的 `tools` | 该节点自己的构建期工具，如 cmake、nasm、autoconf |
 | feature 的 `requires.commands` | 选中 feature 时检查的宿主机命令（只做选择阶段门禁） |
 | `recipes/tools/*.star` | 可从源码构建的工具；catalog 里每条线都是可选版本 |
-| 纯 Perl 模块 | 仓库 `vendor/perl`，构建时通过 `PERL5LIB` 注入 |
 
 解析按节点进行：同名要求取交集（`min` 取大、`max` 取小），宿主优先，其次复用
 `build/tools`，最后从 catalog 取满足区间的最高版本构建。同名工具允许多版本并存，
