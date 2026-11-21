@@ -93,6 +93,23 @@ bundle 默认值 / 重新解析工具：
 | `deps.<名字>.version` | 依赖实际补丁；`--lock` 把它当作精确版本 |
 | `deps.<名字>.features` | 当前构建使用的 feature 并集 |
 | `tools` | 上次构建实际解析到的工具：`name` / `version` / `provider`（`host` / `store`）；旧文件没有这个字段 |
+| `image` | 镜像模式的记录：`line` / `image` / `digest` / `gcc` / `glibc` / `container`；宿主模式没有这个字段 |
+
+`image.container` 是长驻容器的记录：
+
+```json
+"container": {
+  "name": "phprt-php-8.5-3f2a91c0",
+  "id": "9b1d…",
+  "created": "2026-11-22T00:45:00Z",
+  "mounts": ["/home/z/blog:/home/z/blog"]
+}
+```
+
+下次镜像模式的命令先看这条记录：容器还在就直接 `exec`，不在了就用同一个原镜像重建。
+容器 id 只是缓存，和 `inspect` 的结果不一致时以 `inspect` 为准。容器不参与方案指纹，
+也不参与节点签名；原镜像的 digest 才进签名。字段和生命周期见
+[CONTAINER.md](CONTAINER.md) 第 3、7 节。
 
 `tools` 按版本列，不按名字做 key，同名工具可以有多条；它是上次构建的解析结果，
 不写进 `components` / `bindings`，也不参与方案指纹。`--lock` 复用其中

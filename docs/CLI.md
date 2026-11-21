@@ -72,6 +72,10 @@ default_answer = "y"
 全局模式对应 `--build-dir`/`global_build_dir`、`--backup-dir`/`global_backup_dir`。本地模式的相对路径按项目根解析；
 全局模式的相对路径按 `$HOME` 解析。
 
+容器构建用的运行时只由 `phprt.toml` 的 `container_runtime` 指定，没有命令行参数；
+取值 `podman` / `docker` / `kiri`。不写时依次试 `podman` → `docker` → `kiri`，
+写了就只用它，连不上直接报错。
+
 ### 主线补丁检查
 
 `install` / `update` / `add` / `remove` 在真正下载或编译前询问一次；只查本次方案用到的
@@ -181,9 +185,7 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `--disable-default-component <NAME>` | 禁用该产品系列的默认组件；可重复 |
 | `--targets <SPEC>` | 产品构建目标；如 `cli`、`cli,fpm=user:www-data,group:www-data`。见 [TARGETS.md](TARGETS.md) |
 | `--buildbyimage [镜像]` | 进入镜像构建模式；空值用默认线，写线名用 catalog，写完整 ref 用本地镜像。`install` / `build` / `plan`（待实施，见 [CONTAINER.md](CONTAINER.md)） |
-| `--from-plan <文件>` | 读状态文件，宿主补 catalog / 下载 / 解压后进工具链镜像编译；`install` / `build`（待实施） |
-| `--toolchain <tag>` | 指定复用的工具链镜像；`install` / `build` / `plan`（待实施） |
-| `--no-accumulate` | 不复用旧工具链，从原镜像重新装一套；`install` / `build`（待实施） |
+| `--stop-after <检查点>` | 在指定检查点产出之后退出：`packages`（装包命令）/ `mainline`（依赖主线）/ `download` / `extract`；退出码 0，不写安装 state。`install` / `add` / `remove` / `update` / `build`（待实施） |
 
 持久化组件方案用 `add` / `remove`；`install --component` 只影响这一次构建。
 `--targets` 在 `install` / `update` / `plan` 上接收；`add` / `remove` 沿用 state 里的选择。
@@ -594,7 +596,7 @@ phprt install nginx@1.29
 
 ## 镜像（待实施）
 
-镜像 catalog、工具链镜像和 OCI 产出的完整方案见 [IMAGE.md](IMAGE.md) 与
+镜像 catalog、长驻容器和 OCI 产出的完整方案见 [IMAGE.md](IMAGE.md) 与
 [CONTAINER.md](CONTAINER.md)。
 
 ```bash
@@ -602,8 +604,8 @@ phprt list_oci_images
 phprt install php@8.5 --buildbyimage
 phprt install php@8.5 --buildbyimage debian13
 phprt install php@8.5 --buildbyimage docker.io/library/debian:13
-phprt plan php@8.5 --buildbyimage --json > .phprt/plan/php-8.5.json
-phprt install php@8.5 --buildbyimage --from-plan .phprt/plan/php-8.5.json
+phprt install php@8.5 --stop-after packages
+phprt install php@8.5 --stop-after mainline
 phprt build php@8.5
 ```
 
@@ -612,20 +614,25 @@ phprt build php@8.5
 - `--buildbyimage` 空值用 bundle 的 `[image].line`；写 catalog 线名用该条目的
   image / digest / pm / gcc / glibc；写完整镜像 ref 当作用户自己 pull 的镜像。
 - 原镜像必须在本地。没有就报错提示先 pull，phprt 不自动拉。
-- 镜像模式记录在 state 里，之后的 `install` / `add` / `remove` / `update` 沿用，
-  不用每次带 `--buildbyimage`。
-- `plan --buildbyimage --json` 在容器里只跑到工具状态，不下载、不编译；标准输出
-  存成 `.phprt/plan/<产品>-<系列>.json`，就是后续要用的状态文件。
-- `--from-plan` 读这个文件继续：宿主补下载 / 解压，再进镜像编译。
-- 默认复用上次的工具链镜像；`--toolchain <tag>` 指定，`--no-accumulate` 从原镜像
-  重新装一套（新 tag，旧镜像不动）。
-- 产品声明了 `toolchain` 时，catalog 线用条目的 `gcc` 预检；用户给的镜像在工具链
-  镜像构建完再验，不满足报错。
+- phprt 从原镜像起一个长期运行的容器，把工具装在里面，state 记容器名和 id；
+  之后的 `install` / `add` / `remove` / `update` 直接 `exec` 进去，不重装工具。
+  容器被删了自动重建，并提示工具会重装一遍。
+- 结束时打印容器还在运行，以及 `podman kill … && podman rm …` 的删除命令。
+- 不生成工具链镜像、Dockerfile、compose。
+- 流程是四个检查点：`packages`（生成装包命令）→ `mainline`（复检工具、写主线）
+  → `download`（宿主 catalog 更新 + 下载）→ `extract`（解压）→ 容器里编译。
+  `--stop-after <检查点>` 在产出之后退出，把控制权交回宿主。
+- `--stop-after mainline` 写 `.phprt/plan/<产品>-<系列>.json`：产品、系列、每个节点的
+  版本线 / 补丁 / URL / sha256，以及每个工具的最终来源（`image` / `source`）。
+  宿主下次运行优先读它，`resolution_digest` 对不上才重新解析。
+- 打断之后重跑同一条命令（或不带参数）就继续；每个检查点做一次幂等检查。
+- 产品声明了 `toolchain` 时，catalog 线用条目的 `gcc` 预检；用户给的镜像在容器里
+  跑 `gcc --version` 验证，不满足报错。
 - `glibc` 只打印“产物要求运行系统 glibc >= X”的提示，不做构建判断。
 - 镜像里缺的 make / perl / patchelf 等按 `[package_maps.<pm>]` 和
-  `[images.*].packages` 处理；装完照常做工具版本和 `feature_checks` 检查。
-- `--buildbyimage` 对 `install` / `build` / `plan` 都生效；`plan --json` 的
-  `image` / `builder` 段给出原镜像、digest、工具链 tag、包清单和 Dockerfile 路径。
+  `[images.*].packages` 装包；装完复检一次，仍缺就报错，不再装第二轮。
+- `plan --json` 的 `image` 段给出原镜像、digest、容器名和状态，`builder` 段给出
+  每个工具的状态和要装的包。
 
 ## audit
 

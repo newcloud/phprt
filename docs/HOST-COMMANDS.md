@@ -308,8 +308,8 @@ toolchain
 | apt | `sudo apt-get install <包...>` |
 | dnf | `sudo dnf install <包...>` |
 
-镜像模式在 Dockerfile 的 `RUN` 里装包，不写 `sudo`，apt 先 `update`；模板按
-IMAGE.md §4.3 单独写。本表只管宿主提示。
+镜像模式用同一张映射表，但由宿主在容器里执行：`podman exec -u 0 <容器> <pm> install ...`，
+不写 `sudo`，apt 先 `update`；模板见 IMAGE.md §4.3。本表只管宿主提示。
 
 ## 8. 文件清单
 

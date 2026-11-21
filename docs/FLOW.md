@@ -49,15 +49,14 @@ phprt scheme php@8.5                        # 打印一条 install 命令（含 
 
 ## 2. install
 
-`install` 加了 `--buildbyimage`（或 state 已记录镜像模式）时，换成
-plan → 工具链镜像 → 容器内 `install` 的流程，下载、解压、编译都在容器里完成；
-下面的判定矩阵、签名和 state 规则不变。完整流程见 [CONTAINER.md](CONTAINER.md)。
+`install` 加了 `--buildbyimage`（或 state 已记录镜像模式）时，换成「长驻容器 +
+检查点流水线」：容器里探测工具、装包、编译，宿主查 catalog、下载、解压；下面的判定
+矩阵、签名和 state 规则不变。完整流程见 [CONTAINER.md](CONTAINER.md)。
 
 这次会下载或编译时，先询问是否检查上游主线补丁；`y` 只更新本次闭包用到的组件主线，
 写回 `recipes/catalog.toml` 后重新算方案。下面的判定矩阵和「catalog 里的目标补丁」
 都指检查后的结果；`n`、`--offline`、`--lock` 或非交互环境用本地 catalog。见
 [CATALOG-MODEL.md](CATALOG-MODEL.md)。
-
 
 ### 2.1 判定矩阵
 
@@ -166,9 +165,9 @@ phprt install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'
 - `plan` 不因工具缺失失败，在 `tools` 段显示“无法解析”，并在 `host commands` 段
   给出安装命令（工具 recipe 写了 `reason` 时带一句人话说明）；
   `install` / `add` / `remove` 汇总后一次报错。
-- 镜像模式下，上面判断里的“宿主”换成“当前工具链镜像 / 原镜像”；缺的工具写成
-  Dockerfile 的装包命令，装完再做版本和 `feature_checks` 检查。见
-  [CONTAINER.md](CONTAINER.md) §6。
+- 镜像模式下，上面判断里的“宿主”换成“容器”；缺的工具在容器里探测后由宿主
+  `podman exec -u 0` 装包，装完复检一次，仍缺就报错。见
+  [CONTAINER.md](CONTAINER.md) 第 5 节。
 
 ## 3. add
 

@@ -20,23 +20,21 @@ digest = "sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a
 pm     = "apt"
 gcc    = "14.2"
 glibc  = "2.41"
-# 派生 builder 镜像要额外装的包。
+# 派生容器要额外装的包。容器里装一次就留在容器里，下次 add / remove / update 直接
+# 复用这个容器，不重装。
 #
 # Debian/Ubuntu 的 perl-base 提供 /usr/bin/perl 却缺 FindBin，openssl 的 Configure
 # 会挂。宿主模式靠 feature_check（recipes/tools/perl.star 的 findbin）提前发现，
-# 按 need_packages(["perl"], reason = "...") 提示装完整 perl；这里保证镜像里
+# 按 need_packages(["perl"], reason = "...") 提示装完整 perl；这里保证容器里
 # 一次性装好。
 # 包名直接追加到推导清单后面（不走 [package_maps.*]，写发行版真包名）：
 #   apt-get update && apt-get install -y --no-install-recommends ... perl
-#
-# 这份追加清单和 bootstrap、镜像 digest 一起算派生 builder 镜像（toolchain + 系统包）
-# 的身份：改了要重建派生镜像，不能复用旧层。
 packages = ["perl"]
 
-# 容器环境前置：起容器后、自动装包和编译之前，以 root 在容器里按顺序执行。
+# 容器环境前置：创建容器后、自动装包和编译之前，以 root 在容器里按顺序执行一次。
 #
 # 只对这个镜像条目生效；宿主模式没有这一步（宿主仍然只提示、不执行），
-# plan 只把命令列出来不执行，--offline 不跑。某条命令非 0 退出就中止并给日志，
+# plan 只把命令列出来不执行，--offline 不跑。某条命令非 0 退出就删掉容器并中止，
 # 不会带病继续装包或编译。改包源、加 GPG key 这类"必须在装包前完成"的动作写这里。
 # bootstrap = [
 #   "sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources",

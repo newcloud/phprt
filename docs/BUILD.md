@@ -93,6 +93,10 @@ fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_IN
 
 构建阶段使用绝对路径；`plan` 的输出仍然用相对项目根的路径，便于阅读。
 
+镜像模式（`--buildbyimage`）只换执行环境：变量、顺序、签名规则都不变，源码和安装树
+仍用宿主绝对路径，挂进容器后路径不变。容器怎么建、工具怎么装见
+[CONTAINER.md](CONTAINER.md)。
+
 ## 4. 跳过与重编
 
 每个工作目录写 `.phprt-sig`，内容包含：

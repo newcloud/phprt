@@ -16,8 +16,8 @@ Sim { root, tree, targets, toolchain, tools, host_commands, image, builder, orde
 | `toolchain` | 实际编译器档位；产品没有 `toolchain` 声明时为 `null` |
 | `tools` | 本次用到的构建工具（host + built）以及解析失败项 |
 | `host_commands` | 宿主缺少的构建命令、安装命令，以及工具 recipe 写的一句话说明（`reasons`）；没有缺失项时为 `null` |
-| `image` | 镜像模式（待实施）：原镜像、digest、gcc、glibc、工具链 tag、能不能复用；非镜像模式为 `null` |
-| `builder` | 镜像模式（待实施）：要装进工具链镜像的包、每个工具的状态、Dockerfile 内容；真正生成后的落盘路径在 `install` / `build` 的输出里给；非镜像模式为 `null` |
+| `image` | 镜像模式（待实施）：原镜像、digest、gcc、glibc，以及容器名、id 和状态（复用 / 启动 / 重建 / 新建）；非镜像模式为 `null` |
+| `builder` | 镜像模式（待实施）：每个工具的状态、要装的包和装包命令；非镜像模式为 `null` |
 | `order` | 拓扑序节点数组；需要构建的工具节点排在最前面 |
 
 `Node` 字段：
@@ -238,6 +238,73 @@ xdebug           external  shared             3.5.3      available
 版本列是当前系列下 recipe 解析出的版本；bundled 组件跟随产品补丁。
 没有 state 时，bundle `default_components` 里的组件显示为 `pending`，其他 recipe 显示
 `available`。
+
+### 4.1 镜像模式的段
+
+`plan --buildbyimage` 在本地模式的段前面多两段：
+
+```text
+image    docker.io/library/debian:13@sha256:9c6e…  gcc 14.2  glibc 2.41
+container phprt-php-8.5-3f2a91c0（复用，running）
+builder  gcc 14.2 ok | perl 5.40 package → perl | patchelf source
+install  apt-get update && apt-get install -y --no-install-recommends gcc g++ make perl
+```
+
+- `container` 的状态只有四种：`新建` / `复用` / `启动` / `重建`。
+- `builder` 每个工具只显示 `ok` / `package` / `source` / `error`；`package` 后面跟
+  包名，`error` 后面跟原因。这是探测时的状态；写进主线文件的 `tools.provider`
+  只有 `image` / `source` 两种最终来源。
+- `install` 是准备交给宿主的装包命令；apt 带 `update`，dnf 不带。
+
+对应的 JSON：
+
+```json
+{
+  "image": {
+    "base": {
+      "line": "debian13",
+      "ref": "docker.io/library/debian:13",
+      "digest": "sha256:9c6e…",
+      "arch": "amd64",
+      "gcc": "14.2",
+      "glibc": "2.41"
+    },
+    "container": {
+      "name": "phprt-php-8.5-3f2a91c0",
+      "id": "9b1d…",
+      "state": "reuse"
+    }
+  },
+  "builder": {
+    "tools": [
+      {"name": "gcc", "need": ">=14", "found": "14.2", "status": "ok"},
+      {"name": "perl", "need": ">=5.20", "found": "5.40", "status": "package",
+       "packages": ["perl"], "check": "findbin"},
+      {"name": "patchelf", "need": ">=0.19", "found": null, "status": "source"}
+    ],
+    "packages": {
+      "pm": "apt",
+      "install": ["gcc", "g++", "make", "perl"],
+      "extra": [],
+      "command": "apt-get update && apt-get install -y --no-install-recommends gcc g++ make perl"
+    },
+    "bootstrap": []
+  }
+}
+```
+
+`--stop-after packages` 不打印完整的 `Sim`，只打印装包命令和一行说明：
+
+```text
+容器 phprt-php-8.5-3f2a91c0（复用，running）
+需要安装：perl
+podman exec -u 0 phprt-php-8.5-3f2a91c0 apt-get update && \
+podman exec -u 0 phprt-php-8.5-3f2a91c0 apt-get install -y --no-install-recommends gcc g++ make perl
+```
+
+`--stop-after mainline` 写 `.phprt/plan/<产品>-<系列>.json`，stdout 打印路径、节点数
+和每个工具的最终来源（`image` / `source`）；文件结构见
+[CONTAINER.md](CONTAINER.md) 第 4.4 节。`download` / `extract` 打印写出的文件数和目录。
 
 ## 5. 下载输出
 
