@@ -48,7 +48,8 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 **非目标：**
 
 - 不做跨产品共享安装树；每个产品一份 `.phprt/<产品>-<版本>/`。
-- 不做默认版本、当前产品、`phprt.toml` 项目清单。
+- 不做默认版本、当前产品、`phprt.toml` 项目清单；`phprt.toml` 不记录产品、版本或组件
+  选择（catalog 交互开关见 [CATALOG-MODEL.md](CATALOG-MODEL.md)）。
 - 不做一条命令安装多个产品。
 - 不生成独立 lock 文件；补丁复用与 `--lock` 见 [LOCK.md](LOCK.md)。
 - 不做交叉编译、LTO、`--static-all`。
@@ -62,14 +63,18 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 | bundle | `recipes/bundles/<产品>/<系列>.toml` | 默认用哪条线、默认装哪些组件、默认选哪些 target |
 | state | `.phprt/<产品>-<系列>/state.json`（工具目录在项目根下，默认 `.phprt`，可配置） | 本机这次实际选了什么、装到哪一步 |
 
-优先级从低到高：catalog < recipe < bundle < state < CLI。
+优先级从低到高：catalog < recipe < bundle < state < CLI。用户侧在线检查取到的组件分片
+叠加在 `recipes/catalog.toml` 之上（追加，不删除），见
+[CATALOG-MODEL.md](CATALOG-MODEL.md)。
 
 Tool / Toolchain 不新增层：Tool 的 recipe 在 `recipes/tools/`、源码版本仍走
 `catalog.toml`，构建产物放在 `build/tools/`（可重建缓存，不进 state 的产品身份）；
 Toolchain 是产品 recipe 的字段，只探测和合并参数。镜像线放在
 `recipes/images.toml`，镜像部分待实施；同一文件里的 `[package_maps.*]` 现在也服务
 宿主模式的安装提示，不改变这四层，见 [TOOLS.md](TOOLS.md)、[IMAGE.md](IMAGE.md)
-和 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
+和 [HOST-COMMANDS.md](HOST-COMMANDS.md)。catalog 按组件分片发布、用户侧按闭包取数的设计
+见 [CATALOG-MODEL.md](CATALOG-MODEL.md)；快照、manifest 和签名见
+[CATALOG-SNAPSHOT.md](CATALOG-SNAPSHOT.md)（未排期）。
 
 ## 4. 三个核心概念
 
@@ -265,6 +270,8 @@ bundled 组件不单独下载，源码在产品 tarball 里。
 src/
 ├── main.rs       CLI、命令分派、状态读写
 ├── catalog.rs    catalog.toml
+├── catalog_publish.rs  把 catalog.toml 拆成组件分片（CATALOG-MODEL.md）
+├── catalog_remote.rs   用户侧在线检查、分片获取与本地合并（CATALOG-MODEL.md）
 ├── recipe.rs     两阶段加载、契约校验、Registry、Selection
 ├── targets.rs    --targets 解析、选择、校验、规范化、scheme/指纹文本
 ├── bundle.rs     bundles/<产品>/<系列>.toml
@@ -282,7 +289,7 @@ src/
 ├── version.rs    版本区间比较（tool / toolchain 共用）
 ├── layout.rs     源码 / 安装路径
 ├── sources.rs    下载清单
-└── config.rs     下载 / rpath 配置
+└── config.rs     下载 / catalog 交互 / rpath 配置
 
 crates/
 ├── download/     下载、镜像、分片续传、进度
@@ -310,7 +317,8 @@ recipes/
 
 ## 12. 不在范围内
 
-- 项目清单、当前产品、默认版本；
+- 项目清单、当前产品、默认版本；`phprt.toml` 不记录产品、版本或组件选择（见
+  [CATALOG-MODEL.md](CATALOG-MODEL.md)）；
 - 一条命令构建多个产品；
 - 跨产品共享安装树；
 - 独立 lock 文件（精确版本复用见 [LOCK.md](LOCK.md)）；
@@ -353,6 +361,8 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [LOCK.md](LOCK.md) | 解析顺序、`--lock`、`update`、`scheme --lock`、catalog 旧补丁保留 |
 | [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
 | [CATALOG-UPDATE.md](CATALOG-UPDATE.md) | 上游版本查询、每组件 upstream star 脚本、catalog 写回与备份、sha256 获取 |
+| [CATALOG-MODEL.md](CATALOG-MODEL.md) | catalog 的两类使用者、用户侧闭包检查、交互提示、组件分片发布 |
+| [CATALOG-SNAPSHOT.md](CATALOG-SNAPSHOT.md) | 快照 id、manifest、minisign 签名、CDN 与镜像（未排期） |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |

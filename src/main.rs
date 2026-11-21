@@ -4,6 +4,8 @@ mod bind;
 mod build;
 mod bundle;
 mod catalog;
+mod catalog_publish;
+mod catalog_remote;
 mod config;
 mod host_commands;
 mod layout;
@@ -84,7 +86,7 @@ struct Cli {
     cmd: Cmd,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum Cmd {
     /// 列出已安装的产品；带 产品@系列 时列出该产品的组件
     List {
@@ -208,14 +210,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// 维护 recipes/catalog.toml
+    /// 维护 recipes/catalog.toml：查上游、写回、发布组件分片
     Catalog {
         #[command(subcommand)]
         command: CatalogCmd,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum CatalogCmd {
     /// 查询上游最新补丁，写进 catalog.toml（写前备份）
     Update {
@@ -227,6 +229,12 @@ enum CatalogCmd {
         fill_sha256: bool,
         /// 只更新这些组件；空表示全部（没有 upstream 脚本的跳过）
         components: Vec<String>,
+    },
+    /// 把 catalog.toml 拆成每个组件一个分片，供用户在线获取
+    Publish {
+        /// 输出目录；实际写到 <out>/latest/components/
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -273,6 +281,12 @@ struct DownloadArgs {
     /// 只用缓存，不联网
     #[arg(long)]
     offline: bool,
+    /// 跳过询问，直接获取最新 catalog；失败按错误处理
+    #[arg(long, conflicts_with_all = ["no_refresh", "offline"])]
+    refresh: bool,
+    /// 跳过询问，不获取 catalog
+    #[arg(long = "no-refresh")]
+    no_refresh: bool,
     /// 进度显示方式
     #[arg(long, value_enum, default_value_t = Mode::Auto, value_name = "MODE")]
     ui: Mode,
@@ -297,7 +311,6 @@ fn run() -> Result<()> {
         bail!("配置不存在: {}", config_file.display());
     }
     let config = config::Config::load(&config_file)?;
-    let parallel = effective_parallel(cli.parallel, &config)?;
     match (cli.global, cli.prefix.as_deref()) {
         (true, None) => bail!("--global 需要 --prefix，例如 --prefix /usr/local/php"),
         (false, Some(_)) => bail!("--prefix 只能和 --global 一起用"),
@@ -369,6 +382,92 @@ fn run() -> Result<()> {
         }
     }
     let recipes = effective_recipes(cli.recipes.as_deref(), &cli.root, &config);
+
+    if let Cmd::List {
+        target: None,
+        installed,
+        pending,
+    } = &cli.cmd
+    {
+        if *installed || *pending {
+            bail!("--installed / --pending 需要指定产品，例如 phprt list php@8.5");
+        }
+        print_states(&cli.root)?;
+        return Ok(());
+    }
+
+    // catalog 命令不带产品目标，不需要求解器。
+    if let Cmd::Catalog { command } = &cli.cmd {
+        match command {
+            CatalogCmd::Update {
+                dry_run,
+                fill_sha256,
+                components,
+            } => {
+                let backup = match layout::backup_dir_name() {
+                    Some(name) => layout::resolve(&cli.root, name),
+                    None => layout::internal_dir(&cli.root).join("backup"),
+                };
+                let report = phprt_upstream::run(phprt_upstream::Options {
+                    recipes: recipes.clone(),
+                    cache: layout::downloads_dir(&cli.root),
+                    backup_dir: backup,
+                    // 并发 / 分片 / 超时和 install 的默认值一致（docs/DOWNLOAD.md 5）。
+                    download: phprt_download::Options {
+                        jobs: 10,
+                        host_jobs: 2,
+                        connections: 4,
+                        timeout: 900,
+                        proxy: None,
+                        github_proxy: config.github_proxy()?,
+                        offline: false,
+                        // 和 install 的默认一致：终端里画进度框，非终端逐行输出。
+                        ui: Mode::Auto,
+                    },
+                    dry_run: *dry_run,
+                    fill_sha256: *fill_sha256,
+                    components: components.clone(),
+                    validate: Box::new(|path| Catalog::load(path).map(|_| ())),
+                })?;
+                print!("{}", report.text());
+                if report.partial_failure {
+                    std::process::exit(3);
+                }
+            }
+            CatalogCmd::Publish { out } => {
+                let summary = catalog_publish::run(&recipes.join("catalog.toml"), out)?;
+                println!(
+                    "已发布 {} 个组件分片到 {}",
+                    summary.components,
+                    summary.out.display()
+                );
+                println!("数据时间 {}", summary.stamp);
+            }
+        }
+        return Ok(());
+    }
+
+    let mut allow_online = true;
+    loop {
+        match run_body(&cli, &config, &recipes, allow_online)? {
+            RunOutcome::Done => return Ok(()),
+            RunOutcome::Retry => allow_online = false,
+        }
+    }
+}
+
+enum RunOutcome {
+    Done,
+    Retry,
+}
+
+fn run_body(
+    cli: &Cli,
+    config: &config::Config,
+    recipes: &Path,
+    allow_online: bool,
+) -> Result<RunOutcome> {
+    let parallel = effective_parallel(cli.parallel, config)?;
     // 只有 install 判定“已装/中断/该升级”，update 的语义就是跟到最新补丁。
     let install_cmd = matches!(&cli.cmd, Cmd::Install { .. });
     let force = matches!(&cli.cmd, Cmd::Install { force: true, .. });
@@ -391,61 +490,6 @@ fn run() -> Result<()> {
         } => *no_backup_php_ext_ini,
         _ => false,
     };
-
-    if let Cmd::List {
-        target: None,
-        installed,
-        pending,
-    } = &cli.cmd
-    {
-        if *installed || *pending {
-            bail!("--installed / --pending 需要指定产品，例如 phprt list php@8.5");
-        }
-        print_states(&cli.root)?;
-        return Ok(());
-    }
-
-    // catalog 更新不带产品目标，不需要求解器；逻辑全部在 phprt-upstream 里。
-    if let Cmd::Catalog { command } = &cli.cmd {
-        let report = match command {
-            CatalogCmd::Update {
-                dry_run,
-                fill_sha256,
-                components,
-            } => {
-                let backup = match layout::backup_dir_name() {
-                    Some(name) => layout::resolve(&cli.root, name),
-                    None => layout::internal_dir(&cli.root).join("backup"),
-                };
-                phprt_upstream::run(phprt_upstream::Options {
-                    recipes: recipes.clone(),
-                    cache: layout::downloads_dir(&cli.root),
-                    backup_dir: backup,
-                    // 并发 / 分片 / 超时和 install 的默认值一致（docs/DOWNLOAD.md 5）。
-                    download: phprt_download::Options {
-                        jobs: 10,
-                        host_jobs: 2,
-                        connections: 4,
-                        timeout: 900,
-                        proxy: None,
-                        github_proxy: config.github_proxy()?,
-                        offline: false,
-                        // 和 install 的默认一致：终端里画进度框，非终端逐行输出。
-                        ui: Mode::Auto,
-                    },
-                    dry_run: *dry_run,
-                    fill_sha256: *fill_sha256,
-                    components: components.clone(),
-                    validate: Box::new(|path| Catalog::load(path).map(|_| ())),
-                })?
-            }
-        };
-        print!("{}", report.text());
-        if report.partial_failure {
-            std::process::exit(3);
-        }
-        return Ok(());
-    }
 
     let mut scheme_list: Option<String> = None;
     let (target_spec, components, target_args, download, goal, json) = match &cli.cmd {
@@ -578,12 +622,15 @@ fn run() -> Result<()> {
     };
     let (product_name, requested) = split_target(&target_spec)?;
 
-    let catalog = Catalog::load(&recipes.join("catalog.toml"))
-        .with_context(|| format!("加载 {}", recipes.display()))?;
+    let catalog = Catalog::load_layered(
+        &recipes.join("catalog.toml"),
+        &layout::catalog_dir(&cli.root).join("components"),
+    )
+    .with_context(|| format!("加载 {}", recipes.display()))?;
     // 先按 catalog 把 `php@8.5` / `php@8.5.12` 归一成系列，recipe 和 bundle 都按系列找。
     let series = catalog.find_product_series(&product_name, &requested)?;
     let explicit_patch = requested != series;
-    let metas = recipe::load_meta(&recipes, &catalog)?;
+    let metas = recipe::load_meta(recipes, &catalog)?;
     let product_meta = metas
         .iter()
         .find(|meta| {
@@ -601,7 +648,7 @@ fn run() -> Result<()> {
     let mut project = ProjectState::load(&state_file)?;
     project.check(&product_name, &series)?;
 
-    let update_cmd = matches!(cli.cmd, Cmd::Update { .. });
+    let update_cmd = matches!(&cli.cmd, Cmd::Update { .. });
     let lock = lock_requested(&cli.cmd);
     if lock && scheme_list.is_some() {
         bail!(
@@ -691,7 +738,7 @@ fn run() -> Result<()> {
     }
     // 首次方案从 bundle 的默认组件开始；已有 state 时以 state 为准。
     // scheme 只导出已保存的方案，不凭空展示“默认会装什么”。
-    let seeded_defaults = !project.active && !matches!(cli.cmd, Cmd::Scheme { .. });
+    let seeded_defaults = !project.active && !matches!(&cli.cmd, Cmd::Scheme { .. });
     if seeded_defaults {
         for name in &default_names {
             if disabled_defaults.contains(name) {
@@ -776,7 +823,7 @@ fn run() -> Result<()> {
 
     let mut ctx = bind::context(&product_name, &series, &version, &bindings);
     let mut reg = recipe::load_targets(
-        &recipes,
+        recipes,
         &catalog,
         &product_name,
         &series,
@@ -858,7 +905,7 @@ fn run() -> Result<()> {
             )?;
             ctx = bind::context(&product_name, &series, &version, &bindings);
             reg = recipe::load_targets(
-                &recipes,
+                recipes,
                 &catalog,
                 &product_name,
                 &series,
@@ -884,15 +931,117 @@ fn run() -> Result<()> {
             check_closure_change(&inputs_before, &inputs_after, lock)?;
         }
     }
+    // 在线检查放在真正下载/编译之前；取到新数据后整条命令重跑一遍，
+    // 让版本选择、绑定和方案都按新 catalog 重新算。
+    if allow_online
+        && let Some(download) = download.as_ref()
+        && let Some(kind) = remote_kind(&cli.cmd)
+    {
+        if download.refresh && lock {
+            bail!("--refresh 不能和 --lock 一起用");
+        }
+        let names = scheme_names(
+            &project,
+            &raw,
+            match &cli.cmd {
+                Cmd::Remove { name, .. } => Some(name.as_str()),
+                _ => None,
+            },
+        );
+        project.apply_scheme(&mut reg, &names)?;
+        let sel = project.effective_selection(&reg, &cli_sel, &preset_sel, &names)?;
+        let features = reg_features(&reg, &sel, &project);
+        let order = plan::resolve(&reg, &product_id, &sel, &features)?;
+        let will_build = match &cli.cmd {
+            Cmd::Install { .. } => {
+                install_would_build(
+                    &project,
+                    &product_name,
+                    &version,
+                    &order,
+                    &sel,
+                    &components,
+                    &target_args,
+                    &scheme_list,
+                    download.downloads,
+                    force,
+                ) || !matches!(
+                    marker::site(&cli.root, &product_name, &project.installed_version),
+                    marker::Site::Complete(_)
+                )
+            }
+            Cmd::Update { .. } => true,
+            Cmd::Add {
+                component, force, ..
+            } => {
+                let name = component.split(['=', ',']).next().unwrap_or("");
+                !matches!(
+                    marker::site(&cli.root, &product_name, &project.installed_version),
+                    marker::Site::Absent
+                ) && (*force
+                    || !project
+                        .components
+                        .get(name)
+                        .is_some_and(|state| state.installed))
+            }
+            Cmd::Remove { name, .. } => remove_needs_rebuild(
+                &reg,
+                name,
+                &cli.root,
+                &product_name,
+                &project.installed_version,
+            )?,
+            _ => false,
+        };
+        let items = remote_items(
+            &order,
+            &catalog,
+            &bindings,
+            &project,
+            &product_name,
+            &series,
+        );
+        let request = catalog_remote::Request {
+            kind,
+            product: &product_name,
+            series: &series,
+            add_name: match &cli.cmd {
+                Cmd::Add { component, .. } => component.split(['=', ',']).next(),
+                _ => None,
+            },
+            items,
+            will_build,
+            enabled: config.catalog.ask_before_online_update
+                && !download.no_refresh
+                && !download.offline
+                && !lock,
+            force: download.refresh,
+            default_yes: if kind == catalog_remote::Kind::Remove {
+                false
+            } else {
+                config.catalog_default_answer()?
+            },
+            mode: download.ui,
+            jobs: download.download_jobs,
+            host_jobs: download.download_host_jobs,
+            proxy: download.proxy.clone(),
+            github_proxy: config.github_proxy()?,
+            root: &cli.root,
+            catalog: &catalog,
+        };
+        if catalog_remote::refresh(&request)?.changed {
+            return Ok(RunOutcome::Retry);
+        }
+    }
     // install 的绑定提示推迟到现场判定之后打印，拒绝时不先刷“注意”；
     // scheme 的输出要能直接复制执行，也不要提示。
-    if !install_cmd && !matches!(cli.cmd, Cmd::Scheme { .. }) {
+    if !install_cmd && !matches!(&cli.cmd, Cmd::Scheme { .. }) {
         for note in &bindings.notes {
             eprintln!("注意: {note}");
         }
     }
 
-    match cli.cmd {
+    match cli.cmd.clone() {
         Cmd::List {
             installed, pending, ..
         } => {
@@ -980,7 +1129,7 @@ fn run() -> Result<()> {
                     &layout::tree_path(&cli.root, &product_name, &project.installed_version),
                 )
             };
-            let command = command_prefix(&cli);
+            let command = command_prefix(cli);
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
             let resolution = marker::resolution_digest(&version, &order);
             let inputs = marker::inputs_digest(&order, &sel);
@@ -1043,8 +1192,8 @@ fn run() -> Result<()> {
                 &prepared,
             )?;
             print!("{}", render::to_text(&sim));
-            if fetch_sources(&cli.root, &reg, &prepared.order, &download, &config)? {
-                return Ok(());
+            if fetch_sources(&cli.root, &reg, &prepared.order, &download, config)? {
+                return Ok(RunOutcome::Done);
             }
 
             // 下载、解压都成功了才动现场：--force 重装时把旧树改名备份，
@@ -1066,7 +1215,7 @@ fn run() -> Result<()> {
                 &features,
                 &build::Options {
                     root: &cli.root,
-                    recipes: &recipes,
+                    recipes,
                     ui: download.ui,
                     parallel,
                     scheme: &scheme,
@@ -1262,7 +1411,7 @@ fn run() -> Result<()> {
             // 已在方案里、产物齐全：不重复加，也不重编（--force 才重编）。
             if in_scheme && !force {
                 println!("{name} 已在方案里（{mode}），产物齐全");
-                return Ok(());
+                return Ok(RunOutcome::Done);
             }
 
             // 静态组件要把产品整个重编，和 remove 一样先提示代价、确认。
@@ -1318,7 +1467,7 @@ fn run() -> Result<()> {
                     "已加入 {name}（{mode}）；这个版本还没装过，先 phprt install {product_name}@{series}"
                 );
                 println!("已写入 {}", state_file.display());
-                return Ok(());
+                return Ok(RunOutcome::Done);
             }
 
             let prepared = prepare_order(
@@ -1331,8 +1480,8 @@ fn run() -> Result<()> {
                 !download.downloads,
                 !download.downloads,
             )?;
-            if fetch_sources(&cli.root, &reg, &prepared.order, &download, &config)? {
-                return Ok(());
+            if fetch_sources(&cli.root, &reg, &prepared.order, &download, config)? {
+                return Ok(RunOutcome::Done);
             }
             build::run(
                 &reg,
@@ -1341,7 +1490,7 @@ fn run() -> Result<()> {
                 &features,
                 &build::Options {
                     root: &cli.root,
-                    recipes: &recipes,
+                    recipes,
                     ui: download.ui,
                     parallel,
                     scheme: &scheme,
@@ -1464,7 +1613,7 @@ fn run() -> Result<()> {
                     !download.downloads,
                     !download.downloads,
                 )?;
-                if !fetch_sources(&cli.root, &reg, &prepared.order, &download, &config)? {
+                if !fetch_sources(&cli.root, &reg, &prepared.order, &download, config)? {
                     build::run(
                         &reg,
                         &prepared.order,
@@ -1472,7 +1621,7 @@ fn run() -> Result<()> {
                         &features,
                         &build::Options {
                             root: &cli.root,
-                            recipes: &recipes,
+                            recipes,
                             ui: download.ui,
                             parallel,
                             scheme: &scheme,
@@ -1521,7 +1670,7 @@ fn run() -> Result<()> {
             println!("已写入 {}", state_file.display());
         }
     }
-    Ok(())
+    Ok(RunOutcome::Done)
 }
 
 /// 一次解析的产物：构建顺序、工具、编译器检查、宿主命令提示。
@@ -2087,6 +2236,171 @@ fn select_product_patch(
         })
 }
 
+/// online 检查只对这台命令开放。
+fn remote_kind(cmd: &Cmd) -> Option<catalog_remote::Kind> {
+    match cmd {
+        Cmd::Install { .. } => Some(catalog_remote::Kind::Install),
+        Cmd::Update { .. } => Some(catalog_remote::Kind::Update),
+        Cmd::Add { .. } => Some(catalog_remote::Kind::Add),
+        Cmd::Remove { .. } => Some(catalog_remote::Kind::Remove),
+        _ => None,
+    }
+}
+
+/// `install` 这次会不会真的下载或构建；不会时不弹在线检查。
+#[allow(clippy::too_many_arguments)]
+fn install_would_build(
+    project: &ProjectState,
+    product: &str,
+    version: &str,
+    order: &[&Target],
+    sel: &Selection,
+    components: &ComponentArgs,
+    target_args: &TargetArgs,
+    scheme_list: &Option<String>,
+    downloads: bool,
+    force: bool,
+) -> bool {
+    if downloads
+        || force
+        || project.installed_version.is_empty()
+        || version != project.installed_version
+        || scheme_list.is_some()
+        || !components.component.is_empty()
+        || !components.dep.is_empty()
+        || !components.disable_default_component.is_empty()
+        || !target_args.targets.is_empty()
+    {
+        return true;
+    }
+    for (name, spec) in &sel.per_component {
+        let Some(state) = project.components.get(name) else {
+            return true;
+        };
+        if let Some(mode) = &spec.mode
+            && mode != &state.mode
+        {
+            return true;
+        }
+        if let Some(features) = &spec.features {
+            let state_features: BTreeSet<&String> = state.features.iter().collect();
+            let selected: BTreeSet<&String> = features.iter().collect();
+            if selected != state_features {
+                return true;
+            }
+        }
+        if !spec.deps.is_empty() && spec.deps != state.deps {
+            return true;
+        }
+    }
+    for &target in order {
+        if target.kind == Kind::Tool || target.version.is_empty() {
+            continue;
+        }
+        let state_version = if target.kind == Kind::Product && target.name == product {
+            Some(project.installed_version.as_str())
+        } else if let Some(state) = project.components.get(&target.name) {
+            Some(state.version.as_str())
+        } else {
+            project
+                .deps
+                .get(&target.name)
+                .map(|state| state.version.as_str())
+        };
+        match state_version {
+            Some(state_version) if state_version == target.version => {}
+            _ => return true,
+        }
+    }
+    false
+}
+
+fn remove_needs_rebuild(
+    reg: &Registry,
+    name: &str,
+    root: &Path,
+    product: &str,
+    installed_version: &str,
+) -> Result<bool> {
+    if installed_version.is_empty() {
+        return Ok(false);
+    }
+    let marker::Site::Complete(installed) = marker::site(root, product, installed_version) else {
+        return Ok(false);
+    };
+    let Some(facts) = installed.component(name) else {
+        return Ok(false);
+    };
+    if facts.mode.is_empty() {
+        return Ok(false);
+    }
+    let component = reg.component(name)?;
+    Ok(reg.product_mode(component, &facts.mode)?.strategy_kind()? == Strategy::Fold)
+}
+
+/// 当前闭包里能取分片的组件：有 catalog 条目、绑定了线。
+fn remote_items(
+    order: &[&Target],
+    catalog: &Catalog,
+    bindings: &bind::Bindings,
+    project: &ProjectState,
+    product: &str,
+    series: &str,
+) -> Vec<catalog_remote::Item> {
+    let mut items = Vec::new();
+    let mut seen = BTreeSet::new();
+    // 产品排第一，后面按构建顺序；进度行和提示清单都更容易读。
+    let mut ordered: Vec<&Target> = order.to_vec();
+    ordered.sort_by_key(|target| u8::from(target.kind != Kind::Product));
+    for target in ordered {
+        if target.kind == Kind::Tool {
+            continue;
+        }
+        let Some(lines) = catalog.lines(&target.name) else {
+            continue;
+        };
+        let line = if target.name == product {
+            series
+        } else {
+            bindings
+                .lines
+                .get(&target.name)
+                .map(String::as_str)
+                .unwrap_or("")
+        };
+        if line.is_empty() || !lines.contains_key(line) {
+            continue;
+        }
+        // 同一个组件可能同时以 dep 和 bundled 组件出现（zlib、openssl），只取一次。
+        if !seen.insert(target.name.clone()) {
+            continue;
+        }
+        let Some(artifact) = catalog.get(&target.name, line) else {
+            continue;
+        };
+        let installed = if target.name == product {
+            project.installed_version.clone()
+        } else if let Some(state) = project.components.get(&target.name) {
+            if state.installed {
+                state.version.clone()
+            } else {
+                String::new()
+            }
+        } else if let Some(state) = project.deps.get(&target.name) {
+            state.version.clone()
+        } else {
+            String::new()
+        };
+        items.push(catalog_remote::Item {
+            name: target.name.clone(),
+            line: line.to_owned(),
+            installed,
+            local: artifact.version.clone(),
+        });
+    }
+    items
+}
+
 fn scheme_names(
     project: &ProjectState,
     raw: &[RawComponent],
@@ -2332,7 +2646,19 @@ mod tests {
     }
     #[test]
     fn product_patch_stays_on_installed_version_until_update() {
-        let catalog = catalog();
+        // 用固定夹具，不跟随 recipes/catalog.toml 的日常补丁更新。
+        let catalog = Catalog::parse(
+            r#"
+[php]
+"8.4" = [
+    { version = "8.4.14", url = "https://example.com/8.4.14.tar.gz" },
+    { version = "8.4.13", url = "https://example.com/8.4.13.tar.gz" },
+    { version = "8.4.12", url = "https://example.com/8.4.12.tar.gz" },
+]
+"#,
+            "fixture",
+        )
+        .unwrap();
         // 默认：已有 installed_version 就沿用它，不跟 catalog 当前补丁。
         assert_eq!(
             select_product_patch(&catalog, "php", "8.4", "8.4", false, "8.4.13", false).unwrap(),
@@ -2427,5 +2753,179 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("只接受一个产品"), "{err}");
+    }
+
+    #[test]
+    fn install_skips_online_check_when_nothing_would_build() {
+        let mut project = ProjectState {
+            installed_version: "8.5.12".to_owned(),
+            ..ProjectState::default()
+        };
+        project.components.insert(
+            "curl".to_owned(),
+            crate::state::ComponentState {
+                line: String::new(),
+                version: String::new(),
+                mode: "static".to_owned(),
+                installed: true,
+                ..crate::state::ComponentState::default()
+            },
+        );
+        project.deps.insert(
+            "openssl".to_owned(),
+            crate::state::DepState {
+                line: "3.5".to_owned(),
+                version: "3.5.9".to_owned(),
+                features: Vec::new(),
+            },
+        );
+
+        let product = Target {
+            kind: crate::recipe::Kind::Product,
+            name: "php".to_owned(),
+            version: "8.5.12".to_owned(),
+            ..Target::default()
+        };
+        let curl = Target {
+            kind: crate::recipe::Kind::Component,
+            name: "curl".to_owned(),
+            ..Target::default()
+        };
+        let openssl = Target {
+            kind: crate::recipe::Kind::Dep,
+            name: "openssl".to_owned(),
+            version: "3.5.9".to_owned(),
+            ..Target::default()
+        };
+
+        let order = vec![&openssl, &curl, &product];
+        let args = ComponentArgs::default();
+        let targets = TargetArgs::default();
+        assert!(!install_would_build(
+            &project,
+            "php",
+            "8.5.12",
+            &order,
+            &Selection::default(),
+            &args,
+            &targets,
+            &None,
+            false,
+            false,
+        ));
+
+        let mut newer = openssl.clone();
+        newer.version = "3.5.10".to_owned();
+        let newer_order = vec![&newer, &curl, &product];
+        assert!(install_would_build(
+            &project,
+            "php",
+            "8.5.12",
+            &newer_order,
+            &Selection::default(),
+            &args,
+            &targets,
+            &None,
+            false,
+            false,
+        ));
+
+        assert!(install_would_build(
+            &project,
+            "php",
+            "8.5.12",
+            &order,
+            &Selection::default(),
+            &args,
+            &targets,
+            &Some("php@8.5".to_owned()),
+            false,
+            false,
+        ));
+        assert!(install_would_build(
+            &project,
+            "php",
+            "8.5.12",
+            &order,
+            &Selection::default(),
+            &args,
+            &targets,
+            &None,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn refresh_flags_conflict_with_each_other_and_offline() {
+        assert!(
+            Cli::try_parse_from(["phprt", "install", "php@8.5", "--refresh", "--no-refresh"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["phprt", "install", "php@8.5", "--refresh", "--offline"]).is_err()
+        );
+    }
+
+    #[test]
+    fn catalog_publish_requires_out() {
+        assert!(Cli::try_parse_from(["phprt", "catalog", "publish"]).is_err());
+        let cli = Cli::try_parse_from(["phprt", "catalog", "publish", "--out", "dist"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Catalog {
+                command: CatalogCmd::Publish { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn remote_items_put_the_product_first_and_dedupe() {
+        let catalog = Catalog::parse(
+            r#"
+[php]
+"8.5" = [ { version = "8.5.12", url = "https://example.com/php-8.5.12.tar.xz", sha256 = "aa" } ]
+
+[openssl]
+"3.5" = [ { version = "3.5.9", url = "https://example.com/openssl-3.5.9.tar.gz", sha256 = "bb" } ]
+"#,
+            "fixture",
+        )
+        .unwrap();
+        let product = Target {
+            kind: crate::recipe::Kind::Product,
+            name: "php".to_owned(),
+            version: "8.5.12".to_owned(),
+            ..Target::default()
+        };
+        let dep = Target {
+            kind: crate::recipe::Kind::Dep,
+            name: "openssl".to_owned(),
+            version: "3.5.9".to_owned(),
+            ..Target::default()
+        };
+        // 同名 bundled 组件和依赖库只取一次。
+        let bundled = Target {
+            kind: crate::recipe::Kind::Component,
+            name: "openssl".to_owned(),
+            ..Target::default()
+        };
+        let order = vec![&dep, &bundled, &product];
+        let mut bindings = bind::Bindings::default();
+        bindings
+            .lines
+            .insert("openssl".to_owned(), "3.5".to_owned());
+        let items = remote_items(
+            &order,
+            &catalog,
+            &bindings,
+            &ProjectState::default(),
+            "php",
+            "8.5",
+        );
+        let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, ["php", "openssl"]);
+        assert_eq!(items[0].line, "8.5");
+        assert_eq!(items[1].line, "3.5");
     }
 }

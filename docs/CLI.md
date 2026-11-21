@@ -55,6 +55,13 @@ global_backup_dir = ""
 # 下载镜像，见 DOWNLOAD.md。
 enable_github_proxy_download = "enable"
 proxy_urls = ["https://gh-proxy.com/"]
+
+# ---- catalog 在线检查 ----
+# install / update / add / remove 在真正下载或编译前是否询问获取最新补丁。
+# false = 不问、不取，直接用本地；default_answer 只能是 y / n。
+[catalog]
+ask_before_online_update = true
+default_answer = "y"
 ```
 
 并发数不进构建签名：改配置、加 `--parallel`、换一台核数不同的机器，都不会触发重编。
@@ -64,6 +71,31 @@ proxy_urls = ["https://gh-proxy.com/"]
 `--download-dir`/`download_dir`、`--backup-dir`/`local_backup_dir`、`--parallel`/`parallel`；
 全局模式对应 `--build-dir`/`global_build_dir`、`--backup-dir`/`global_backup_dir`。本地模式的相对路径按项目根解析；
 全局模式的相对路径按 `$HOME` 解析。
+
+### catalog 在线检查
+
+`install` / `update` / `add` / `remove` 在真正下载或编译前询问一次；只取本次闭包用到的
+组件分片，不访问上游、不下载源码、不计算 sha256。数据由维护者用 `catalog publish`
+发布到静态主机，地址由发行包内置，可用 `PHPRT_CATALOG_URL` 覆盖。
+
+| 方式 | 行为 |
+| --- | --- |
+| 默认 / `ask_before_online_update = true` | 询问一次；回车按 `default_answer` |
+| `ask_before_online_update = false` | 不问、不取，直接用本地 |
+| `--refresh` | 跳过询问，直接取；失败按错误退出 |
+| `--no-refresh` | 跳过询问，不取 |
+| `--offline` | 不联网，用本地 |
+| `--lock` | 跳过检查，按 state 记录的版本解析 |
+
+- `--refresh` 不能和 `--offline` / `--lock` / `--no-refresh` 一起用。
+- `install` 已安装且方案一致时不问；升级用 `update`。
+- `add` 只在产品已安装、会立即编译时问；未安装只记方案。
+- `remove` 只在需要重编时问，默认 `n`，不受 `default_answer` 影响。
+- 标准输入不是终端时按 `n` 处理；`--refresh` 可以显式强制取。
+- 地址为空（源码构建没有内置地址）时跳过并打印一行；`--refresh` 直接报错。
+- 交互式 `y` 取数失败回退本地数据，安装继续；`--refresh` 有组件失败就报错。
+- 取到的分片在 `.phprt/catalog/components/`，叠加在 `recipes/catalog.toml` 之上。
+  详细模型见 [CATALOG-MODEL.md](CATALOG-MODEL.md)。
 
 ## 全局安装
 
@@ -136,6 +168,7 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `remove <产品>@<系列> <组件> [--force] [--lock]` | 移出方案并删掉产物；静态组件重编 | 是 |
 | `audit <产品>@<系列> [--json]` | 对照上游选项清单检查 recipe 的处置 | 否 |
 | `catalog update [--dry-run] [--fill-sha256] [组件名...]` | 查上游最新补丁，写进 `catalog.toml`（写前备份） | 否（改 catalog.toml） |
+| `catalog publish --out <目录>` | 把 `catalog.toml` 拆成 `<目录>/latest/components/<组件>.toml`，供用户在线获取 | 否（写发布目录） |
 | `list_oci_images` | 打印镜像 catalog：线名、镜像、GCC、glibc、包管理器（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
 | `build <产品>@<系列> [--image <线名>]` | 构建并输出 OCI 镜像（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
 
@@ -600,6 +633,20 @@ phprt audit nginx@1.29
 catalog，不改 recipe、bundle、state。查询规则在 `recipes/upstream/<组件名>.star`，
 同一组件的多条线共享一次查询；sha256 一律下载文件后计算；不新增版本线。完整方案见
 [CATALOG-UPDATE.md](CATALOG-UPDATE.md)。
+
+普通用户不需要运行这个命令：它面向维护 catalog 的人。`install` / `update` / `add` /
+`remove` 不会调用它；用户侧的在线检查只取维护者发布的组件分片，也不填 sha256。用户拿到
+新数据后直接用 `phprt update <产品>@<系列>`；两类人的分工和数据格式见
+[CATALOG-MODEL.md](CATALOG-MODEL.md)。
+
+更新完源 catalog 后，用 `catalog publish` 拆成用户取用的分片：
+
+```bash
+phprt catalog publish --out dist/catalog
+# 把 dist/catalog/latest/ 上传到静态主机
+```
+
+`publish` 不访问上游；每条补丁都必须有 sha256，缺一条就失败。
 
 ```bash
 phprt catalog update                              # 全部有脚本的组件

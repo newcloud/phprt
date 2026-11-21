@@ -32,6 +32,7 @@ phprt -c ~/myphprt.toml install php@8.5
 | `global_build_dir` | `~/phprtbuild` | 全局模式的解压目录 |
 | `global_backup_dir` | `~/phprtbackup` | 全局模式的备份目录 |
 | `parallel` | CPU 数 - 1（最少 1） | 编译并发数（`make -j` / cmake 并行度） |
+| `[catalog]` | 询问、默认 `y` | 在线检查的交互开关：`ask_before_online_update`、`default_answer`；见 [CATALOG-MODEL.md](docs/CATALOG-MODEL.md) |
 
 并发数只从这里和 `--parallel` 取；shell 里 `export MAKEFLAGS` 或
 `export CMAKE_BUILD_PARALLEL_LEVEL` 不会生效。

@@ -121,6 +121,11 @@ pub fn internal_dir(root: &Path) -> PathBuf {
     resolve(root, internal_dir_name())
 }
 
+/// 用户侧在线检查的本地 catalog 目录。
+pub fn catalog_dir(root: &Path) -> PathBuf {
+    internal_dir(root).join("catalog")
+}
+
 /// 当前配置的解压目录。
 pub fn build_dir_name() -> &'static str {
     BUILD_DIR

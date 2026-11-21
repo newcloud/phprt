@@ -41,6 +41,38 @@ pub struct Config {
     /// 编译并发数；不写时取 CPU 数 - 1，最少 1。命令行 `--parallel` 优先。
     #[serde(default)]
     pub parallel: Option<usize>,
+    /// catalog 在线检查的交互开关；不记录产品、版本或组件。
+    #[serde(default)]
+    pub catalog: CatalogConfig,
+}
+
+/// `[catalog]`：只放交互行为，不放数据源或组件选择。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogConfig {
+    /// true 时在真正构建前询问一次；false 时不问、不取，直接用本地。
+    #[serde(default = "default_true")]
+    pub ask_before_online_update: bool,
+    /// 交互式询问的默认答案，只能是 y 或 n。
+    #[serde(default = "default_answer")]
+    pub default_answer: String,
+}
+
+impl Default for CatalogConfig {
+    fn default() -> Self {
+        Self {
+            ask_before_online_update: true,
+            default_answer: default_answer(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_answer() -> String {
+    "y".to_owned()
 }
 
 /// 目录配置：空（或 `.`）视为没配置；去掉尾部 `/`；拒绝 `.`/`..` 段。
@@ -87,6 +119,7 @@ impl Default for Config {
             global_build_dir: String::new(),
             global_backup_dir: String::new(),
             parallel: None,
+            catalog: CatalogConfig::default(),
         }
     }
 }
@@ -96,6 +129,7 @@ impl Config {
         if !path.exists() {
             let config = Self::default();
             config.github_proxy()?;
+            config.catalog_default_answer()?;
             return Ok(config);
         }
         let text =
@@ -110,6 +144,7 @@ impl Config {
         config.global_build_dir_name()?;
         config.global_backup_dir_name()?;
         config.parallel()?;
+        config.catalog_default_answer()?;
         Ok(config)
     }
 
@@ -163,6 +198,21 @@ impl Config {
             None => Ok(default_parallel()),
             Some(0) => bail!("{FILE_NAME}: parallel 至少为 1"),
             Some(n) => Ok(n),
+        }
+    }
+
+    /// 交互式询问的默认答案；只接受 y / n。
+    pub fn catalog_default_answer(&self) -> Result<bool> {
+        match self
+            .catalog
+            .default_answer
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "y" => Ok(true),
+            "n" => Ok(false),
+            other => bail!("{FILE_NAME}: catalog.default_answer 只能是 y 或 n，实际是 {other}"),
         }
     }
 
@@ -292,5 +342,31 @@ mod tests {
     fn unknown_switch_is_rejected() {
         let config: Config = toml::from_str("enable_github_proxy_download = \"yes\"\n").unwrap();
         assert!(config.github_proxy().is_err());
+    }
+
+    #[test]
+    fn catalog_defaults_to_asking_with_yes() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.catalog.ask_before_online_update);
+        assert!(config.catalog_default_answer().unwrap());
+    }
+
+    #[test]
+    fn catalog_answer_and_switch_are_validated() {
+        let config: Config =
+            toml::from_str("[catalog]\nask_before_online_update = false\ndefault_answer = \"n\"\n")
+                .unwrap();
+        assert!(!config.catalog.ask_before_online_update);
+        assert!(!config.catalog_default_answer().unwrap());
+
+        let config: Config = toml::from_str("[catalog]\ndefault_answer = \"yes\"\n").unwrap();
+        let err = config.catalog_default_answer().unwrap_err().to_string();
+        assert!(err.contains("default_answer"), "{err}");
+    }
+
+    #[test]
+    fn unknown_catalog_key_is_an_error() {
+        let err = toml::from_str::<Config>("[catalog]\nprompt = false\n").unwrap_err();
+        assert!(err.to_string().contains("prompt"), "{err}");
     }
 }
