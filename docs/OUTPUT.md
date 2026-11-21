@@ -396,15 +396,15 @@ component:openssl
 $ phprt catalog update openssl zlib
 已备份: .phprt/backup/20261120-101010_catalog.toml
 已写入: recipes/catalog.toml
-openssl 3.5: 新增补丁 3.5.9
+openssl 3.5: 3.5.8 → 3.5.9
   url: https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz
-zlib 1.3: 无更新
+zlib 1.3: 无更新 1.3.2
 ```
 
-- 每行一个「组件 [线]: 状态 [版本]」；状态标签是「新增补丁 / 回填 sha256 / 无更新 /
-  无候选 / 跳过 / 失败」。
-- `url` 行只在非空时打印；note 行打印失败原因、「上游返回里没有属于这条线的版本」
-  「已是最新 <版本>」等，非空才打印。
+- 每行一条版本线：「组件 [线]: 结果」。结果形式是 `<旧版本> → <新版本>`、`新增 <版本>`、
+  `回填 sha256 <版本>`、`无更新 <版本>`、`无候选（本地 <版本>）`、`跳过`、`失败 <版本>`。
+- `url` 行只在非空时打印；note 行打印失败原因、dry-run、「上游返回里没有属于这条线的版本」
+  等，非空才打印。
 - 「无候选」不算失败：上游接口只返回最近若干条时，老线会落到这里，需要人确认。
 - `已备份:` / `已写入:` 两行只在真正写文件时打印；`--dry-run` 不打印，也不下载。
 - 没有任何行时打印「没有组件可更新（catalog 为空，或全部组件没有 upstream 脚本）」。

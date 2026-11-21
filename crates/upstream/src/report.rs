@@ -8,6 +8,8 @@ pub struct Row {
     pub component: String,
     pub line: String,
     pub status: Status,
+    /// 处理前的最大版本；线不存在时为空。
+    pub current: String,
     /// 新增 / 回填的版本；无更新时为空。
     pub version: String,
     /// 写进 catalog 的最终地址。
@@ -40,11 +42,13 @@ pub struct Report {
 }
 
 impl Report {
+    #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
         component: &str,
         line: &str,
         status: Status,
+        current: &str,
         version: &str,
         url: &str,
         note: String,
@@ -53,6 +57,7 @@ impl Report {
             component: component.to_owned(),
             line: line.to_owned(),
             status,
+            current: current.to_owned(),
             version: version.to_owned(),
             url: url.to_owned(),
             note,
@@ -82,17 +87,11 @@ impl Report {
             } else {
                 format!(" {}", row.line)
             };
-            let version = if row.version.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", row.version)
-            };
             out.push_str(&format!(
-                "{}{}: {}{}\n",
+                "{}{}: {}\n",
                 row.component,
                 line,
-                status_label(row.status),
-                version
+                detail(row.status, &row.current, &row.version)
             ));
             if !row.url.is_empty() {
                 out.push_str(&format!("  url: {}\n", row.url));
@@ -108,13 +107,86 @@ impl Report {
     }
 }
 
-fn status_label(status: Status) -> &'static str {
+/// 一条版本线的结果文字，报告和进度行共用。
+pub(crate) fn detail(status: Status, current: &str, version: &str) -> String {
     match status {
-        Status::NewPatch => "新增补丁",
-        Status::Filled => "回填 sha256",
-        Status::Current => "无更新",
-        Status::NoCandidate => "无候选",
-        Status::Skipped => "跳过",
-        Status::Failed => "失败",
+        Status::NewPatch if current.is_empty() => format!("新增 {version}"),
+        Status::NewPatch => format!("{current} → {version}"),
+        Status::Filled => format!("回填 sha256 {version}"),
+        Status::Current if current.is_empty() => "无更新".to_owned(),
+        Status::Current => format!("无更新 {current}"),
+        Status::NoCandidate if current.is_empty() => "无候选".to_owned(),
+        Status::NoCandidate => format!("无候选（本地 {current}）"),
+        Status::Skipped => "跳过".to_owned(),
+        Status::Failed if version.is_empty() => "失败".to_owned(),
+        Status::Failed => format!("失败 {version}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_keeps_each_line_on_one_row() {
+        let mut report = Report::default();
+        report.push(
+            "sqlite",
+            "3.54",
+            Status::Current,
+            "3.54.1",
+            "",
+            "",
+            String::new(),
+        );
+        report.push(
+            "php",
+            "8.2",
+            Status::NewPatch,
+            "8.2.29",
+            "8.2.36",
+            "https://x/php-8.2.36.tar.gz",
+            String::new(),
+        );
+        report.push(
+            "luajit",
+            "2.1",
+            Status::Failed,
+            "2.1",
+            "2.1-20261117",
+            "https://x/v2.1-20261117.tar.gz",
+            "文件名版本号不一致".to_owned(),
+        );
+        assert_eq!(
+            report.text(),
+            concat!(
+                "sqlite 3.54: 无更新 3.54.1\n",
+                "php 8.2: 8.2.29 → 8.2.36\n",
+                "  url: https://x/php-8.2.36.tar.gz\n",
+                "luajit 2.1: 失败 2.1-20261117\n",
+                "  url: https://x/v2.1-20261117.tar.gz\n",
+                "  文件名版本号不一致\n",
+            )
+        );
+    }
+
+    #[test]
+    fn detail_covers_every_state() {
+        assert_eq!(
+            detail(Status::NewPatch, "8.2.29", "8.2.36"),
+            "8.2.29 → 8.2.36"
+        );
+        assert_eq!(detail(Status::NewPatch, "", "8.2.36"), "新增 8.2.36");
+        assert_eq!(
+            detail(Status::Filled, "7.4.33", "7.4.33"),
+            "回填 sha256 7.4.33"
+        );
+        assert_eq!(detail(Status::Current, "3.54.1", ""), "无更新 3.54.1");
+        assert_eq!(
+            detail(Status::NoCandidate, "7.4.33", ""),
+            "无候选（本地 7.4.33）"
+        );
+        assert_eq!(detail(Status::Skipped, "", ""), "跳过");
+        assert_eq!(detail(Status::Failed, "2.1", ""), "失败");
     }
 }

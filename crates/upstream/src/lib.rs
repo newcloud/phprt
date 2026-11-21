@@ -29,6 +29,7 @@ struct Pending {
     component: String,
     line: String,
     status: Status,
+    current: String,
     version: String,
     url: String,
     dest: PathBuf,
@@ -154,6 +155,7 @@ fn check_component(
                     Status::Failed,
                     "",
                     "",
+                    "",
                     "catalog 里没有这个组件".to_owned(),
                 ));
                 ui.finish(index, "✗", "catalog 里没有这个组件");
@@ -173,7 +175,7 @@ fn check_component(
                 Status::Failed
             };
             let note = format!("没有 upstream 脚本：{err:#}");
-            steps.push(done(component, "", status, "", "", note.clone()));
+            steps.push(done(component, "", status, "", "", "", note.clone()));
             ui.finish(
                 index,
                 if status == Status::Failed { "✗" } else { "-" },
@@ -196,7 +198,15 @@ fn check_component(
             Ok(list) => Some(list),
             Err(err) => {
                 let note = format!("查询失败: {err:#}");
-                steps.push(done(component, "", Status::Failed, "", "", note.clone()));
+                steps.push(done(
+                    component,
+                    "",
+                    Status::Failed,
+                    "",
+                    "",
+                    "",
+                    note.clone(),
+                ));
                 gate.release(&host);
                 ui.finish(index, "✗", &note);
                 return steps;
@@ -245,11 +255,8 @@ fn summarize(doc: &DocumentMut, component: &str, steps: &[Step]) -> (&'static st
         if status == Status::Failed {
             failed = true;
         }
-        let current = catalog::max_version(doc, component, line);
-        rows.push((
-            line.clone(),
-            detail_text(status, current.as_deref(), version),
-        ));
+        let current = catalog::max_version(doc, component, line).unwrap_or_default();
+        rows.push((line.clone(), report::detail(status, &current, version)));
     }
     let width = rows
         .iter()
@@ -269,27 +276,6 @@ fn summarize(doc: &DocumentMut, component: &str, steps: &[Step]) -> (&'static st
     (if failed { "✗" } else { "✓" }, details)
 }
 
-/// 单条版本线的结果文字；不包含线名和缩进。
-fn detail_text(status: Status, current: Option<&str>, version: &str) -> String {
-    match status {
-        Status::NewPatch => match current {
-            Some(current) if !current.is_empty() => format!("{current} → {version}"),
-            _ => format!("新增 {version}"),
-        },
-        Status::Filled => format!("回填 sha256 {version}"),
-        Status::Current => match current {
-            Some(current) => format!("无更新 {current}"),
-            None => "无更新".to_owned(),
-        },
-        Status::NoCandidate => match current {
-            Some(current) => format!("无候选（本地 {current}）"),
-            None => "无候选".to_owned(),
-        },
-        Status::Skipped => "跳过".to_owned(),
-        Status::Failed => "失败".to_owned(),
-    }
-}
-
 /// 一条线的判断：取线内最大候选，比当前最大补丁大才排进下载队列。
 fn plan_line(
     options: &Options,
@@ -299,6 +285,7 @@ fn plan_line(
     script: &script::Script,
     once: Option<&Vec<source::Candidate>>,
 ) -> Step {
+    let current = catalog::max_version(doc, component, line).unwrap_or_default();
     let candidates = match once {
         Some(list) => list.clone(),
         None => match source::query(script, Some(line), &options.download) {
@@ -308,6 +295,7 @@ fn plan_line(
                     component,
                     line,
                     Status::Failed,
+                    &current,
                     "",
                     "",
                     format!("查询失败: {err:#}"),
@@ -320,7 +308,6 @@ fn plan_line(
         .filter(|c| !version::is_unstable(&c.version))
         .filter(|c| version::belongs_to_line(&c.version, line))
         .collect();
-    let current = catalog::max_version(doc, component, line);
     let Some(best) = eligible
         .iter()
         .max_by(|a, b| version::compare(&a.version, &b.version))
@@ -329,21 +316,23 @@ fn plan_line(
             component,
             line,
             Status::NoCandidate,
+            &current,
             "",
             "",
             "上游返回里没有属于这条线的版本（接口可能只返回最近若干条）".to_owned(),
         );
     };
-    if let Some(cur) = &current
-        && version::compare(&best.version, cur) != std::cmp::Ordering::Greater
+    if !current.is_empty()
+        && version::compare(&best.version, &current) != std::cmp::Ordering::Greater
     {
         return done(
             component,
             line,
             Status::Current,
+            &current,
             "",
             "",
-            format!("已是最新 {cur}"),
+            String::new(),
         );
     }
 
@@ -355,6 +344,7 @@ fn plan_line(
             component,
             line,
             Status::Failed,
+            &current,
             &best.version,
             &best.url,
             "下载连接里的文件名版本号和提取出的版本不一致，不写入".to_owned(),
@@ -365,6 +355,7 @@ fn plan_line(
             component,
             line,
             Status::Failed,
+            &current,
             &best.version,
             &best.url,
             format!("连接不可达: {err:#}"),
@@ -375,6 +366,7 @@ fn plan_line(
             component,
             line,
             Status::NewPatch,
+            &current,
             &best.version,
             &best.url,
             "dry-run：未写文件".to_owned(),
@@ -385,6 +377,7 @@ fn plan_line(
         component,
         line,
         Status::NewPatch,
+        &current,
         &best.version,
         &best.url,
     )
@@ -404,6 +397,7 @@ fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
                 &line,
                 Status::Filled,
                 &version,
+                &version,
                 "",
                 "dry-run：未写文件".to_owned(),
             ));
@@ -415,15 +409,18 @@ fn plan_fill(options: &Options, doc: &DocumentMut, steps: &mut Vec<Step>) {
             &line,
             Status::Filled,
             &version,
+            &version,
             &url,
         ));
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn done(
     component: &str,
     line: &str,
     status: Status,
+    current: &str,
     version: &str,
     url: &str,
     note: String,
@@ -432,17 +429,20 @@ fn done(
         component: component.to_owned(),
         line: line.to_owned(),
         status,
+        current: current.to_owned(),
         version: version.to_owned(),
         url: url.to_owned(),
         note,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn download_step(
     options: &Options,
     component: &str,
     line: &str,
     status: Status,
+    current: &str,
     version: &str,
     url: &str,
 ) -> Step {
@@ -452,6 +452,7 @@ fn download_step(
         component: component.to_owned(),
         line: line.to_owned(),
         status,
+        current: current.to_owned(),
         version: version.to_owned(),
         url: url.to_owned(),
         // 和 install 的项目录一致：<缓存根>/<组件名>/<文件名>，同一个包能互相命中。
@@ -538,6 +539,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
             &item.component,
             &item.line,
             Status::Failed,
+            &item.current,
             &item.version,
             &item.url,
             format!("下载失败: {reason}"),
@@ -551,6 +553,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
                 &item.component,
                 &item.line,
                 Status::Failed,
+                &item.current,
                 &item.version,
                 &item.url,
                 format!("算 sha256 失败: {err:#}"),
@@ -564,6 +567,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
                 &item.component,
                 &item.line,
                 Status::Filled,
+                &item.current,
                 &item.version,
                 "",
                 String::new(),
@@ -573,6 +577,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
                 &item.component,
                 &item.line,
                 Status::Failed,
+                &item.current,
                 &item.version,
                 "",
                 format!("回填失败: {err:#}"),
@@ -594,6 +599,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
             &item.component,
             &item.line,
             item.status,
+            &item.current,
             &item.version,
             &item.url,
             String::new(),
@@ -602,6 +608,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
             &item.component,
             &item.line,
             Status::Current,
+            &item.current,
             &item.version,
             "",
             "catalog 里已有这个版本".to_owned(),
@@ -610,6 +617,7 @@ fn apply_one(doc: &mut DocumentMut, report: &mut Report, item: &Pending, outcome
             &item.component,
             &item.line,
             Status::Failed,
+            &item.current,
             &item.version,
             "",
             format!("写 catalog 失败: {err:#}"),
@@ -646,6 +654,7 @@ mod tests {
             component: component.to_owned(),
             line: "1.0".to_owned(),
             status: Status::NewPatch,
+            current: "0.9.0".to_owned(),
             version: "1.0.0".to_owned(),
             url: url.to_owned(),
             dest: PathBuf::from("/cache").join(name),
@@ -698,6 +707,7 @@ mod tests {
                 "swoole",
                 "6.2",
                 Status::NewPatch,
+                "6.2.5",
                 "6.2.6",
                 "",
                 String::new(),
@@ -706,9 +716,10 @@ mod tests {
                 "swoole",
                 "6.0",
                 Status::Current,
+                "6.0.2",
                 "",
                 "",
-                "已是最新 6.0.2".to_owned(),
+                String::new(),
             ),
         ];
         let (mark, details) = summarize(&doc, "swoole", &steps);
@@ -723,13 +734,14 @@ mod tests {
             "swoole",
             "6.2",
             Status::Failed,
+            "6.2.5",
             "6.2.6",
             "",
             "查询失败: 超时".to_owned(),
         )];
         let (mark, details) = summarize(&doc, "swoole", &steps);
         assert_eq!(mark, "✗");
-        assert_eq!(details, ["6.2  失败"]);
+        assert_eq!(details, ["6.2  失败 6.2.6"]);
     }
 
     #[test]
@@ -739,6 +751,7 @@ mod tests {
             "swoole",
             "6.0",
             Status::NoCandidate,
+            "6.0.2",
             "",
             "",
             "没有属于这条线的版本".to_owned(),
