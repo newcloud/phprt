@@ -21,6 +21,26 @@
 编出来。** 宿主只负责起容器和传目录，不参与编译。
 
 具体目标：
+当前是最小开发，先不开发自动pull镜像，当前用已经安装好的镜像，或shell下 pull 拉取镜像。放到下一任务中开发。
+对容器的调用不用cli参数方式运行，用dockerfile进行镜像toolchain镜像生成，与compose.yaml运行phprt install | add | remove | update 等编译操作。
+去生成的dockerfile，compose.yaml不删除,也不复用，用于用户的审计，与开发时历史查看。
+用户第一次选择用容器编译时之后的state.json中记录镜像名称与系统版本信息，之后在phprt 运行有编译的命令时都默认在容器使用这个镜像编译。
+
+
+原镜像在dockrfile定制生成镜像后是否能复用。当前只用选择默认都是复用的方式去，当dockerfile生成后，之后中再次apt install 后镜像名为
+
+toolchain镜像名 格式为 phprt-fedora43-{data:YMD}-hash 。
+.phprt/toolchain-images.toml中 记录 镜像信息
+如 
+phprt-fedora43-{data:YMD}-hash  原镜像  已经apt 或者 dnf 或者执行过什么命令 （就是多次dockerfile修改镜像时的命令集合 每条中记录着时间 与 什么phprt命令导致生成的
+如 日期 phprt install php@8.5   dnf install gcc cmake;  日期 phprt add php@8.5 swoole  dnf install perl）
+
+
+
+对于镜像的选择如果用户没有指定就是默认自动用 images.toml中声明自动选择,如果用户选择了就使用用户的镜像，
+如何用了用户的镜像，在是否可能复用
+
+
 
 - 一条命令从空镜像编出可用的 PHP：`phprt install php@8.5 --buildbyimage`。
 - 第二次用同一个镜像时不重装工具链，只补新增的；加一个扩展（`add swoole`）不该再花
