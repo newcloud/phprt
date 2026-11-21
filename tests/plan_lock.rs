@@ -71,7 +71,7 @@ impl Fixture {
     fn add_openssl_free_swoole_line(&self) {
         let catalog = self.catalog();
         let text = fs::read_to_string(&catalog).unwrap();
-        let old = "\"6.2\" = [ { version = \"6.2.5\", url = \"https://pecl.php.net/get/swoole-6.2.5.tgz\", sha256 = \"edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c\" } ]";
+        let old = "\"6.2\" = [ { version = \"6.2.5\", url = \"https://pecl.php.net/get/swoole-6.2.5.tgz\", sha256 = \"edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c\" }, { version = \"6.2.6\", url = \"https://pecl.php.net/get/swoole-6.2.6.tgz\", sha256 = \"5f9e31ae884013932890560db8242d39fc00f586fe642c54e9b76aba6833f013\" } ]";
         assert!(text.contains(old), "catalog 的 swoole 6.2 行变了");
         let text = text.replace(
             old,
@@ -354,7 +354,7 @@ fn cli_line_override_replaces_the_locked_binding() {
         "--json",
     ]);
     // 显式换线后不能再残留 3.5 / 3.5.9 的 pin。
-    assert_eq!(version(&sim, "dep:openssl"), "4.0.0");
+    assert_eq!(version(&sim, "dep:openssl"), "4.0.3");
     assert_eq!(node(&sim, "dep:openssl")["line"], "4.0");
 }
 
@@ -737,7 +737,7 @@ fn scheme_lock_round_trips_the_resolved_graph() {
     );
     st["components"]["swoole"] = serde_json::json!({
         "line": "6.2",
-        "version": "6.2.5",
+        "version": "6.2.6",
         "mode": "shared",
         "installed": true,
         "deps": {},

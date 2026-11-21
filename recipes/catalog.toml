@@ -8,21 +8,23 @@
 # 更新时在对应线的数组里加新补丁；旧补丁保留，不删除。
 
 [php]
-"7.4" = [ { version = "7.4.33", url = "https://www.php.net/distributions/php-7.4.33.tar.gz" } ]
-"8.0" = [ { version = "8.0.30", url = "https://www.php.net/distributions/php-8.0.30.tar.gz" } ]
-"8.1" = [ { version = "8.1.34", url = "https://www.php.net/distributions/php-8.1.34.tar.gz" } ]
-"8.2" = [ { version = "8.2.29", url = "https://www.php.net/distributions/php-8.2.29.tar.gz" } ]
-"8.3" = [ { version = "8.3.26", url = "https://www.php.net/distributions/php-8.3.26.tar.gz" } ]
+"7.4" = [ { version = "7.4.33", url = "https://www.php.net/distributions/php-7.4.33.tar.gz", sha256 = "5a2337996f07c8a097e03d46263b5c98d2c8e355227756351421003bea8f463e" } ]
+"8.0" = [ { version = "8.0.30", url = "https://www.php.net/distributions/php-8.0.30.tar.gz", sha256 = "449d2048fcb20a314d8c218097c6d1047a9f1c5bb72aa54d5d3eba0a27a4c80c" } ]
+"8.1" = [ { version = "8.1.34", url = "https://www.php.net/distributions/php-8.1.34.tar.gz", sha256 = "3c5b060ec8e0d5dd1d8237823f3161cc8bc5342aab3c46893eba9857759c4bfa" } ]
+"8.2" = [ { version = "8.2.29", url = "https://www.php.net/distributions/php-8.2.29.tar.gz", sha256 = "0b27d330769d4bc67b1d8864347c38744b289664a946919c3ddb2235d326b3cd" }, { version = "8.2.36", url = "https://www.php.net/distributions/php-8.2.36.tar.gz", sha256 = "c871dbdc1cd3d898e48632c8b5fcc73f1b0e1cbb15ef816579ced7f2ae1696a8" } ]
+"8.3" = [ { version = "8.3.26", url = "https://www.php.net/distributions/php-8.3.26.tar.gz", sha256 = "c96dac9745db9216a299007d144b593f4e4e7d95b4618b2a9591e5e5585200d5" }, { version = "8.3.37", url = "https://www.php.net/distributions/php-8.3.37.tar.gz", sha256 = "cdd2ed867cb104ececff7c0292142c807c68a6b6da1b114ead4d586fba628a4f" } ]
 "8.4" = [
-    { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz" },
-    { version = "8.4.13", url = "https://www.php.net/distributions/php-8.4.13.tar.gz" },
-    { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz" },
-    { version = "8.4.11", url = "https://www.php.net/distributions/php-8.4.11.tar.gz" },
+    { version = "8.4.14", url = "https://www.php.net/distributions/php-8.4.14.tar.gz", sha256 = "40341f3e03a36d48facdb6cc2ec600ff887a1af9a5e5fee0b40f40b61488afae" },
+    { version = "8.4.13", url = "https://www.php.net/distributions/php-8.4.13.tar.gz", sha256 = "ba323619b322125dbd7bf09eefbd572863797359c7d127f986c58a71c872d531" },
+    { version = "8.4.12", url = "https://www.php.net/distributions/php-8.4.12.tar.gz", sha256 = "4963b0d3a6ca8a391317d1b80309c2cfdebf4318b131ff8e7d19e3ab79da9104" },
+    { version = "8.4.11", url = "https://www.php.net/distributions/php-8.4.11.tar.gz", sha256 = "422548cd8cf14ab0264ba510d3586476b0e77a3272356ba486bc82e706dc6cc8" },
+    { version = "8.4.28", url = "https://www.php.net/distributions/php-8.4.28.tar.gz", sha256 = "deffc88c60fcfb99f683a9f6689e9c91cf41b7cba50bd5f01a232a98c27f2cd4" },
 ]
 "8.5" = [
     { version = "8.5.12", url = "https://www.php.net/distributions/php-8.5.12.tar.xz", sha256 = "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209" },
-    { version = "8.5.11", url = "https://www.php.net/distributions/php-8.5.11.tar.xz" }
-]
+    { version = "8.5.11", url = "https://www.php.net/distributions/php-8.5.11.tar.xz", sha256 = "d9be75c08e8c316f4c8f4194d8fbe1750a15f6a6d9d4e3fe72082abeeb800360" }
+,
+    { version = "8.5.13", url = "https://www.php.net/distributions/php-8.5.13.tar.gz", sha256 = "3aeb20a7e667e197929747f76047409196f91f0172357439319cba344df8b3e1" }]
 # 8.6 还没正式发布；RC 包只在发布经理目录短期存在，正式版发布后追加 8.6.0 并
 # 指向 www.php.net，旧 RC 保留。
 "8.6" = [ { version = "8.6.0RC3", url = "https://downloads.php.net/~svpernova09/php-8.6.0RC3.tar.bz2", sha256 = "12d024eba9fa4bf379693c045a544eec2144de2d7de71f31a6ed4496717e0307" } ]
@@ -32,31 +34,31 @@
 # 里的原始主机决定是否套用 GitHub 镜像、30s 短超时和站点并发桶。
 # 注意 1.1.1w 的 tag 是 OpenSSL_1_1_1w，3.0 及以后是 openssl-<版本>。
 [openssl]
-"1.1.1" = [ { version = "1.1.1w", url = "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz" } ]
-"3.0" = [ { version = "3.0.17", url = "https://github.com/openssl/openssl/releases/download/openssl-3.0.17/openssl-3.0.17.tar.gz" } ]
+"1.1.1" = [ { version = "1.1.1w", url = "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz", sha256 = "cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8" } ]
+"3.0" = [ { version = "3.0.17", url = "https://github.com/openssl/openssl/releases/download/openssl-3.0.17/openssl-3.0.17.tar.gz", sha256 = "dfdd77e4ea1b57ff3a6dbde6b0bdc3f31db5ac99e7fdd4eaf9e1fbb6ec2db8ce" }, { version = "3.0.22", url = "https://github.com/openssl/openssl/releases/download/openssl-3.0.22/openssl-3.0.22.tar.gz", sha256 = "67ebca7e50d17383028045486653492195b83db95f8558709701bb47b5c1ef81" } ]
 # 数组顺序故意不按版本排：默认选择取最大的 3.5.9。
 "3.5" = [
-    { version = "3.5.6", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.6/openssl-3.5.6.tar.gz" },
+    { version = "3.5.6", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.6/openssl-3.5.6.tar.gz", sha256 = "deae7c80cba99c4b4f940ecadb3c3338b13cb77418409238e57d7f31f2a3b736" },
     { version = "3.5.9", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz", sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a" },
-    { version = "3.5.8", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz" },
+    { version = "3.5.8", url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz", sha256 = "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2" },
 ]
-"4.0" = [ { version = "4.0.0", url = "https://github.com/openssl/openssl/releases/download/openssl-4.0.0/openssl-4.0.0.tar.gz" } ]
+"4.0" = [ { version = "4.0.0", url = "https://github.com/openssl/openssl/releases/download/openssl-4.0.0/openssl-4.0.0.tar.gz", sha256 = "c32cf49a959c4f345f9606982dd36e7d28f7c58b19c2e25d75624d2b3d2f79ac" }, { version = "4.0.3", url = "https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz", sha256 = "325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9" } ]
 
 [swoole]
-"4.8" = [ { version = "4.8.13", url = "https://pecl.php.net/get/swoole-4.8.13.tgz" } ]
-"5.1" = [ { version = "5.1.7", url = "https://pecl.php.net/get/swoole-5.1.7.tgz" } ]
-"6.0" = [ { version = "6.0.2", url = "https://pecl.php.net/get/swoole-6.0.2.tgz" } ]
-"6.2" = [ { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c" } ]
+"4.8" = [ { version = "4.8.13", url = "https://pecl.php.net/get/swoole-4.8.13.tgz", sha256 = "f4b7b856c112b1058985e0b1fca320ec1211299607b363073de9a709628ad32a" } ]
+"5.1" = [ { version = "5.1.7", url = "https://pecl.php.net/get/swoole-5.1.7.tgz", sha256 = "961ef6a0b60c00612a2987181f28206ce0d92045e34e13c80a97c760752d2235" }, { version = "5.1.8", url = "https://pecl.php.net/get/swoole-5.1.8.tgz", sha256 = "c365ccd37b1804527064325a0d2641d4bc33fda23c5b4660dd840ac24f333aa8" } ]
+"6.0" = [ { version = "6.0.2", url = "https://pecl.php.net/get/swoole-6.0.2.tgz", sha256 = "ca9df27a4188f6670720ffaed9c4ecd6e832ea5aed55e554b63230f3147166ca" } ]
+"6.2" = [ { version = "6.2.5", url = "https://pecl.php.net/get/swoole-6.2.5.tgz", sha256 = "edafabbfe5eb125a2be4c83e437667a83b7d7aabc801ba410ff92724ba83e88c" }, { version = "6.2.6", url = "https://pecl.php.net/get/swoole-6.2.6.tgz", sha256 = "5f9e31ae884013932890560db8242d39fc00f586fe642c54e9b76aba6833f013" } ]
 
 [xdebug]
-"3.1" = [ { version = "3.1.6", url = "https://pecl.php.net/get/xdebug-3.1.6.tgz" } ]
+"3.1" = [ { version = "3.1.6", url = "https://pecl.php.net/get/xdebug-3.1.6.tgz", sha256 = "554eca0b4d5b7b93cb2258fab0b0bd84cc8721e74322a2255c14e137cbcad5d2" } ]
 "3.5" = [ { version = "3.5.3", url = "https://pecl.php.net/get/xdebug-3.5.3.tgz", sha256 = "f073de91bea046106abf4d6071c963ea71e58571df6ce58948ceca89d121cb2d" } ]
 
 [libcurl]
 "8.23" = [ { version = "8.23.0", url = "https://curl.se/download/curl-8.23.0.tar.xz", sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5" } ]
 
 # PHP 8.0 的 openssl 扩展编不过 OpenSSL 3.x，curl 只能用 7.88 线配 1.1.1。
-"7.88" = [ { version = "7.88.0", url = "https://curl.se/download/curl-7.88.0.tar.xz", sha256 = "fd17432cf28714a4cf39d89e26b8ace0d8901199fe5d01d75eb0ae3bbfcc731f" } ]
+"7.88" = [ { version = "7.88.0", url = "https://curl.se/download/curl-7.88.0.tar.xz", sha256 = "fd17432cf28714a4cf39d89e26b8ace0d8901199fe5d01d75eb0ae3bbfcc731f" }, { version = "7.88.1", url = "https://curl.se/download/curl-7.88.1.tar.xz", sha256 = "1dae31b2a7c1fe269de99c0c31bb488346aab3459b5ffca909d6938249ae415f" } ]
 
 # GNOME 下载站直接提供 tar.xz，不跳转；sha256 取自同目录的 .sha256sum。
 [libxml2]
@@ -106,7 +108,7 @@
 # libimagequant 4.x 改成 Rust（Cargo）构建，phprt 没有 cargo 工具；
 # 2.18.0 是最后一个 C + autotools 版本，PHP 用到的 C API 没变。
 [libimagequant]
-"2.18" = [ { version = "2.18.0", url = "https://github.com/ImageOptim/libimagequant/archive/refs/tags/2.18.0.tar.gz" } ]
+"2.18" = [ { version = "2.18.0", url = "https://github.com/ImageOptim/libimagequant/archive/refs/tags/2.18.0.tar.gz", sha256 = "790d2593a587f9a27cec6245ee7a212b34b0aa63cac6383e550eda01236be636" } ]
 
 # GitHub tag 归档会跳到 codeload；这里写稳定的 tag 地址。
 [libultrahdr]
@@ -176,12 +178,12 @@
 
 # GitHub tag 归档会跳到 codeload；这里写稳定的 tag 地址。
 [libmemcached]
-"1.1" = [ { version = "1.1.4", url = "https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz", sha256 = "c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a" } ]
+"1.1" = [ { version = "1.1.4", url = "https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.4.tar.gz", sha256 = "c477e1f6510e1dc698e84f3717ce690a8f65b94c616ecaa62306cce0f5e3116a" }, { version = "1.1.5", url = "https://github.com/awesomized/libmemcached/archive/refs/tags/1.1.5.tar.gz", sha256 = "623b57bee90cb58aa68e3ae7569ac1d6f53bf44227febaf3ac9177c0acc977f1" } ]
 
 # ImageMagick 的 tag 是 7.1.2-35 这种带连字符的形式；比较器按数值比后缀，
 # catalog update 可以自动升补丁（见 docs/CATALOG-UPDATE.md 6.3）。
 [imagemagick]
-"7.1" = [ { version = "7.1.2-35", url = "https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-35.tar.gz", sha256 = "40b6fefa88fe16ca5a4b3d3db5133eaebfb0157f21f98530bde8aec5dd5b0776" } ]
+"7.1" = [ { version = "7.1.2-35", url = "https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-35.tar.gz", sha256 = "40b6fefa88fe16ca5a4b3d3db5133eaebfb0157f21f98530bde8aec5dd5b0776" }, { version = "7.1.2-36", url = "https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-36.tar.gz", sha256 = "5ba807e38a6bcb7c3c96a166485e270c5017aaa6b166f0440dc4b2badf6e6167" } ]
 
 [libssh2]
 "1.11" = [ { version = "1.11.1", url = "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.gz", sha256 = "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7" } ]
@@ -212,19 +214,19 @@
 "6.9" = [ { version = "6.9.10", url = "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz", sha256 = "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05" } ]
 
 [nginx]
-"1.29" = [ { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz" } ]
+"1.29" = [ { version = "1.29.8", url = "https://nginx.org/download/nginx-1.29.8.tar.gz", sha256 = "7f1b985dace8fe706dfc288b83927c928f0ae60bcb7507c2d4e0025eca7280c3" } ]
 
 [pcre2]
 "10.49" = [ { version = "10.49", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz", sha256 = "929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae" } ]
 
 [luajit]
-"2.1" = [ { version = "2.1", url = "https://github.com/openresty/luajit2/archive/refs/tags/v2.1-20261107.tar.gz" } ]
+"2.1" = [ { version = "2.1", url = "https://github.com/openresty/luajit2/archive/refs/tags/v2.1-20261107.tar.gz", sha256 = "c79b8f08ddcdcfa06961c416efa1455f9f2b7f4cba6b0fd814239f36e7557f74" } ]
 
 [lua-resty-core]
-"0.1" = [ { version = "0.1.32", url = "https://github.com/openresty/lua-resty-core/archive/refs/tags/v0.1.32.tar.gz" } ]
+"0.1" = [ { version = "0.1.32", url = "https://github.com/openresty/lua-resty-core/archive/refs/tags/v0.1.32.tar.gz", sha256 = "da0d3f052ac2d0d181cd560e5bbf04a571636be41882a84af9e557cbe88a5104" } ]
 
 [lua-resty-lrucache]
-"0.15" = [ { version = "0.15", url = "https://github.com/openresty/lua-resty-lrucache/archive/refs/tags/v0.15.tar.gz" } ]
+"0.15" = [ { version = "0.15", url = "https://github.com/openresty/lua-resty-lrucache/archive/refs/tags/v0.15.tar.gz", sha256 = "8cf1a22e0d5b8f35cb0b2e14c58fcb3aa505a8fb6e956817f0cdb1f06593f072" } ]
 
 [lua-nginx-module]
-"0.10" = [ { version = "0.10.29", url = "https://github.com/openresty/lua-nginx-module/archive/refs/tags/v0.10.29.tar.gz" } ]
+"0.10" = [ { version = "0.10.29", url = "https://github.com/openresty/lua-nginx-module/archive/refs/tags/v0.10.29.tar.gz", sha256 = "ca2c2122b909529bf9d1a89e9a5763835a2bd2629def8cb279c550f638f0a78f" } ]
