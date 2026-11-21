@@ -169,6 +169,29 @@ impl Tracker {
         }
     }
 
+    /// 完成一行并把明细按行输出：标题行只有标记，明细缩进 4 格。
+    pub fn finish_block(&self, index: usize, mark: &str, lines: &[String]) {
+        let Some(tag) = self.tags.get(index) else {
+            return;
+        };
+        if self.plain {
+            eprintln!("{tag} {mark}");
+            for line in lines {
+                eprintln!("    {line}");
+            }
+            return;
+        }
+        if let Some(bar) = self.bars.get(index) {
+            bar.finish_and_clear();
+        }
+        if let Some(mp) = &self.mp {
+            let _ = mp.println(format!("  {} {mark}", pad(tag)));
+            for line in lines {
+                let _ = mp.println(format!("    {line}"));
+            }
+        }
+    }
+
     /// 不属于任何一行的普通日志；进度框打开时从上方打印，不破坏进度区。
     pub fn line(&self, text: &str) {
         match &self.mp {

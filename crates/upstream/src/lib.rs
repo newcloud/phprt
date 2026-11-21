@@ -223,52 +223,71 @@ fn check_component(
     }
     gate.release(&host);
 
-    let (mark, text) = summarize(&steps[before..]);
-    ui.finish(index, mark, &text);
+    let (mark, details) = summarize(doc, component, &steps[before..]);
+    if details.is_empty() {
+        ui.finish(index, mark, "完成");
+    } else {
+        ui.finish_block(index, mark, &details);
+    }
     steps
 }
 
-/// 一个组件这一轮的结果摘要，用于进度行收尾：`✓ 新增 1 条线，无更新 3 条线`。
-fn summarize(steps: &[Step]) -> (&'static str, String) {
-    let mut new = 0;
-    let mut filled = 0;
-    let mut current = 0;
-    let mut no_candidate = 0;
-    let mut skipped = 0;
-    let mut failed = 0;
+/// 一个组件这一轮的结果：每条版本线一行，`6.2  6.2.5 → 6.2.6` / `6.0  无更新 6.0.2`。
+/// 当前版本从 catalog 读；查询阶段还没写回，所以这里拿到的是升级前的最大值。
+fn summarize(doc: &DocumentMut, component: &str, steps: &[Step]) -> (&'static str, Vec<String>) {
+    let mut failed = false;
+    let mut rows: Vec<(String, String)> = Vec::with_capacity(steps.len());
     for step in steps {
-        let status = match step {
-            Step::Done(row) => row.status,
-            Step::Download(item) => item.status,
+        let (line, status, version) = match step {
+            Step::Done(row) => (&row.line, row.status, row.version.as_str()),
+            Step::Download(item) => (&item.line, item.status, item.version.as_str()),
         };
-        match status {
-            Status::NewPatch => new += 1,
-            Status::Filled => filled += 1,
-            Status::Current => current += 1,
-            Status::NoCandidate => no_candidate += 1,
-            Status::Skipped => skipped += 1,
-            Status::Failed => failed += 1,
+        if status == Status::Failed {
+            failed = true;
         }
+        let current = catalog::max_version(doc, component, line);
+        rows.push((
+            line.clone(),
+            detail_text(status, current.as_deref(), version),
+        ));
     }
-    let mut parts = Vec::new();
-    for (count, label) in [
-        (new, "新增"),
-        (filled, "回填"),
-        (current, "无更新"),
-        (no_candidate, "无候选"),
-        (skipped, "跳过"),
-        (failed, "失败"),
-    ] {
-        if count > 0 {
-            parts.push(format!("{label} {count} 条线"));
-        }
+    let width = rows
+        .iter()
+        .map(|(line, _)| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let details = rows
+        .into_iter()
+        .map(|(line, text)| {
+            if line.is_empty() {
+                text
+            } else {
+                format!("{line:<width$}  {text}")
+            }
+        })
+        .collect();
+    (if failed { "✗" } else { "✓" }, details)
+}
+
+/// 单条版本线的结果文字；不包含线名和缩进。
+fn detail_text(status: Status, current: Option<&str>, version: &str) -> String {
+    match status {
+        Status::NewPatch => match current {
+            Some(current) if !current.is_empty() => format!("{current} → {version}"),
+            _ => format!("新增 {version}"),
+        },
+        Status::Filled => format!("回填 sha256 {version}"),
+        Status::Current => match current {
+            Some(current) => format!("无更新 {current}"),
+            None => "无更新".to_owned(),
+        },
+        Status::NoCandidate => match current {
+            Some(current) => format!("无候选（本地 {current}）"),
+            None => "无候选".to_owned(),
+        },
+        Status::Skipped => "跳过".to_owned(),
+        Status::Failed => "失败".to_owned(),
     }
-    let text = if parts.is_empty() {
-        "完成".to_owned()
-    } else {
-        parts.join("，")
-    };
-    (if failed > 0 { "✗" } else { "✓" }, text)
 }
 
 /// 一条线的判断：取线内最大候选，比当前最大补丁大才排进下载队列。
@@ -659,5 +678,72 @@ mod tests {
         ];
         let steps: Vec<(usize, &Pending)> = items.iter().enumerate().collect();
         assert!(check_cache_names(&steps).is_ok());
+    }
+
+    fn swoole_catalog() -> DocumentMut {
+        r#"
+[swoole]
+"6.2" = [ { version = "6.2.5", url = "https://x/swoole-6.2.5.tgz", sha256 = "aa" } ]
+"6.0" = [ { version = "6.0.2", url = "https://x/swoole-6.0.2.tgz", sha256 = "bb" } ]
+"#
+        .parse::<DocumentMut>()
+        .unwrap()
+    }
+
+    #[test]
+    fn summary_lists_each_line_with_its_result() {
+        let doc = swoole_catalog();
+        let steps = vec![
+            done(
+                "swoole",
+                "6.2",
+                Status::NewPatch,
+                "6.2.6",
+                "",
+                String::new(),
+            ),
+            done(
+                "swoole",
+                "6.0",
+                Status::Current,
+                "",
+                "",
+                "已是最新 6.0.2".to_owned(),
+            ),
+        ];
+        let (mark, details) = summarize(&doc, "swoole", &steps);
+        assert_eq!(mark, "✓");
+        assert_eq!(details, ["6.2  6.2.5 → 6.2.6", "6.0  无更新 6.0.2"]);
+    }
+
+    #[test]
+    fn summary_marks_failed_lines() {
+        let doc = swoole_catalog();
+        let steps = vec![done(
+            "swoole",
+            "6.2",
+            Status::Failed,
+            "6.2.6",
+            "",
+            "查询失败: 超时".to_owned(),
+        )];
+        let (mark, details) = summarize(&doc, "swoole", &steps);
+        assert_eq!(mark, "✗");
+        assert_eq!(details, ["6.2  失败"]);
+    }
+
+    #[test]
+    fn summary_keeps_the_local_version_for_missing_candidates() {
+        let doc = swoole_catalog();
+        let steps = vec![done(
+            "swoole",
+            "6.0",
+            Status::NoCandidate,
+            "",
+            "",
+            "没有属于这条线的版本".to_owned(),
+        )];
+        let (_, details) = summarize(&doc, "swoole", &steps);
+        assert_eq!(details, ["6.0  无候选（本地 6.0.2）"]);
     }
 }
