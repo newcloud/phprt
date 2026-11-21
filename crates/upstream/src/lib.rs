@@ -20,7 +20,9 @@ use toml_edit::DocumentMut;
 pub use report::{Report, Row, Status};
 pub use version::{belongs_to_line, compare, is_unstable};
 
-use phprt_download::{HostGate, Outcome, host_bucket};
+use phprt_download::{
+    HostGate, Outcome, github_rate_limit_note, github_rate_limit_reset, host_bucket, is_github_api,
+};
 use phprt_source::Source;
 use phprt_ui::Tracker;
 
@@ -186,6 +188,23 @@ fn check_component(
     };
 
     let host = host_bucket(&script.url);
+    // 本轮前面的组件已经撞上限流：GitHub API 恢复前再查也是 403，直接跳过并说明原因。
+    if is_github_api(&script.url)
+        && let Some(reset) = github_rate_limit_reset()
+    {
+        let note = github_rate_limit_note(Some(reset));
+        steps.push(done(
+            component,
+            "",
+            Status::Failed,
+            "",
+            "",
+            "",
+            note.clone(),
+        ));
+        ui.finish(index, "✗", &note);
+        return steps;
+    }
     gate.acquire(&host);
     ui.start(index, "查询中", None);
 

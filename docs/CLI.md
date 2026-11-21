@@ -664,8 +664,15 @@ phprt catalog update --fill-sha256 xdebug         # 回填已有条目缺失的 
 - 需要下载的补丁包先收成一批，再交给下载器的并发队列（10 个文件 / 每站点 2 个），
   分片数和超时沿用 install 的默认值（4 分片 / 900 秒），进度显示也和 install 一样：
   终端里是进度框，重定向或管道里逐行输出。
-- 查询 GitHub 接口时，环境变量 `GITHUB_TOKEN` 存在就带 `Bearer` 鉴权（5000 次/小时，
-  匿名只有 60 次）；token 只发给 `api.github.com`，源码下载和别的站点都不带。
+- GitHub 组件默认用 `git info/refs` 列 tag，不占 API 额度；release 资产地址按模板拼。
+  只有 openssl 还查 `api.github.com`（726 个 tag，refs 太大），此时环境变量
+  `GITHUB_TOKEN` 存在就带 `Bearer` 鉴权（5000 次/小时，匿名只有 60 次）；token 只发给
+  `api.github.com`，源码下载和别的站点都不带。
+- `github.com` 连接失败时按 `proxy_urls` 镜像列表重试（和下载同一份列表）；同一轮直连
+  失败过一次后，后续 GitHub 请求直接走镜像。
+- 403 错误的说明里带请求地址和上游返回的 `message`。GitHub 限流时（匿名额度用完）
+  还会写明恢复时间、提示 `GITHUB_TOKEN`，本轮后续 GitHub 组件直接跳过，不再逐个发
+  注定失败的请求。
 - 没有 upstream 脚本的组件：全量 sweep 记「跳过」，点名更新记「失败」。
 - 单个组件失败不中断其它组件；结束后的报告每行一条线，结果文字和进度明细一致
   （`sqlite 3.54: 无更新 3.54.1`、`php 8.2: 8.2.29 → 8.2.36`），失败行下面再带原因。

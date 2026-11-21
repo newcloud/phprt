@@ -8,7 +8,9 @@ pub use store::{archive_name, sha256_file};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use ureq::http::Method;
@@ -167,9 +169,55 @@ pub fn final_url(url: &str, opts: &Options) -> Result<String> {
     bail!("探测不到可达地址: {url}")
 }
 
+/// GitHub API 报过限流后的恢复时间（epoch 秒）；0 表示还没遇到。
+/// 进程内记住一次，后续组件不再发注定 403 的请求。
+static GITHUB_LIMIT_RESET: AtomicU64 = AtomicU64::new(0);
+
+/// GitHub API 是否已经报过限流；返回恢复时间（epoch 秒）。
+pub fn github_rate_limit_reset() -> Option<u64> {
+    let reset = GITHUB_LIMIT_RESET.load(Ordering::Relaxed);
+    (reset > 0).then_some(reset)
+}
+
+/// 地址是不是 GitHub REST API。限流按出口 IP 算，和 User-Agent 无关。
+pub fn is_github_api(url: &str) -> bool {
+    transfer::host_of(url) == "api.github.com"
+}
+
+/// 限流说明：多久恢复、怎么提高额度。`reset` 是 epoch 秒，未知时传 None。
+pub fn github_rate_limit_note(reset: Option<u64>) -> String {
+    let when = match reset {
+        Some(reset) => {
+            let minutes = reset.saturating_sub(now_epoch()).div_ceil(60);
+            match minutes {
+                0 => "不到 1 分钟后恢复".to_owned(),
+                1 => "约 1 分钟后恢复".to_owned(),
+                n => format!("约 {n} 分钟后恢复"),
+            }
+        }
+        None => "额度稍后恢复".to_owned(),
+    };
+    format!(
+        "GitHub API 限流：匿名额度 60 次/小时已用完，{when}；\
+         设置 GITHUB_TOKEN 可提升到 5000 次/小时"
+    )
+}
+
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+/// 本轮 GitHub 主站直连失败过；后面的查询直接走镜像，不再每个组件等一次超时。
+static GITHUB_DIRECT_FAILED: AtomicBool = AtomicBool::new(false);
+
 /// 拿一个地址的文本内容，跟重定向，返回 (最终地址, 正文)。
 /// GitHub API 在 GITHUB_TOKEN 环境变量存在时带 Bearer 鉴权（提升限流额度）；
 /// token 只发给 api.github.com，别的站点和源码下载都不带。
+/// GitHub 主站在部分网络不可直连，连接失败后按下载用的同一份镜像列表重试；
+/// 原始地址返回状态码错误时不换镜像（同一份内容，换地址结果一样），镜像自己出错才换。
 pub fn fetch_text(url: &str, opts: &Options) -> Result<(String, String)> {
     let agents = transfer::agents(opts)?;
     let agent = if is_github_release(url) {
@@ -187,13 +235,113 @@ pub fn fetch_text(url: &str, opts: &Options) -> Result<(String, String)> {
     if let Some(value) = &auth {
         headers.push(("Authorization", value.as_str()));
     }
-    let (final_url, resp) = transfer::request_with(agent, Method::GET, url, None, &headers)?;
+    let list = candidates(url, &opts.github_proxy);
+    let skip_direct =
+        list.len() > 1 && is_github_release(url) && GITHUB_DIRECT_FAILED.load(Ordering::Relaxed);
+    let mut last: Option<anyhow::Error> = None;
+    for (index, candidate) in list.into_iter().enumerate() {
+        if index == 0 && skip_direct {
+            continue;
+        }
+        match fetch_text_once(agent, &candidate, &headers) {
+            Ok(pair) => return Ok(pair),
+            // 原始地址的状态码错误不再换镜像；镜像自己出错（403 / 404）换下一个。
+            Err(Failure::Status(err)) => {
+                if index == 0 {
+                    return Err(err);
+                }
+                last = Some(err);
+            }
+            Err(Failure::Transport(err)) => {
+                if index == 0 {
+                    GITHUB_DIRECT_FAILED.store(true, Ordering::Relaxed);
+                }
+                last = Some(err);
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("拿不到内容: {url}")))
+}
+
+/// 单次请求的失败类型：状态码错误直接结束，连接错误可以换镜像再试。
+enum Failure {
+    Status(anyhow::Error),
+    Transport(anyhow::Error),
+}
+
+fn fetch_text_once(
+    agent: &ureq::Agent,
+    url: &str,
+    headers: &[(&str, &str)],
+) -> std::result::Result<(String, String), Failure> {
+    let (final_url, resp) = transfer::request_with(agent, Method::GET, url, None, headers)
+        .map_err(Failure::Transport)?;
     let status = resp.status().as_u16();
     if status >= 400 {
-        bail!("HTTP {status}")
+        // 报错要带请求地址和上游原文：403 常见的是 GitHub 限流，只报状态码看不出原因。
+        let remaining = header_number(&resp, "x-ratelimit-remaining");
+        let reset = header_number(&resp, "x-ratelimit-reset");
+        let body = resp.into_body().read_to_string().unwrap_or_default();
+        return Err(Failure::Status(http_status_error(
+            &final_url, status, remaining, reset, &body,
+        )));
     }
-    let body = resp.into_body().read_to_string()?;
+    let body = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|err| Failure::Transport(err.into()))?;
     Ok((final_url, body))
+}
+
+fn header_number(resp: &ureq::http::Response<ureq::Body>, name: &str) -> Option<u64> {
+    resp.headers().get(name)?.to_str().ok()?.trim().parse().ok()
+}
+
+/// HTTP 状态码错误：`HTTP <码> <地址>: <上游 message>`。
+/// GitHub API 的 403 / 429 是匿名额度用完时，追加恢复时间和 GITHUB_TOKEN 提示，
+/// 并记下恢复时间，让本轮后续组件直接跳过。
+fn http_status_error(
+    url: &str,
+    status: u16,
+    remaining: Option<u64>,
+    reset: Option<u64>,
+    body: &str,
+) -> anyhow::Error {
+    let message = json_message(body).unwrap_or_else(|| clip(body));
+    let limited = is_github_api(url)
+        && matches!(status, 403 | 429)
+        && (remaining == Some(0) || message.to_ascii_lowercase().contains("rate limit"));
+    let reset = reset.filter(|value| *value > 0);
+    if limited && let Some(reset) = reset {
+        GITHUB_LIMIT_RESET.store(reset, Ordering::Relaxed);
+    }
+    let mut text = if message.is_empty() {
+        format!("HTTP {status} {url}")
+    } else {
+        format!("HTTP {status} {url}: {message}")
+    };
+    if limited {
+        text.push_str(&format!("（{}）", github_rate_limit_note(reset)));
+    }
+    anyhow::anyhow!(text)
+}
+
+/// JSON 返回里的 `message`（GitHub API 的错误说明）；不是 JSON 或没有这个字段
+/// 时返回 None，交给原始正文。
+fn json_message(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let message = value.get("message")?.as_str()?.trim();
+    (!message.is_empty()).then(|| clip(message))
+}
+
+/// 压成一行并截断，避免把一整页 HTML 塞进错误信息。
+fn clip(text: &str) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= 300 {
+        text
+    } else {
+        format!("{}…", text.chars().take(300).collect::<String>())
+    }
 }
 
 /// 同一站点的并发许可。GitHub 主站和镜像共用一个桶。

@@ -618,3 +618,42 @@ fn host_of_strips_scheme_and_port() {
     );
     assert_eq!(transfer::host_of("http://127.0.0.1:8080"), "127.0.0.1");
 }
+
+#[test]
+fn http_error_carries_url_and_body_message() {
+    let err = super::http_status_error(
+        "https://example.com/x",
+        404,
+        None,
+        None,
+        r#"{"message":"Not Found"}"#,
+    );
+    assert_eq!(
+        format!("{err:#}"),
+        "HTTP 404 https://example.com/x: Not Found"
+    );
+}
+
+#[test]
+fn github_rate_limit_error_explains_and_records_reset() {
+    let reset = super::now_epoch() + 600;
+    let err = super::http_status_error(
+        "https://api.github.com/repos/openresty/luajit2/tags?per_page=100",
+        403,
+        Some(0),
+        Some(reset),
+        r#"{"message":"API rate limit exceeded for 1.2.3.4."}"#,
+    );
+    let text = format!("{err:#}");
+    assert!(
+        text.starts_with(
+            "HTTP 403 https://api.github.com/repos/openresty/luajit2/tags?per_page=100: \
+             API rate limit exceeded"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("GitHub API 限流"), "{text}");
+    assert!(text.contains("GITHUB_TOKEN"), "{text}");
+    // 记下恢复时间，本轮后续组件据此跳过查询。
+    assert_eq!(super::github_rate_limit_reset(), Some(reset));
+}

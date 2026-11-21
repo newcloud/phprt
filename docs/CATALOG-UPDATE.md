@@ -107,10 +107,16 @@ v2 把查询规则写在 recipe 里（`upstream=` / `versions()`），v3 不沿�
 | `version` | 否 | 从下载连接抽版本的正则，必须有命名组 `version`（`v2.1.33` 这类前缀在正则里过滤掉）；`link` 已给 `version` 组时省略 |
 | `join` | 否 | 连接是相对地址时拼绝对地址的模板，如 `"https://x/fossils/{link}"`；源按线分目录时可含 `{line}`（此时 `url` 必须也带 `{line}`） |
 
-槽位缺名、类型不对、正则不合法都在加载时报错，不静默忽略。示例见
-`recipes/upstream/openssl.star`（GitHub Releases API）、`zlib.star`（目录索引 + join）
-和 `libxml2.star`（GNOME 按线分目录，url 和 join 都带 `{line}`）；
-`sqlite.star` 是版本和连接同一行的写法。
+槽位缺名、类型不对、正则不合法都在加载时报错，不静默忽略。GitHub 组件不查 API：
+`url` 用 `https://github.com/<仓库>.git/info/refs?service=git-upload-pack`（git 协议入口，
+返回全部 tag，不占 API 额度），`link` 从 `refs/tags/<tag>\n` 取 tag；release 资产的文件名
+按 `<前缀>-<版本>.tar.gz` 用 `join` 拼，写入前由 `final_url` 探测兜底。`link` 正则要求
+tag 后直接换行，`^{}` 剥离行和 rc 后缀不会重复进候选。
+
+示例见 `recipes/upstream/luajit.star`（git info/refs + tag 归档）、`c-ares.star`
+（git info/refs + release 资产模板）、`zlib.star`（目录索引 + join）和
+`libxml2.star`（GNOME 按线分目录，url 和 join 都带 `{line}`）；
+`sqlite.star` 是版本和连接同一行的写法；`openssl.star` 仍查 GitHub Releases API。
 
 ### 4.2 上游源的形态（事实记录）
 
@@ -120,8 +126,8 @@ v2 把查询规则写在 recipe 里（`upstream=` / `versions()`），v3 不沿�
 | --- | --- | --- | --- | --- |
 | php.net JSON | php | `releases/index.php?json&version=<线>` 返回 | 接口的 `filename` | 接口自带 sha256 |
 | PECL XML | swoole / xdebug 等 | `rest/r/<包>/allreleases.xml` | 模板 `https://pecl.php.net/get/<包>-<版本>.tgz` | 无 |
-| GitHub Releases | openssl | Release 的 `tag_name` | asset 的 `browser_download_url` | asset 带 `digest` |
-| GitHub tag | avif、libmemcached 等 | Tags API | tag 归档模板 | 无 |
+| GitHub Releases API | openssl | Release 的 `tag_name` | asset 的 `browser_download_url` | asset 带 `digest` |
+| GitHub tag（git info/refs） | avif、luajit、c-ares 等 21 个 | `refs/tags/` 行里的 tag | tag 归档模板 / release 资产模板 | 无 |
 | 目录索引 | zlib（fossils）、GNOME、Google Storage | 页面 / S3 XML 里的文件名 | 页面里的 href | GNOME 有 `<名字>.<版本>.sha256sum`，其余无 |
 
 php.net 的 URL 带线，属于源形态决定的按线访问；其余形态一次请求即可覆盖该组件的全部线
@@ -319,7 +325,14 @@ v == line
 - 比较逻辑是两个目标共用的（第 6.3 节）。已落在 `crates/upstream/src/version.rs`（带单测）；`src/version.rs::compare` 已删除，`src/catalog.rs` 改调 `phprt_upstream::compare`。
 - star 脚本求值复用现有 starlark 依赖：`crates/upstream` 直接依赖 `starlark`，脚本解析在 `script.rs::Script::parse`；recipe 的 `eval_meta` / `eval_target` 仍在二进制里，两处不共享代码。
 - 下载复用 `phprt-download`：`final_url` / `run_outcomes` / `fetch_text` / `archive_name` 已导出为 `pub`，catalog 更新和 install 走同一条下载路径，不复制第二份；需要下载的条目先全部收进一个批次，一次交给下载队列（10 个文件 / 每站点 2 个），不逐条串行。
-- GitHub 匿名 API 每小时 60 次。一个仓库一次请求，约 15 个 GitHub 组件，够用；`fetch_text` 对 github.com URL 自动带 `GITHUB_TOKEN` Bearer，限流失败按组件报告。
+- GitHub 组件默认不查 API：21 个脚本用 `github.com/<仓库>.git/info/refs` 列 tag（git
+  协议入口，不计 API 额度），release 资产地址按模板拼，写入前由 `final_url` 探测兜底。
+  只剩 openssl 还查 `api.github.com`：它有 726 个 tag，refs 约 1.7MB，一次 API 请求更省。
+- `fetch_text` 对 github.com 连接失败时按下载用的 `proxy_urls` 镜像列表重试
+  （`gh-proxy.com` 等，实测也能代理 `info/refs`）；同一轮里直连失败过一次后，后续
+  GitHub 请求直接走镜像，不再每个组件等一次超时。HTTP 状态码错误不换镜像。
+- `GITHUB_TOKEN` 现在只影响还走 API 的查询（openssl）。403 时错误里带请求地址和上游
+  `message`，限流时写明恢复时间，本轮后续 GitHub 组件直接跳过。
 
 ## 12. 测试计划
 
@@ -630,7 +643,7 @@ cargo run -- catalog update --dry-run openssl zlib
 | 风险 | 处理 |
 | --- | --- |
 | 上游接口改格式 | 解析失败只影响对应组件，报告失败，不写文件 |
-| GitHub 限流 | 支持 `GITHUB_TOKEN`，单仓库一次请求；失败按组件报告 |
+| GitHub 限流 / 主站不可直连 | 21 个组件走 git info/refs，不占 API 额度；github.com 连接失败按 `proxy_urls` 镜像重试；只剩 openssl 查 API，403 写明原因和恢复时间，本轮后续 GitHub 组件跳过 |
 | 写坏 catalog | 备份 + 临时文件 + `Catalog::load` 复检 |
 | 新补丁和当前 recipe 不兼容 | 工具只管版本数据；构建失败仍由 `phprt update` / `add` 暴露，回到 recipe 修复 |
 | 自动更新与「主动适配」原则冲突 | 只在线内升补丁，不新增线，不改兼容性声明 |
