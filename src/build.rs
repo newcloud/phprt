@@ -1669,6 +1669,20 @@ mod tests {
         fs::create_dir_all(&tool_lib).unwrap();
         fs::write(tool_lib.join("libtoolonly.so"), b"build tool\n").unwrap();
 
+        // 宿主 patchelf 版本不满足时，tools 解析会回落到 build/tools 里自建的版本。
+        // 这里用一个假的 built patchelf，测试不依赖宿主机装没装 patchelf。
+        let built_patchelf = root.join("build/tools/patchelf-0.18/bin/patchelf");
+        fs::create_dir_all(built_patchelf.parent().unwrap()).unwrap();
+        fs::write(
+            &built_patchelf,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&built_patchelf, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
         let mut prod = product(&["sample"]);
         prod.profile.runtime.lib_dir = "lib/phprt".into();
         prod.bundled.clear();
@@ -1696,7 +1710,7 @@ mod tests {
             reg.get("product:php@8.5.12").unwrap(),
             &order,
             &tree,
-            None,
+            Some(&built_patchelf),
         )
         .unwrap();
 
@@ -1711,6 +1725,18 @@ mod tests {
             Path::new("libdemo.so.1.0")
         );
         assert!(!flat.join("libtoolonly.so").exists());
+
+        // 确认实际调用的是解析到的 built patchelf，而不是 PATH 里的同名命令。
+        let args = fs::read_to_string(built_patchelf.with_extension("args")).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            [
+                "--set-rpath",
+                "$ORIGIN",
+                "--force-rpath",
+                flat.join("libdemo.so.1.0").to_str().unwrap(),
+            ]
+        );
 
         fs::remove_dir_all(&root).unwrap();
     }
