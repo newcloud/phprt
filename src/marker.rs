@@ -429,7 +429,7 @@ pub fn resolution_digest(product_version: &str, nodes: &[&Target]) -> String {
 ///
 /// 只序列化 recipe 数据（占位符不展开、不含宿主路径和编译器版本），所以换机器
 /// 不会误判。工具节点是可重建缓存，不参与；`desc` / `ignored` 不影响产物，清掉。
-pub fn inputs_digest(nodes: &[&Target], sel: &Selection) -> String {
+pub fn inputs_digest(nodes: &[&Target], sel: &Selection, build: &str) -> String {
     let mut canonical: BTreeMap<String, String> = BTreeMap::new();
     for node in nodes {
         if node.kind == Kind::Tool {
@@ -447,6 +447,9 @@ pub fn inputs_digest(nodes: &[&Target], sel: &Selection) -> String {
         .map(|product| product.selected_targets.clone())
         .unwrap_or_default();
     let mut text = String::from("inputs\n");
+    if build != "host" {
+        text.push_str(&format!("build={build}\n"));
+    }
     text.push_str(&format!(
         "selection={}\n",
         serde_json::to_string(sel).unwrap_or_default()
@@ -855,17 +858,17 @@ mod tests {
     fn inputs_digest_follows_recipe_build_parameters() {
         let mut openssl = node("dep", "openssl", "3.5.9", "bbb");
         let php = node("product", "php", "8.5.12", "aaa");
-        let first = inputs_digest(&[&php, &openssl], &Selection::default());
+        let first = inputs_digest(&[&php, &openssl], &Selection::default(), "host");
 
         // 节点顺序不影响。
         assert_eq!(
             first,
-            inputs_digest(&[&openssl, &php], &Selection::default())
+            inputs_digest(&[&openssl, &php], &Selection::default(), "host")
         );
 
         // 改 configure 参数就变。
         openssl.configure = vec!["--openssldir=/etc/ssl".into()];
-        let second = inputs_digest(&[&php, &openssl], &Selection::default());
+        let second = inputs_digest(&[&php, &openssl], &Selection::default(), "host");
         assert_ne!(first, second);
 
         // 只改描述和 audit 理由不变。
@@ -874,7 +877,7 @@ mod tests {
         described.ignored.insert("x".into(), "理由".into());
         assert_eq!(
             second,
-            inputs_digest(&[&php, &described], &Selection::default())
+            inputs_digest(&[&php, &described], &Selection::default(), "host")
         );
 
         // 选中项变化也变。
@@ -886,7 +889,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_ne!(second, inputs_digest(&[&php, &openssl], &sel));
+        assert_ne!(second, inputs_digest(&[&php, &openssl], &sel, "host"));
+        assert_ne!(
+            inputs_digest(&[&php, &openssl], &sel, "host"),
+            inputs_digest(&[&php, &openssl], &sel, "oci:sha256:aa")
+        );
     }
 
     #[test]

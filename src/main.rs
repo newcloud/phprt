@@ -2,6 +2,7 @@ mod actions;
 mod audit;
 mod bind;
 mod build;
+mod buildenv;
 mod bundle;
 mod catalog;
 mod config;
@@ -115,6 +116,9 @@ enum Cmd {
         /// 把已有组件和依赖锁到 state 记录的实际补丁
         #[arg(long)]
         lock: bool,
+        /// 用哪个构建镜像预览（digest / 别名 / 镜像引用），不写 state
+        #[arg(long, value_name = "IMAGE")]
+        image: Option<String>,
         #[command(flatten)]
         components: ComponentArgs,
         #[command(flatten)]
@@ -147,6 +151,9 @@ enum Cmd {
         /// 把已有组件和依赖锁到 state 记录的实际补丁
         #[arg(long)]
         lock: bool,
+        /// 用哪个构建镜像（digest / 别名 / 镜像引用）；之后沿用
+        #[arg(long, value_name = "IMAGE")]
+        image: Option<String>,
     },
     /// 更新：重新从 catalog 解析该产品线的最新补丁并构建
     Update {
@@ -161,6 +168,9 @@ enum Cmd {
         /// 本次不备份 PHP 扩展的 ini
         #[arg(long = "no-backup-php-ext-ini")]
         no_backup_php_ext_ini: bool,
+        /// 用哪个构建镜像（digest / 别名 / 镜像引用）；之后沿用
+        #[arg(long, value_name = "IMAGE")]
+        image: Option<String>,
     },
     /// 把组件加入方案并立即增量构建
     Add {
@@ -182,6 +192,9 @@ enum Cmd {
         /// 把已有组件和依赖锁到 state 记录的实际补丁
         #[arg(long)]
         lock: bool,
+        /// 用哪个构建镜像（digest / 别名 / 镜像引用）；之后沿用
+        #[arg(long, value_name = "IMAGE")]
+        image: Option<String>,
     },
     /// 把组件移出方案并删掉它的产物
     Remove {
@@ -213,6 +226,72 @@ enum Cmd {
     Catalog {
         #[command(subcommand)]
         command: CatalogCmd,
+    },
+    /// 管理 OCI 构建环境镜像（用户级缓存）
+    Buildimages {
+        #[command(subcommand)]
+        command: BuildimagesCmd,
+    },
+    /// 内部：在构建实例里执行命令
+    #[command(name = "__container-exec", hide = true)]
+    ContainerExec {
+        /// 构建实例 id
+        #[arg(long)]
+        instance: String,
+        /// 容器内工作目录
+        #[arg(long)]
+        workdir: PathBuf,
+        /// 传给容器进程的环境变量 KEY=VALUE，可重复
+        #[arg(long = "env", value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// 要执行的命令
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum BuildimagesCmd {
+    /// 拉取并缓存一个 OCI 镜像
+    Add {
+        /// 镜像引用，如 quay.io/fedora/fedora:43
+        reference: String,
+        /// 本地别名，之后可以代替 digest
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// 只用本地缓存，不联网
+        #[arg(long)]
+        offline: bool,
+    },
+    /// 列出本地缓存的镜像
+    List,
+    /// 给一个产品系列选择构建镜像；--host 表示回到宿主构建
+    Use {
+        /// 产品@系列，如 php@8.5
+        target: String,
+        /// 镜像 digest / 别名 / 引用
+        #[arg(long, value_name = "IMAGE")]
+        image: Option<String>,
+        /// 回到宿主构建
+        #[arg(long, conflicts_with = "image")]
+        host: bool,
+        /// 已安装时也强制切换（下一次 install 会重编）
+        #[arg(long)]
+        force: bool,
+    },
+    /// 删除本地镜像缓存
+    Rm {
+        /// 镜像 digest / 别名 / 引用
+        image: String,
+        /// 即使当前项目 state 引用也删除
+        #[arg(long)]
+        force: bool,
+    },
+    /// 清理项目已不存在 / 索引里没有的缓存
+    Gc {
+        /// 只列出，不删除
+        #[arg(long = "dry-run")]
+        dry_run: bool,
     },
 }
 
@@ -294,6 +373,15 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    if let Cmd::ContainerExec {
+        instance,
+        workdir,
+        env,
+        command,
+    } = &cli.cmd
+    {
+        buildenv::run_container_exec(instance, workdir, env, command)?;
+    }
     let config_file = effective_config(&cli);
     if cli
         .config
@@ -375,6 +463,14 @@ fn run() -> Result<()> {
         }
     }
     let recipes = effective_recipes(cli.recipes.as_deref(), &cli.root, &config);
+
+    if let Cmd::Buildimages { command } = &cli.cmd {
+        buildenv::handle_buildimages(&cli, command, &recipes)?;
+        return Ok(());
+    }
+    if buildenv::maybe_forward(&cli, &recipes)? {
+        return Ok(());
+    }
 
     if let Cmd::List {
         target: None,
@@ -595,6 +691,9 @@ fn run_body(
             None,
             false,
         ),
+        Cmd::Buildimages { .. } | Cmd::ContainerExec { .. } => {
+            unreachable!("buildimages / container exec 在 run_body 之前处理")
+        }
     };
     let cli_targets = if target_args.targets.is_empty() {
         None
@@ -1028,6 +1127,9 @@ fn run_body(
     }
 
     match cli.cmd.clone() {
+        Cmd::Buildimages { .. } | Cmd::ContainerExec { .. } => {
+            unreachable!("buildimages / container exec 在 run_body 之前处理")
+        }
         Cmd::List {
             installed, pending, ..
         } => {
@@ -1067,6 +1169,7 @@ fn run_body(
                 &project,
                 lock_requested(&cli.cmd),
                 true,
+                false,
                 false,
             )?;
             let sim = render::build(
@@ -1118,7 +1221,7 @@ fn run_body(
             let command = command_prefix(cli);
             let order = plan::resolve(&reg, &product_id, &sel, &features)?;
             let resolution = marker::resolution_digest(&version, &order);
-            let inputs = marker::inputs_digest(&order, &sel);
+            let inputs = marker::inputs_digest(&order, &sel, &buildenv::signature_key(&project));
             let prepared = prepare_order(
                 &reg,
                 &sel,
@@ -1128,6 +1231,7 @@ fn run_body(
                 lock_requested(&cli.cmd),
                 !download.downloads,
                 !download.downloads,
+                buildenv::in_container() && !download.offline && !download.downloads,
             )?;
 
             let target_args = targets::scheme_args(&selected_targets);
@@ -1194,6 +1298,7 @@ fn run_body(
                 );
             }
 
+            let build_key = buildenv::signature_key(&project);
             build::run(
                 &reg,
                 &prepared.order,
@@ -1208,6 +1313,7 @@ fn run_body(
                     tools: &prepared.tools,
                     toolchain: prepared.toolchain.resolved.as_ref(),
                     backup,
+                    build: &build_key,
                 },
             )?;
 
@@ -1262,31 +1368,27 @@ fn run_body(
                     .filter(|(name, _)| desired.contains(*name))
                     .map(|(name, line)| (name.clone(), line.clone()))
                     .collect();
-                println!(
-                    "{}",
-                    marker::scheme_command_locked(
-                        &product_name,
-                        &series,
-                        &project.installed_version,
-                        &sel,
-                        &scheme_lines,
-                        &selected_targets,
-                        &exact,
-                        &is_dep
-                    )
+                let command = marker::scheme_command_locked(
+                    &product_name,
+                    &series,
+                    &project.installed_version,
+                    &sel,
+                    &scheme_lines,
+                    &selected_targets,
+                    &exact,
+                    &is_dep,
                 );
+                print!("{}", buildenv::scheme_text(&project, command));
             } else {
-                println!(
-                    "{}",
-                    marker::scheme_command(
-                        &product_name,
-                        &series,
-                        &sel,
-                        &project.bindings,
-                        &selected_targets,
-                        &is_dep_kind(&metas)
-                    )
+                let command = marker::scheme_command(
+                    &product_name,
+                    &series,
+                    &sel,
+                    &project.bindings,
+                    &selected_targets,
+                    &is_dep_kind(&metas),
                 );
+                print!("{}", buildenv::scheme_text(&project, command));
             }
         }
         Cmd::Audit { .. } => {
@@ -1465,10 +1567,12 @@ fn run_body(
                 lock_requested(&cli.cmd),
                 !download.downloads,
                 !download.downloads,
+                buildenv::in_container() && !download.offline && !download.downloads,
             )?;
             if fetch_sources(&cli.root, &reg, &prepared.order, &download, config)? {
                 return Ok(RunOutcome::Done);
             }
+            let build_key = buildenv::signature_key(&project);
             build::run(
                 &reg,
                 &prepared.order,
@@ -1483,6 +1587,7 @@ fn run_body(
                     tools: &prepared.tools,
                     toolchain: prepared.toolchain.resolved.as_ref(),
                     backup,
+                    build: &build_key,
                 },
             )?;
 
@@ -1598,8 +1703,10 @@ fn run_body(
                     lock,
                     !download.downloads,
                     !download.downloads,
+                    buildenv::in_container() && !download.offline && !download.downloads,
                 )?;
                 if !fetch_sources(&cli.root, &reg, &prepared.order, &download, config)? {
+                    let build_key = buildenv::signature_key(&project);
                     build::run(
                         &reg,
                         &prepared.order,
@@ -1614,6 +1721,7 @@ fn run_body(
                             tools: &prepared.tools,
                             toolchain: prepared.toolchain.resolved.as_ref(),
                             backup,
+                            build: &build_key,
                         },
                     )?;
                     project.set_tools(&prepared.tools);
@@ -1648,7 +1756,8 @@ fn run_body(
                 record.components.retain(|item| item.name != name);
                 record.scheme = scheme.digest.clone();
                 record.resolution = marker::resolution_digest(&version, &order);
-                record.inputs = marker::inputs_digest(&order, &sel);
+                record.inputs =
+                    marker::inputs_digest(&order, &sel, &buildenv::signature_key(&project));
                 record.scheme_cmd = scheme.command.clone();
                 marker::write(&cli.root, &product_name, &tree_version, &record)?;
             }
@@ -1681,6 +1790,7 @@ fn prepare_order<'a>(
     lock: bool,
     check_host: bool,
     strict: bool,
+    auto_install: bool,
 ) -> Result<Prepared<'a>> {
     let product = reg.product_any()?;
     let locked = if lock {
@@ -1707,7 +1817,7 @@ fn prepare_order<'a>(
             .ok_or_else(|| anyhow!("工具节点 {id} 不在 registry 里"))?;
         full.push(node);
     }
-    full.extend(order);
+    full.extend(order.iter().copied());
     let toolchain = if check_host {
         toolchain::check(product)?
     } else {
@@ -1754,6 +1864,12 @@ fn prepare_order<'a>(
 
     if strict && check_host {
         if let Some(report) = &host {
+            if auto_install && !report.missing.is_empty() {
+                buildenv::install_missing(report)?;
+                return prepare_order(
+                    reg, sel, order, root, project, lock, check_host, strict, false,
+                );
+            }
             bail!("{}", report.error_message());
         }
         if let Some(reason) = blocked.first() {

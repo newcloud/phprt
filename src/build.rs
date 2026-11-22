@@ -28,6 +28,8 @@ pub struct Options<'a> {
     pub toolchain: Option<&'a crate::toolchain::Resolved>,
     /// 是否按产品规则备份被改写的登记文件。
     pub backup: bool,
+    /// 构建环境：host 或 oci:<digest>。进签名，换环境必须重编。
+    pub build: &'a str,
 }
 
 pub fn run(
@@ -255,6 +257,7 @@ pub fn run(
                 facts,
                 opts.tools.tools_of(&target.id()),
                 &tool_sigs,
+                opts.build,
             )
         } else {
             signature(
@@ -270,6 +273,7 @@ pub fn run(
                     deps: &deps,
                     tools: opts.tools.tools_of(&target.id()),
                     tool_sigs: &tool_sigs,
+                    build: opts.build,
                 },
             )?
         };
@@ -358,7 +362,7 @@ pub fn run(
         version: product.version.clone(),
         scheme: opts.scheme.digest.clone(),
         resolution: marker::resolution_digest(&product.version, order),
-        inputs: marker::inputs_digest(order, sel),
+        inputs: marker::inputs_digest(order, sel, opts.build),
         scheme_cmd: opts.scheme.command.clone(),
         toolchain: opts
             .toolchain
@@ -518,6 +522,7 @@ struct SigInputs<'a> {
     deps: &'a BTreeSet<String>,
     tools: &'a [crate::tools::ResolvedTool],
     tool_sigs: &'a BTreeMap<(String, String), String>,
+    build: &'a str,
 }
 
 /// 一次构建的完整输入：身份、源码、命令、环境、产物、源码拷贝内容、
@@ -534,12 +539,16 @@ fn signature(reg: &Registry, target: &Target, inputs: &SigInputs<'_>) -> Result<
         deps,
         tools,
         tool_sigs,
+        build,
     } = inputs;
     let mut out = String::new();
     out.push_str(&format!("id={}\n", target.id()));
     out.push_str(&format!("version={}\n", target.version));
     out.push_str(&format!("url={}\n", target.url));
     out.push_str(&format!("sha256={}\n", target.sha256));
+    if *build != "host" {
+        out.push_str(&format!("build={build}\n"));
+    }
     for tool in *tools {
         match tool.provider {
             crate::tools::Provider::Host => {
@@ -605,12 +614,16 @@ fn tool_signature(
     compiler: &crate::toolchain::Facts,
     tools: &[crate::tools::ResolvedTool],
     tool_sigs: &BTreeMap<(String, String), String>,
+    build: &str,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("id={}\n", target.id()));
     out.push_str(&format!("version={}\n", target.version));
     out.push_str(&format!("url={}\n", target.url));
     out.push_str(&format!("sha256={}\n", target.sha256));
+    if build != "host" {
+        out.push_str(&format!("build={build}\n"));
+    }
     out.push_str(&format!(
         "compiler={} {} triple={}\n",
         compiler.cc, compiler.gcc, compiler.triple
@@ -1795,6 +1808,18 @@ mod tests {
         dep_sigs: &BTreeMap<String, String>,
         deps: &BTreeSet<String>,
     ) -> String {
+        sig_of_with_build(reg, target, commands, copy_from, dep_sigs, deps, "host")
+    }
+
+    fn sig_of_with_build(
+        reg: &Registry,
+        target: &Target,
+        commands: &[Cmd],
+        copy_from: Option<&str>,
+        dep_sigs: &BTreeMap<String, String>,
+        deps: &BTreeSet<String>,
+        build: &str,
+    ) -> String {
         signature(
             reg,
             target,
@@ -1808,9 +1833,39 @@ mod tests {
                 deps,
                 tools: &[],
                 tool_sigs: &BTreeMap::new(),
+                build,
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn signature_changes_with_build_environment() {
+        let reg = fixture();
+        let def = component_def(&["phpize", "make"]);
+        let ctx = node_ctx();
+        let node = bundled("curl", &["libcurl"], &[]);
+        let commands = component_commands(&node, &def, &[], &ctx, &reg).unwrap();
+        let host = sig_of(
+            &reg,
+            &node,
+            &commands,
+            None,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+        let oci = sig_of_with_build(
+            &reg,
+            &node,
+            &commands,
+            None,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            "oci:sha256:aa",
+        );
+        assert_ne!(host, oci);
+        assert!(oci.contains("build=oci:sha256:aa"));
+        assert!(!host.contains("build="));
     }
 
     #[test]

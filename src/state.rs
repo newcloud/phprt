@@ -46,6 +46,43 @@ pub struct DepState {
     pub features: Vec<String>,
 }
 
+/// 构建环境的选择（宿主 / OCI 镜像）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildState {
+    /// `oci` 或 `host`。
+    #[serde(default)]
+    pub mode: String,
+    /// 镜像 manifest digest，如 sha256:...
+    #[serde(default)]
+    pub image: String,
+    /// 拉取时的镜像引用，只作来源记录。
+    #[serde(default)]
+    pub image_ref: String,
+    /// 运行时名；当前只有 youki。
+    #[serde(default)]
+    pub runtime: String,
+    /// 当前实例 id；只是缓存，对不上就重建。
+    #[serde(default)]
+    pub instance: String,
+    /// 实例创建时间。
+    #[serde(default)]
+    pub instance_created: String,
+}
+
+impl BuildState {
+    pub fn is_oci(&self) -> bool {
+        self.mode == "oci" && !self.image.is_empty()
+    }
+
+    pub fn signature_key(&self) -> String {
+        if self.is_oci() {
+            format!("oci:{}", self.image)
+        } else {
+            "host".to_string()
+        }
+    }
+}
+
 /// 一次构建实际解析到的工具；只记录，不参与方案。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolState {
@@ -86,6 +123,9 @@ pub struct ProjectState {
     /// 上次构建实际用到的工具；`--lock` 复用其中的 built 版本。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolState>,
+    /// 构建环境；没有这个字段表示宿主构建。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildState>,
 }
 
 impl Default for ProjectState {
@@ -101,6 +141,7 @@ impl Default for ProjectState {
             components: BTreeMap::new(),
             deps: BTreeMap::new(),
             tools: Vec::new(),
+            build: None,
         }
     }
 }
