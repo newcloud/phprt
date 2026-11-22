@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{ImageInfo, InstanceMeta};
+use crate::unpack::make_removable;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct Index {
@@ -247,6 +248,7 @@ impl Store {
                 short_digest(&image.digest)
             );
         }
+        make_removable(&image.dir)?;
         fs::remove_dir_all(&image.dir).with_context(|| format!("删除 {}", image.dir.display()))?;
         let mut index = self.read_index()?;
         index.images.retain(|entry| entry.digest != image.digest);
@@ -292,9 +294,13 @@ impl Store {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let digest = format!("sha256:{name}");
                 if !known.iter().any(|item| item == &digest) {
-                    removed.push(path.clone());
-                    if !dry_run {
-                        let _ = fs::remove_dir_all(&path);
+                    if dry_run {
+                        removed.push(path);
+                    } else {
+                        make_removable(&path)?;
+                        fs::remove_dir_all(&path)
+                            .with_context(|| format!("删除 {}", path.display()))?;
+                        removed.push(path);
                     }
                 }
             }
@@ -311,10 +317,14 @@ impl Store {
                     continue;
                 };
                 if !Path::new(&meta.project_root).is_dir() {
-                    removed.push(path.clone());
-                    if !dry_run {
+                    if dry_run {
+                        removed.push(path);
+                    } else {
                         crate::runtime::delete_instance(&meta.id).ok();
-                        let _ = fs::remove_dir_all(&path);
+                        make_removable(&path)?;
+                        fs::remove_dir_all(&path)
+                            .with_context(|| format!("删除 {}", path.display()))?;
+                        removed.push(path);
                     }
                 }
             }

@@ -15,7 +15,7 @@ use nix::sys::wait::{WaitStatus, waitpid};
 
 use crate::store::Store;
 use crate::types::{InstanceInfo, InstanceMeta, InstanceRequest};
-use crate::unpack::restore_modes;
+use crate::unpack::{make_removable, restore_modes};
 
 pub(crate) const DEFAULT_PATH: &str =
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -46,6 +46,7 @@ pub fn ensure_instance(store: &Store, request: &InstanceRequest) -> Result<Insta
     });
     if dir.exists() && !same_base {
         delete_instance(&request.id).ok();
+        make_removable(&dir)?;
         fs::remove_dir_all(&dir).with_context(|| format!("删除旧实例 {}", dir.display()))?;
     } else if same_base {
         let changed = previous
@@ -279,7 +280,20 @@ fn build_spec(request: &InstanceRequest, rootfs: &Path) -> Result<Spec> {
 }
 
 fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
-    use std::os::unix::fs::symlink;
+    fs::create_dir_all(destination)?;
+    // 上一次复制可能把目录恢复成了 0555；先放宽，复制完再按记录恢复。
+    make_removable(destination)?;
+    let mut links = HashMap::new();
+    copy_tree_inner(source, destination, &mut links)
+}
+
+fn copy_tree_inner(
+    source: &Path,
+    destination: &Path,
+    links: &mut HashMap<(u64, u64), PathBuf>,
+) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, symlink};
+
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -287,20 +301,75 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
         let to = destination.join(entry.file_name());
         let meta = fs::symlink_metadata(&from)?;
         if meta.file_type().is_symlink() {
+            let key = (meta.dev(), meta.ino());
+            if meta.nlink() > 1
+                && let Some(first) = links.get(&key).cloned()
+            {
+                remove_existing(&to)?;
+                fs::hard_link(&first, &to)?;
+                set_mtime_symlink(&to, &meta)?;
+                continue;
+            }
             let target = fs::read_link(&from)?;
+            remove_existing(&to)?;
             symlink(target, &to)?;
+            set_mtime_symlink(&to, &meta)?;
+            if meta.nlink() > 1 {
+                links.insert(key, to);
+            }
         } else if meta.is_dir() {
-            copy_tree(&from, &to)?;
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = meta.permissions();
-            perms.set_mode(meta.permissions().mode());
-            fs::set_permissions(&to, perms)?;
+            copy_tree_inner(&from, &to, links)?;
+            fs::set_permissions(&to, meta.permissions())?;
+            set_mtime(&to, &meta)?;
         } else if meta.file_type().is_file() {
+            let key = (meta.dev(), meta.ino());
+            if meta.nlink() > 1
+                && let Some(first) = links.get(&key).cloned()
+            {
+                remove_existing(&to)?;
+                fs::hard_link(&first, &to)?;
+                // 同一个 inode 的 mtime 与第一个路径一致，重复设置无害。
+                set_mtime(&to, &meta)?;
+                continue;
+            }
+            remove_existing(&to)?;
             fs::copy(&from, &to)?;
             fs::set_permissions(&to, meta.permissions())?;
+            set_mtime(&to, &meta)?;
+            if meta.nlink() > 1 {
+                links.insert(key, to);
+            }
         }
     }
     Ok(())
+}
+
+fn remove_existing(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            make_removable(path)?;
+            fs::remove_dir_all(path)?;
+        }
+        Ok(_) => fs::remove_file(path)?,
+        Err(_) => {}
+    }
+    Ok(())
+}
+
+fn set_mtime(path: &Path, meta: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let nanos = u32::try_from(meta.mtime_nsec()).unwrap_or(0);
+    let time = filetime::FileTime::from_unix_time(meta.mtime(), nanos);
+    filetime::set_file_times(path, time, time)
+        .with_context(|| format!("设置 {} 的 mtime", path.display()))
+}
+
+fn set_mtime_symlink(path: &Path, meta: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let nanos = u32::try_from(meta.mtime_nsec()).unwrap_or(0);
+    let time = filetime::FileTime::from_unix_time(meta.mtime(), nanos);
+    filetime::set_symlink_file_times(path, time, time)
+        .with_context(|| format!("设置 {} 的 mtime", path.display()))
 }
 
 /// 在构建实例里执行一条命令。必须在单线程进程里调用（会先 setns user namespace）。
@@ -382,4 +451,49 @@ pub fn delete_instance(id: &str) -> Result<()> {
     let _ = fs::remove_dir_all(&container_dir);
     let _ = fs::remove_file(state.join(format!("{id}.pid")));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn copy_tree_preserves_hardlinks_and_mtime() {
+        let root = std::env::temp_dir().join(format!("phprt-copy-tree-{}", std::process::id()));
+        let _ = make_removable(&root);
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("sub")).unwrap();
+        fs::write(source.join("a"), b"data").unwrap();
+        fs::hard_link(source.join("a"), source.join("sub/b")).unwrap();
+        std::os::unix::fs::symlink("a", source.join("s1")).unwrap();
+        fs::hard_link(source.join("s1"), source.join("s2")).unwrap();
+        let old = filetime::FileTime::from_unix_time(1_000_000_000, 0);
+        filetime::set_file_times(source.join("a"), old, old).unwrap();
+        filetime::set_file_times(source.join("sub"), old, old).unwrap();
+        filetime::set_symlink_file_times(source.join("s1"), old, old).unwrap();
+
+        copy_tree(&source, &destination).unwrap();
+
+        let a = fs::metadata(destination.join("a")).unwrap();
+        let b = fs::metadata(destination.join("sub/b")).unwrap();
+        assert_eq!(a.ino(), b.ino());
+        assert_eq!(a.nlink(), 2);
+        assert_eq!(a.mtime(), 1_000_000_000);
+        assert_eq!(
+            fs::metadata(destination.join("sub")).unwrap().mtime(),
+            1_000_000_000
+        );
+        let s1 = fs::symlink_metadata(destination.join("s1")).unwrap();
+        let s2 = fs::symlink_metadata(destination.join("s2")).unwrap();
+        assert!(s1.file_type().is_symlink());
+        assert_eq!(s1.ino(), s2.ino());
+        assert_eq!(s1.nlink(), 2);
+        assert_eq!(s1.mtime(), 1_000_000_000);
+
+        let _ = make_removable(&root);
+        let _ = fs::remove_dir_all(&root);
+    }
 }

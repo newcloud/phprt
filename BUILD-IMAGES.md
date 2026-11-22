@@ -79,6 +79,11 @@ phprt buildimages add <镜像引用> [--name <别名>] [--offline]
   tag 指向最新 digest。
 - `--offline` 只在本地已有缓存时成功，否则报错。
 - 只支持 gzip / 未压缩 tar 层；zstd 层会报错。
+- 支持多层镜像：whiteout 先作用于下层，再解包本层条目；目标名为空、`.`、`..`
+  的非法 whiteout 直接报错，不会删除父目录。
+- 文件与目录互换的条目会先删旧路径再重建，符合 OCI 的 changeset 语义。
+- 解包时的 chmod 和 whiteout 删除会检查路径仍在 rootfs 内；通过符号链接逃出
+  rootfs 的层会报错。
 - 会检查镜像里有 `/bin/sh` 和 `dnf` / `apt-get`。
 - 不创建容器实例；实例在第一次 `install` / `plan` 时按项目创建。
 
@@ -149,7 +154,7 @@ phprt buildimages gc [--dry-run]
 │   ├── config.json                        # 镜像 config blob
 │   ├── manifest.json
 │   ├── image.json                         # ref / digest / 层清单 / 平台
-│   └── modes.json                         # 解包时为复制调整过的 mode
+│   └── modes.json                         # 解包时为复制临时放宽的 mode（files / dirs）
 └── instances/<实例 id>/
     ├── instance.json                      # 镜像、项目根、创建时间、挂载/二进制指纹
     └── bundle/
@@ -289,6 +294,11 @@ phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
   压缩层 + rootfs 约 250 MB。
 - 只支持 Linux、同架构、gzip / 未压缩 tar 层。zstd 层、跨架构镜像报错。
 - Registry 只做了匿名拉取；私有仓库、需要登录的镜像暂不支持。
+- 硬链接、文件与符号链接的 mtime 会复制到实例；目录 mode 在实例复制完成后恢复
+  （如 `/usr/bin` 会回到 `0555`），宿主删除实例前会临时放宽目录权限。
+- whiteout 按 OCI 规范先作用于下层，再解包本层条目；非法 whiteout 会报错。
+- 解包时的 chmod 和 whiteout 删除会做 rootfs 边界检查；通过符号链接逃出
+  rootfs 的层会被拒绝。
 - 解包跳过设备节点，不应用 xattr / file capability；Fedora 43 基础镜像实测可用。
 - 镜像里的 `/etc/resolv.conf` 由宿主只读挂入；镜像自带的会被覆盖。
 - dnf 已实测；apt 路径已实现（先 update、补 `-y`）但没有在 Debian / Ubuntu 基础
@@ -321,6 +331,16 @@ phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
 
 先重试 `phprt buildimages add <引用>`。需要代理时，在宿主环境里设置
 `HTTPS_PROXY` / `HTTP_PROXY`；phprt 的 registry 客户端会使用它们。
+
+**`error: 层里有非法 whiteout ...`**
+
+镜像层里的 whiteout 目标名为空、`.` 或 `..`，不符合 OCI 规范。换一个镜像，
+或修正该层后重新 `add`。
+
+**`error: 层里的路径通过符号链接逃出了 rootfs`**
+
+层试图借符号链接修改或删除 rootfs 外的文件。phprt 会拒绝整个镜像，不会继续
+解包。确认镜像来源可信后再重试。
 
 **镜像在本地，但 install 报“不在本地”**
 
@@ -364,4 +384,10 @@ phprt scheme php@8.5 --lock    # 输出带 --image 和准备镜像的注释
 - 10 个节点（含从源码构建的 patchelf）约 5 分钟完成。
 - 产物在宿主上可直接运行，`php -m` 含 `openssl` / `curl` / `pdo_sqlite`。
 - 文件属主是宿主用户；`sudo` 等 setuid 位保留。
+- 实例 rootfs 的 `/usr/bin` 回到 `0555`，`/etc/shadow` 回到 `0000`；
+  硬链接（如 getconf、zoneinfo）和 mtime 与镜像缓存一致。
 - 删除运行时状态后从实例 rootfs 重建，工具仍在。
+
+另外用合成层验证了解包器：opaque / 普通 whiteout 先于本层条目应用、非法
+whiteout 直接报错且不删父目录、符号链接越界被拒绝、文件与目录互换能重建、
+硬链接和 mtime 能复制到实例、目录 mode 能恢复。
