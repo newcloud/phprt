@@ -283,13 +283,15 @@ src/
 ├── tools.rs      构建期工具解析（宿主 / build/tools / catalog）、版本探测
 ├── toolchain.rs  编译器探测、档位选择、CFLAGS 合并
 ├── host_commands.rs  宿主识别（包管理器 / 发行版 id / family）、包名映射、缺命令提示；向 recipe 注入 host ctx
-├── container.rs  容器运行时探测、长驻容器创建 / 复用 / 重建、exec、挂载集合（CONTAINER.md，待实施）
+├── buildenv.rs   构建环境调度：镜像选型、实例创建 / 复用 / 锁、命令转发进容器（BUILD-IMAGES.md）
+├── image_family.rs  按镜像内容识别发行版家族，套用构建环境设置（BUILD-IMAGES.md §9）
 ├── version.rs    版本区间比较（tool / toolchain 共用）
 ├── layout.rs     源码 / 安装路径
 ├── sources.rs    下载清单
 └── config.rs     下载 / catalog 交互 / rpath 配置
 
 crates/
+├── buildimages/  OCI 镜像拉取 / 解包、用户级缓存、libcontainer 实例与 exec（BUILD-IMAGES.md）
 ├── download/     下载、镜像、分片续传、进度
 ├── upstream/     上游版本查询、upstream star 脚本执行、catalog 写回（CATALOG-UPDATE.md）
 ├── extract/      解压、原子目录、路径安全
@@ -306,7 +308,8 @@ recipes/
 ├── bundles/<产品>/<系列>.toml
 ├── upstream/<组件>.star
 ├── catalog.toml
-├── images.toml   镜像条目 [images.*]（镜像模式待实施，见 IMAGE.md）+ 包名映射 [package_maps.*]
+├── images.toml   镜像家族 [families.*]（apt 沙箱等设置，见 BUILD-IMAGES.md §9）
+│               + 包名映射 [package_maps.*]（HOST-COMMANDS.md）
 └── defs.star
 ```
 
@@ -365,6 +368,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [CONTAINER.md](CONTAINER.md) | 容器构建：原镜像、长驻容器、复用与重建、检查点与主线文件、`--stop-after`、podman / docker / kiri（待实施方案） |
 | [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |
 | [IMAGE.md](IMAGE.md) | 镜像线（`recipes/images.toml`、gcc/glibc facts、包名映射、`bootstrap`/`packages`、`--buildbyimage`）、容器化构建、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）、裸镜像实测记录（待实施，代码未实现） |
+| [../BUILD-IMAGES.md](../BUILD-IMAGES.md) | 用 OCI 镜像构建：`buildimages` 命令、镜像缓存、全局实例、锁与删除、运行库差异 |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |

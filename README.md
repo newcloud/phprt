@@ -335,6 +335,61 @@ error: 宿主 make 3.8 不满足 >= 4.0，catalog 也没有可用版本
 error: 产品 php 声明 gcc 档位 >= 16，实际 gcc 15.3.1 不在任何一档里
 ```
 
+## 用镜像构建（buildimages）
+
+不想在宿主机装 gcc / make / patchelf 时，可以直接用 OCI 镜像里的工具编译。镜像只拉
+一次，解包到用户级缓存，跨项目共享；不需要 podman / docker / root。
+
+```bash
+# 1. 拉取镜像（一次即可）
+phprt buildimages add quay.io/fedora/fedora:43 --name fedora43
+
+# 2. 用镜像建一个实例并编译
+phprt install php@8.5 --image fedora43 --instance-name php-build
+./myphp-8.5 -v
+
+# 3. 之后的 add / update / install 沿用 state 里的选择
+phprt add php@8.5 swoole
+phprt update php@8.5
+```
+
+其他产品可以复用同一个实例：
+
+```bash
+phprt install nginx@1.29 --instance php-build
+phprt buildimages list      # 镜像 + 实例：别名、家族、size、used_by、running/stopped
+```
+
+- `--image <digest|digest前缀|别名|引用>`：新建实例的基础镜像；本地没有时自动拉取，
+  `--offline` 时直接报错。
+- `--instance-name <名字>`：配合 `--image` 给新实例起名；不写时默认 `<产品>-<系列>-<项目hash8>`。
+- `--instance <名字>`：只用已有实例；实例绑定一个镜像 digest，同名不能换镜像，换镜像要新建名字。
+- 实例是用户级全局对象，rootfs 和已装工具跨项目共用；同一实例同时只允许一个 phprt 使用，
+  第二个会等待。
+- 只想选环境、不马上编译：`phprt buildimages use php@8.5 --image fedora43 [--instance-name <名字>]`；
+  回到宿主构建用 `phprt buildimages use php@8.5 --host`。
+- `plan` 也接受 `--image` / `--instance`，只预览、不写 state。
+
+删除都是显式的，没有 gc：
+
+```bash
+phprt buildimages rm-instance php-build   # 被 state 引用时加 --force
+phprt buildimages rm fedora43             # 还有实例用这个镜像时拒绝，必须先删实例
+```
+
+镜像和实例在 `~/.local/share/phprt/buildimages/`（`PHPRT_BUILDIMAGES_DIR` 可改）；项目里只多
+一个 `build` 字段：
+
+```json
+"build": { "mode": "oci", "image": "sha256:...", "image_ref": "quay.io/fedora/fedora:43",
+           "runtime": "youki", "instance": "php-build" }
+```
+
+限制：只支持本地模式（不能和 `--global --prefix` 一起用）、Linux 同架构、gzip / 未压缩
+tar 层；共享宿主网络，不是安全沙箱。用镜像编出来的产物能直接在哪个发行版上跑，取决于
+两边的系统库（例如 Debian 编的 nginx 在 Fedora 上会缺 `libcrypt.so.1`，nginx 的 `xcrypt`
+feature 已默认静态链接 libcrypt）。完整说明见 [BUILD-IMAGES.md](BUILD-IMAGES.md)。
+
 ## 可装的产品
 
 ```text
@@ -390,7 +445,7 @@ OCI Image
 
 | 环节 | 现在 |
 | --- | --- |
-| Builder image | 宿主机自己备 gcc / make / patchelf，缺什么自己装 |
+| Builder image | 已实现：`phprt buildimages add` + `--image`，用 OCI 镜像里的工具编译（[BUILD-IMAGES.md](BUILD-IMAGES.md)） |
 | artifact | 产物就是 `.phprt/php-8.5.12/` 整棵树；搬走要连库一起拷，没有清单、没有校验 |
 | minimal runtime image | 用户手写 Dockerfile、裁库、试错缺哪个 `.so` |
 
@@ -403,6 +458,7 @@ OCI Image
 
 - [docs/CLI.md](docs/CLI.md)：完整命令、参数、错误
 - [docs/BUILD.md](docs/BUILD.md)：构建、日志、跳过规则
+- [BUILD-IMAGES.md](BUILD-IMAGES.md)：用 OCI 镜像构建的完整说明（缓存、实例、删除、运行库差异）
 - [docs/DESIGN.md](docs/DESIGN.md)：设计与各子文档入口
 
 ## 许可
