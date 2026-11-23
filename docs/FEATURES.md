@@ -99,6 +99,34 @@ features = ["xcrypt"]
 - 典型用途是「可选地把某个系统库静态链进产品」（nginx 的 `xcrypt`），
   上游没有干净关闭参数、又不想总是依赖宿主运行库时用。
 
+#### 已知别扭：单值 configure 选项要重复写参数
+
+产品 feature 只能**追加**参数，不能改基础参数。有些上游把选项做成单值（同一个选项
+出现两次，后一个覆盖前一个），比如 nginx 的 `--with-ld-opt`。这时 feature 里必须把
+整串路径重复一遍：
+
+```python
+configure = [
+    # feature 关闭时生效
+    "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib -L{dep:zlib}/lib",
+],
+features = {
+    "xcrypt": feature(
+        needs = ["libxcrypt"],
+        # 必须把上面三个 -L 一起重复，只写 libxcrypt 会把它们覆盖掉
+        configure = [
+            "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib -L{dep:zlib}/lib -L{dep:libxcrypt}/lib",
+        ],
+    ),
+},
+```
+
+代价是路径列表写两份，以后加依赖要改两处。目前只有 nginx 的 `xcrypt` 这样写。
+等再出现第二个同类情况时一起改造，候选方向：
+
+- 产品 feature 支持 `disable`：把整串参数交给 feature，开 / 关各一条，不靠覆盖；
+- 或者让 render 合并同名 `--with-*-opt`（需要先确认是否只对单值选项做，避免改变其他语义）。
+
 ## 3. 常用度判定
 
 盘点的第一道筛子是常用度，不是「能不能做」。命中即停：

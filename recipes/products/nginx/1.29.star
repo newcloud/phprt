@@ -8,6 +8,10 @@
 # last-wins：nginx 的 --with-ld-opt 只保留最后一次出现的值，所以 feature 打开时
 # 用一份包含 libxcrypt 的完整 -L 覆盖基础参数；关掉时基础参数里没有 libxcrypt，
 # 不会因为 deps/ 里留着上次的 libcrypt.a 又悄悄静态链进去。
+#
+# 已知别扭（等再遇到同类问题再一起改造）：产品 feature 只能追加参数，碰上这种
+# 单值选项就得把整串 -L 重复一遍，以后加依赖要改两处。备选改法见
+# docs/FEATURES.md §2.1「已知别扭」。
 
 LINES = {
     "1.29": {
