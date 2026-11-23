@@ -219,6 +219,11 @@
 [pcre2]
 "10.49" = [ { version = "10.49", url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz", sha256 = "929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae" } ]
 
+# libxcrypt 的 release 包里 configure 已生成，不需要 autotools。
+# nginx 只静态链接它，见 recipes/dep/libxcrypt.star。
+[libxcrypt]
+"4.5" = [ { version = "4.5.2", url = "https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz", sha256 = "71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071" } ]
+
 [luajit]
 "2.1" = [ { version = "2.1", url = "https://github.com/openresty/luajit2/archive/refs/tags/v2.1-20261107.tar.gz", sha256 = "c79b8f08ddcdcfa06961c416efa1455f9f2b7f4cba6b0fd814239f36e7557f74" }, { version = "2.1-20261117", url = "https://github.com/openresty/luajit2/archive/refs/tags/v2.1-20261117.tar.gz", sha256 = "dcc413a1bef46447cbd9172a38c02618c2bb9cb6b193c91d28ae197a347b693c" } ]
 

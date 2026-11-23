@@ -453,7 +453,8 @@ zlib；glibc、libcrypt 这类系统库仍然由运行环境提供。所以**产
 
 实测（2026-11-24，Fedora 43 宿主，Debian 13 实例）：
 
-- Debian 13 实例构建的 nginx 链接 `libcrypt.so.1`（Debian 的 libxcrypt）；
+- 关掉 nginx 的 `xcrypt` feature 时，Debian 13 实例构建的 nginx 链接
+  `libcrypt.so.1`（Debian 的 libxcrypt）；
 - Fedora 43 只有 `libcrypt.so.2`，在宿主直接运行报：
 
   ```text
@@ -467,6 +468,12 @@ zlib；glibc、libcrypt 这类系统库仍然由运行环境提供。所以**产
   built by gcc 14.2.0 (Debian 14.2.0-19)
   built with OpenSSL 3.5.9 29 Sep 2026
   ```
+
+nginx 1.29 的默认做法是开 `xcrypt` feature：phprt 自己编译 libxcrypt 4.5.2
+（`recipes/dep/libxcrypt.star`，只装 `libcrypt.a`），nginx 的 `-lcrypt` 命中静态库，
+产物里没有 `DT_NEEDED libcrypt.so.1`。默认值写在
+`recipes/bundles/nginx/1.29.toml` 的 `features = ["xcrypt"]`；删掉这一行就回到上面的
+系统 libcrypt 行为。开关只在 recipe / bundle 层，没有 CLI 参数。
 
 为什么会缺：
 
@@ -495,13 +502,16 @@ libc.so.6       => /lib64/libc.so.6
 
 处理方式：
 
-1. **优先让构建镜像和宿主同族**。Fedora 宿主用 `quay.io/fedora/fedora:43`，
+1. **让产品自己带 libcrypt**。nginx 1.29 已经这么做：`xcrypt` 默认把 libxcrypt
+   静态链进 `sbin/nginx`，产物不依赖宿主 `libcrypt.so.1`。其他用 `crypt()` 的产品
+   可以照这个 recipe 模式加：dep 只装静态库，产品 feature 带 `needs`。
+2. **优先让构建镜像和宿主同族**。Fedora 宿主用 `quay.io/fedora/fedora:43`，
    产物直接链接宿主已有的运行库。
-2. 必须用 Debian / Ubuntu 镜像构建、又要在 Fedora 上运行时，宿主安装兼容包：
+3. 必须用 Debian / Ubuntu 镜像构建、又要在 Fedora 上运行时，宿主安装兼容包：
    `sudo dnf install libxcrypt-compat`（提供 `libcrypt.so.1`）。
-3. 先诊断：`ldd <产物>` 看哪个库 `not found`；`file` / `objdump -T` 看 ELF 和
+4. 先诊断：`ldd <产物>` 看哪个库 `not found`；`file` / `objdump -T` 看 ELF 和
    符号版本。
-4. 区分两个问题：`phprt` 自身二进制能在镜像里跑，只说明它需要的 GLIBC 符号版本
+5. 区分两个问题：`phprt` 自身二进制能在镜像里跑，只说明它需要的 GLIBC 符号版本
    不高于镜像；**不代表构建出来的产品能在宿主上跑**。产品依赖的是构建镜像里的
    系统库，不是 phprt 二进制的依赖。
 
@@ -637,10 +647,30 @@ phprt install nginx@1.29 --instance php-8.5
   `the HTTP gzip module requires the zlib library`；已把 zlib 加进 `needs`、
   `LINES`、bundle `[deps]` 和 `--with-cc-opt` / `--with-ld-opt`。
 - 构建完成后 `buildimages list` 的 `used_by` 显示 `nginx@1.29,php@8.5`。
-- 在实例里执行 `nginx -V` 正常；在 Fedora 宿主直接执行会缺 `libcrypt.so.1`，
-  原因和处理见 §10.1。
+- 在实例里执行 `nginx -V` 正常；关掉 `xcrypt` 时在 Fedora 宿主直接执行会缺
+  `libcrypt.so.1`，原因和处理见 §10.1。
 - 用 `plan --instance-name test-instance` 新建实例、再 `rm-instance test-instance`
   删除成功；`rm-instance` 在实例锁被占用时拒绝。
+
+2026-11-24 nginx `xcrypt` feature 实测（Debian 13 实例，Fedora 43 宿主）：
+
+```text
+# bundle: features = ["xcrypt"]
+phprt install nginx@1.29 --instance php-8.5 --force
+readelf -d .phprt/nginx-1.29.8/sbin/nginx | grep NEEDED
+# 只有 libpcre2-8 / libssl / libcrypto / libz / libc；没有 libcrypt
+./.phprt/nginx-1.29.8/sbin/nginx -V      # 宿主直接运行，输出 nginx/1.29.8
+
+# bundle: features = []
+phprt install nginx@1.29 --instance php-8.5 --force
+readelf -d .phprt/nginx-1.29.8/sbin/nginx | grep NEEDED
+# 回到 [libcrypt.so.1] + 其他，和关掉开关前一致
+```
+
+- 关掉 feature 时 `deps/` 里还留着上次编的 `libcrypt.a`，也不会被悄悄链进去：
+  feature 关闭后 nginx 的 `--with-ld-opt` 里没有 libxcrypt 的 `-L`。
+- `plan` 的构建顺序里，feature 打开时是 6 个节点（含 `dep:libxcrypt 4.5.2`），
+  关闭时是 5 个。
 
 另外用合成层验证了解包器：opaque / 普通 whiteout 先于本层条目应用、非法
 whiteout 直接报错且不删父目录、符号链接越界被拒绝、文件与目录互换能重建、

@@ -1026,18 +1026,41 @@ impl Target {
                 if self.series.is_empty() {
                     bail!("{at}: product:{} 缺少 series", self.name);
                 }
-                if !self.dep_configure.is_empty()
-                    || !self.features.is_empty()
-                    || !self.ignored.is_empty()
-                {
-                    bail!(
-                        "{at}: product:{} 不允许 dep_configure/features/ignored",
-                        self.name
-                    );
+                if !self.dep_configure.is_empty() || !self.ignored.is_empty() {
+                    bail!("{at}: product:{} 不允许 dep_configure/ignored", self.name);
                 }
                 for (dep, feats) in &self.deps {
                     if dep.is_empty() || feats.iter().any(|f| f.is_empty()) {
                         bail!("{at}: product:{} 的 deps 里有空名字", self.name);
+                    }
+                }
+                // 产品 feature 只合并 needs / configure；disable / requires 没有定义语义，
+                // 写了直接报错，避免看起来生效其实被忽略。
+                for (name, feature) in &self.features {
+                    if name.is_empty() {
+                        bail!("{at}: product:{} 的 features 里有空名字", self.name);
+                    }
+                    if feature.needs.iter().any(|need| need.is_empty()) {
+                        bail!(
+                            "{at}: product:{} 的 feature {name} 的 needs 里有空名字",
+                            self.name
+                        );
+                    }
+                    if !feature.disable.is_empty() {
+                        bail!(
+                            "{at}: product:{} 的 feature {name} 不支持 disable（未启用时什么都不加）",
+                            self.name
+                        );
+                    }
+                    if !feature.requires.product.is_empty()
+                        || !feature.requires.dep.is_empty()
+                        || !feature.requires.commands.is_empty()
+                    {
+                        bail!(
+                            "{at}: product:{} 的 feature {name} 不支持 requires；\
+                             依赖条件请写到 component feature 上",
+                            self.name
+                        );
                     }
                 }
                 if self.version.is_empty() {
@@ -2009,6 +2032,7 @@ pub fn load_targets(
     product_version: &str,
     metas: &[RecipeMeta],
     lines: &BTreeMap<String, String>,
+    features: &[String],
     base_ctx: &serde_json::Value,
 ) -> Result<Registry> {
     let defs = read_defs(dir)?;
@@ -2269,10 +2293,63 @@ pub fn load_targets(
     if !targets.iter().any(|t| t.kind == Kind::Product) {
         bail!("没有找到产品 {product_name}@{series} 的 recipe");
     }
+    apply_product_features(&mut targets, product_name, series, features)?;
     let mut reg = Registry::from_targets(targets)?;
     reg.host = host;
     reg.host_tools = host_tools;
     Ok(reg)
+}
+
+/// 应用 bundle 里默认启用的产品 feature：把 `needs` 合进产品的依赖闭包，
+/// 把 `configure` 追加到产品自己的参数列表。
+///
+/// 默认集合来自 bundle 的 `features`；产品 recipe 只声明 feature 本身，
+/// 不决定默认值。
+fn apply_product_features(
+    targets: &mut [Target],
+    product: &str,
+    series: &str,
+    enabled: &[String],
+) -> Result<()> {
+    if enabled.is_empty() {
+        return Ok(());
+    }
+    let index = targets
+        .iter()
+        .position(|t| t.kind == Kind::Product && t.name == product)
+        .ok_or_else(|| anyhow::anyhow!("没有找到产品 {product}@{series} 的 recipe"))?;
+    for name in enabled {
+        let Some(def) = targets[index].features.get(name).cloned() else {
+            let known: Vec<&str> = targets[index].features.keys().map(String::as_str).collect();
+            if known.is_empty() {
+                bail!(
+                    "bundle {product}/{series}.toml 的 features 里有 {name}，\
+                     但产品 recipe 没有声明任何 feature"
+                );
+            }
+            bail!(
+                "bundle {product}/{series}.toml 的 features 里有 {name}，\
+                 产品 recipe 只有：{}",
+                known.join(", ")
+            );
+        };
+        for need in &def.needs {
+            let id = format!("dep:{need}");
+            if !targets.iter().any(|t| t.id() == id) {
+                bail!(
+                    "产品 {product}@{series} 的 feature {name} 需要 dep:{need}，\
+                     但 bundle [deps] 里没有绑定它；补一行 {need} = \"<线>\""
+                );
+            }
+            if !targets[index].needs.contains(need) {
+                targets[index].needs.push(need.clone());
+            }
+        }
+        targets[index]
+            .configure
+            .extend(def.configure.iter().cloned());
+    }
+    Ok(())
 }
 
 /// catalog 里没有版本线的工具 recipe：只能由系统提供，只声明具名检查。
@@ -3002,6 +3079,7 @@ mod tests {
             &version,
             &metas,
             &bindings.lines,
+            &bundle.features,
             &ctx,
         )?;
         Ok((reg, bindings))
@@ -3547,6 +3625,76 @@ gd = { ref = "component_presets.gd", mode = "shared" }
     }
 
     #[test]
+    fn product_features_merge_needs_and_configure() {
+        let mut product = Target {
+            kind: Kind::Product,
+            name: "demo".to_owned(),
+            series: "1.0".to_owned(),
+            needs: vec!["zlib".to_owned()],
+            configure: vec!["--prefix={tree}".to_owned()],
+            ..Target::default()
+        };
+        product.features.insert(
+            "xcrypt".to_owned(),
+            Feature {
+                needs: vec!["libxcrypt".to_owned()],
+                configure: vec!["--with-ld-opt=-L{dep:libxcrypt}/lib".to_owned()],
+                ..Feature::default()
+            },
+        );
+        let dep = Target {
+            kind: Kind::Dep,
+            name: "libxcrypt".to_owned(),
+            version: "4.5.2".to_owned(),
+            ..Target::default()
+        };
+        let mut targets = vec![product, dep];
+
+        apply_product_features(&mut targets, "demo", "1.0", &[]).unwrap();
+        assert_eq!(targets[0].needs, ["zlib".to_owned()]);
+
+        apply_product_features(&mut targets, "demo", "1.0", &["xcrypt".to_owned()]).unwrap();
+        assert_eq!(
+            targets[0].needs,
+            ["zlib".to_owned(), "libxcrypt".to_owned()]
+        );
+        assert_eq!(
+            targets[0].configure,
+            [
+                "--prefix={tree}".to_owned(),
+                "--with-ld-opt=-L{dep:libxcrypt}/lib".to_owned()
+            ]
+        );
+
+        let err = apply_product_features(&mut targets, "demo", "1.0", &["missing".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("只有：xcrypt"), "{err}");
+    }
+
+    #[test]
+    fn product_feature_needs_must_be_bound() {
+        let mut product = Target {
+            kind: Kind::Product,
+            name: "demo".to_owned(),
+            series: "1.0".to_owned(),
+            ..Target::default()
+        };
+        product.features.insert(
+            "xcrypt".to_owned(),
+            Feature {
+                needs: vec!["libxcrypt".to_owned()],
+                ..Feature::default()
+            },
+        );
+        let mut targets = vec![product];
+        let err = apply_product_features(&mut targets, "demo", "1.0", &["xcrypt".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bundle [deps]"), "{err}");
+    }
+
+    #[test]
     fn feature_commands_are_checked() {
         let dir = dir();
         let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
@@ -3571,6 +3719,7 @@ gd = { ref = "component_presets.gd", mode = "shared" }
             &version,
             &metas,
             &bindings.lines,
+            &[],
             &ctx,
         )
         .unwrap();

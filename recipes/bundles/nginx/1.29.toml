@@ -1,11 +1,14 @@
 # nginx 1.29 的默认版本线；默认不装第三方模块。
 product = "nginx"
 lua-nginx-module = "0.10"
+# 默认把 libxcrypt 静态链进 nginx；去掉这一项就回退到镜像自带的系统 libcrypt。
+features = ["xcrypt"]
 
 [deps]
 openssl = "3.5"
 pcre2 = "10.49"
 zlib = "1.3"
+libxcrypt = "4.5"
 luajit = "2.1"
 
 [component_presets]

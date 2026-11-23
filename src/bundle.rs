@@ -10,6 +10,7 @@ use crate::recipe::{ComponentSpec, Registry, Selection};
 /// `recipes/bundles/<产品>/<系列>.toml`：某个产品系列的默认策略。
 ///
 /// - 顶层：有独立版本线的组件 -> 默认线；只存线，不存补丁号。
+/// - `features`：该系列默认启用的产品 feature（产品 recipe 的 `features` 键）。
 /// - `[deps]`：依赖库 -> 默认线。内置组件没有自己的版本线，它的同名库写在这里。
 /// - `[component_presets]`：组件被选中时的默认 feature / 依赖功能，不决定是否默认启用。
 /// - `[default_components]`：默认启用的组件；可用 `ref` 引用 `[component_presets]`。
@@ -17,6 +18,8 @@ use crate::recipe::{ComponentSpec, Registry, Selection};
 pub struct Bundle {
     pub product: String,
     pub component_lines: BTreeMap<String, String>,
+    /// 默认启用的产品 feature；空表示一个都不开。
+    pub features: Vec<String>,
     pub dep_lines: BTreeMap<String, String>,
     pub component_presets: BTreeMap<String, ComponentDefault>,
     pub default_components: BTreeMap<String, ComponentDefault>,
@@ -50,6 +53,7 @@ impl Bundle {
             .with_context(|| format!("{} 不是合法的 bundle", path.display()))?;
 
         let mut component_lines = BTreeMap::new();
+        let mut features = Vec::new();
         let mut dep_lines = BTreeMap::new();
         let mut component_presets = BTreeMap::new();
         let mut product = None;
@@ -61,6 +65,8 @@ impl Bundle {
                     toml::Value::String(text) => product = Some(text),
                     _ => bail!("{} 的 product 必须是字符串", path.display()),
                 }
+            } else if key == "features" {
+                features = parse_features(value, path)?;
             } else if key == "deps" {
                 dep_lines = value.try_into().with_context(|| {
                     format!(
@@ -96,6 +102,7 @@ impl Bundle {
         let bundle = Self {
             product,
             component_lines,
+            features,
             dep_lines,
             component_presets,
             default_components,
@@ -198,6 +205,26 @@ impl Bundle {
         }
         Ok(())
     }
+}
+
+fn parse_features(value: toml::Value, path: &Path) -> Result<Vec<String>> {
+    let list = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("{} 的 features 必须是数组", path.display()))?;
+    let mut out: Vec<String> = Vec::new();
+    for item in list {
+        let name = item
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{} 的 features 里必须是字符串", path.display()))?;
+        if name.is_empty() {
+            bail!("{} 的 features 里有空名字", path.display());
+        }
+        if out.iter().any(|item| item == name) {
+            bail!("{} 的 features 重复: {name}", path.display());
+        }
+        out.push(name.to_owned());
+    }
+    Ok(out)
 }
 
 fn parse_targets_default(value: toml::Value, path: &Path) -> Result<Vec<String>> {
@@ -380,6 +407,34 @@ mod tests {
     fn targets_default_is_read() {
         let bundle = Bundle::load(&dir().join("bundles/php/8.5.toml")).unwrap();
         assert_eq!(bundle.targets_default, vec!["cli".to_owned()]);
+    }
+
+    #[test]
+    fn features_are_names_without_duplicates() {
+        let path = temp_path("features");
+        std::fs::write(&path, "product = \"nginx\"\nfeatures = [\"xcrypt\"]\n").unwrap();
+        let bundle = Bundle::load(&path).unwrap();
+        assert_eq!(bundle.features, vec!["xcrypt".to_owned()]);
+        let _ = std::fs::remove_file(&path);
+
+        std::fs::write(
+            &path,
+            "product = \"nginx\"\nfeatures = [\"xcrypt\", \"xcrypt\"]\n",
+        )
+        .unwrap();
+        let err = Bundle::load(&path).unwrap_err().to_string();
+        assert!(err.contains("重复"), "{err}");
+        let _ = std::fs::remove_file(&path);
+
+        std::fs::write(&path, "product = \"nginx\"\nfeatures = [\"\"]\n").unwrap();
+        let err = Bundle::load(&path).unwrap_err().to_string();
+        assert!(err.contains("空名字"), "{err}");
+        let _ = std::fs::remove_file(&path);
+
+        std::fs::write(&path, "product = \"nginx\"\nfeatures = \"xcrypt\"\n").unwrap();
+        let err = Bundle::load(&path).unwrap_err().to_string();
+        assert!(err.contains("必须是数组"), "{err}");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

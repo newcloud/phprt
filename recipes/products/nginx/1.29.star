@@ -1,11 +1,20 @@
-# nginx 1.29：PCRE2、OpenSSL 和 zlib 用 phprt 编译好的依赖库，
+# nginx 1.29：PCRE2、OpenSSL、zlib 用 phprt 编译好的依赖库，
 # 组件模块折叠进 nginx 的 ./configure。
+#
+# feature `xcrypt`（bundle 默认启用）把 libxcrypt 只编成静态库，nginx 的
+# -lcrypt 命中 libcrypt.a，产物不再依赖宿主 libcrypt.so.1，Debian 编的包
+# 也能在 Fedora 上直接跑。
+#
+# last-wins：nginx 的 --with-ld-opt 只保留最后一次出现的值，所以 feature 打开时
+# 用一份包含 libxcrypt 的完整 -L 覆盖基础参数；关掉时基础参数里没有 libxcrypt，
+# 不会因为 deps/ 里留着上次的 libcrypt.a 又悄悄静态链进去。
 
 LINES = {
     "1.29": {
         "openssl": ["3.0", "3.5", "4.0"],
         "pcre2": ["10.49"],
         "zlib": ["1.3"],
+        "libxcrypt": ["4.5"],
     },
 }
 
@@ -19,6 +28,14 @@ TARGET = product(
     toolchain = TOOLCHAIN,
     series = "1.29",
     needs = ["pcre2", "openssl", "zlib"],
+    features = {
+        "xcrypt": feature(
+            needs = ["libxcrypt"],
+            configure = [
+                "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib -L{dep:zlib}/lib -L{dep:libxcrypt}/lib",
+            ],
+        ),
+    },
     configure = [
         "./configure",
         "--prefix={tree}",

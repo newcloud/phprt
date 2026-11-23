@@ -141,6 +141,10 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
 
 1. `runtime.lib_dir` 非空时，把运行时依赖（`needs` / 已启用 feature 的 `needs` 闭包，
    不含 `tools`）的 `lib/*.so*`（含软链）复制到 `{tree}/<runtime.lib_dir>`。
+   只编静态库的依赖（如 nginx 的 `libxcrypt`）没有 `.so` 可复制，靠产品自己的
+   `-l` 参数静态链进可执行文件，不进入 `runtime.lib_dir`。系统库（glibc /
+   libcrypt）不复制，由运行环境提供；跨发行版运行库差异见
+   [BUILD-IMAGES.md](../BUILD-IMAGES.md) §10.1。
 2. 用 `patchelf --force-rpath` 按 `runtime.rpath` 设置安装树内的 rpath。patchelf 也是
    构建期工具：本产品解析到 built 版本时用 `build/tools/patchelf-<版本>/bin/patchelf`，
    宿主满足时用宿主 PATH 里的 `patchelf`：

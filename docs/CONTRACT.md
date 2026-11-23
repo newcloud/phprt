@@ -211,6 +211,8 @@ libxml = {}
 - `product` 必须和目录名一致；系列由文件名给出。
 - 顶层键只写**有独立版本线的组件**（如 `swoole`、`xdebug`）；值只能是 catalog 里存在的线。
   bundled 组件（如 `openssl`、`curl`、`libxml`）没有自己的版本线，不能写在顶层。
+- `features = ["名字", ...]`：默认启用的**产品 feature**；名字必须是当前产品 recipe
+  `features` 的键。不写就是一个都不开，和组件默认集合无关。
 - `[deps]` 只写依赖库，key 必须是 `dep/*.star` 里的目标；值是该库在 catalog 里的线。
   bundled 组件的同名库版本写在这里，例如 `openssl = "3.5"` 指 OpenSSL 库，不是 PHP 的
   openssl 组件。
@@ -471,6 +473,10 @@ TARGETS = {
   系列差异用 `extend_profile(PROFILE, ...)` 覆盖，详见 [PRODUCT.md](PRODUCT.md)。
 - `version` / `url` / `sha256` 从 catalog 的同名产品注入。
 - `needs` / `deps`：产品链接和运行时需要的依赖库，以及要转给它们的 feature。
+- `features`：产品自己的可选开关，`feature(needs=[...], configure=[...])`。只支持
+  `needs` / `configure`；`disable` / `requires` 写了直接报错。`needs` 只在 feature
+  启用时并进产品的依赖闭包，`configure` 追加到产品自己的参数列表。默认启用集合只写在
+  bundle 的 `features`，recipe 不写默认；也不单独进 state（bundle 改了会按签名重编）。
 - `bundled`：该产品源码包内自带的组件名，和是否有 recipe 无关；不要求非空。
 - `bundled_disable`：bundled 组件名 → 单个关闭参数；key 必须在 `bundled` 里。
 - `toolchain` 是 `toolchain(gcc=[...], gxx=[...])`，声明编译器版本档位和每档的
@@ -589,6 +595,8 @@ TARGETS = {
    key 是 `--...` 选项，理由非空。
 8. product 的 `toolchain` 至少要声明 `gcc` / `gxx` 之一；每个档位必须有 min 或 max，
    同一项里的档位不能重叠，`gcc` 档位不能写 `cxxflags`、`gxx` 档位不能写 `cflags`。
+8.1 product 的 `features` 名非空，`needs` 每项非空；`disable` / `requires` 必须为空；
+   feature 的 `needs` 必须能在 bundle `[deps]` 里绑定到同名 dep，否则报错。
 9. product 的 `targets` 名字、配置项名、类型、`{value}` 模板必须合法；声明了 targets
    时，cli / state / bundle 里的未知 target 或未知配置项都直接报错，不静默丢弃。
 10. component 的 `modes` 必须在产品 profile 的 `modes` 里；默认 mode 也必须在 `modes` 里。

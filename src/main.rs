@@ -960,6 +960,7 @@ fn run_body(
         &version,
         &metas,
         &bindings.lines,
+        &bundle.features,
         &ctx,
     )?;
 
@@ -1042,6 +1043,7 @@ fn run_body(
                 &version,
                 &metas,
                 &bindings.lines,
+                &bundle.features,
                 &ctx,
             )?;
             preset_sel = bundle::presets(&reg, &bundle, &series)?;

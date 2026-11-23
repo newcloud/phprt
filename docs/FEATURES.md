@@ -67,6 +67,38 @@ component:openssl
 依赖库的 `features.*.configure` 是该 feature 打开时给**库**的编译参数；`disable` 是没打开时给库的
 关闭参数。扩展的 `dep_configure` 是选中 `dep:依赖` 时给**扩展**加的编译参数。
 
+### 2.1 产品 feature
+
+产品没有用户级 feature：产品 recipe 的 `features` 只表达「这个开关会带进哪个依赖、
+追加哪些 configure 参数」，默认启用集合写在 bundle 的 `features`。
+
+```python
+TARGET = product(
+    name = "nginx",
+    series = "1.29",
+    needs = ["pcre2", "openssl", "zlib"],
+    features = {
+        "xcrypt": feature(
+            needs = ["libxcrypt"],
+            configure = ["--with-ld-opt=..."],
+        ),
+    },
+    configure = [...],
+)
+```
+
+```toml
+product = "nginx"
+features = ["xcrypt"]
+```
+
+- 只支持 `needs` / `configure`；`disable` / `requires` 写了直接报错（没有定义语义）。
+- feature 启用时，`needs` 并进产品的依赖闭包，`configure` 追加到产品参数末尾；
+  依赖必须在 bundle `[deps]` 里能绑定，否则报错并提示补线。
+- 默认集合只有 bundle 一个来源，没有 CLI、不进 state；改了 bundle 就按构建签名重编。
+- 典型用途是「可选地把某个系统库静态链进产品」（nginx 的 `xcrypt`），
+  上游没有干净关闭参数、又不想总是依赖宿主运行库时用。
+
 ## 3. 常用度判定
 
 盘点的第一道筛子是常用度，不是「能不能做」。命中即停：

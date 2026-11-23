@@ -196,7 +196,7 @@ for component in 方案里的 fold 组件:
 | --- | --- |
 | dep | `needs` 里的每个 `dep:*`，加上已启用 feature 的 `needs` |
 | component | `needs` 里的每个 `dep:*`；`feature` 的 needs；standalone 时加 `tools` |
-| product | `needs` 里的每个 `dep:*`，加上方案里 **fold** 的组件 |
+| product | `needs` 里的每个 `dep:*`（含 bundle `features` 默认启用的产品 feature 带进来的）、加上方案里 **fold** 的组件 |
 
 standalone 组件不进入产品的子节点，改为在产品之后单独展开，避免成环。
 `tools` 只影响构建顺序和 `PATH`，不参与 include/lib 计算。

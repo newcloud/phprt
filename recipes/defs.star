@@ -437,6 +437,7 @@ def product(
         bundled = [],
         bundled_disable = {},
         configure = [],
+        features = {},
         make = ["make", "make install"],
         artifacts = ["bin/php"],
         profile = {},
@@ -448,6 +449,8 @@ def product(
     series 是 8.5 这样的系列，补丁和下载地址由 catalog 注入。
     bundled / bundled_disable 是产品版本事实：源码包里自带哪些组件、
     没选中某个组件时用哪个 configure 参数关闭它。
+    features 是产品自己的可选开关（needs / configure）；默认启用集合写在
+    bundles/<产品>/<系列>.toml 的 features。
     profile 描述组件怎么挂到产品上、装完怎么整理和验证。
     默认启用集合不在这里，写在 bundles/<产品>/<系列>.toml 的 default_components。
     toolchain 声明产品的 gcc / gxx 版本档位和每档的兼容参数；不写就不检查。
@@ -464,6 +467,7 @@ def product(
         "bundled": bundled,
         "bundled_disable": bundled_disable,
         "configure": configure,
+        "features": features,
         "make": make,
         "artifacts": artifacts,
         "profile": profile,
