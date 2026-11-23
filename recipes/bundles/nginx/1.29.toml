@@ -5,6 +5,7 @@ lua-nginx-module = "0.10"
 [deps]
 openssl = "3.5"
 pcre2 = "10.49"
+zlib = "1.3"
 luajit = "2.1"
 
 [component_presets]

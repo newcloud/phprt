@@ -61,12 +61,9 @@ pub struct BuildState {
     /// 运行时名；当前只有 youki。
     #[serde(default)]
     pub runtime: String,
-    /// 当前实例 id；只是缓存，对不上就重建。
+    /// 当前实例名；实例是用户级全局对象，名字由用户或默认规则决定。
     #[serde(default)]
     pub instance: String,
-    /// 实例创建时间。
-    #[serde(default)]
-    pub instance_created: String,
 }
 
 impl BuildState {

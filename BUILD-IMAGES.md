@@ -44,25 +44,21 @@ OCI 构建环境把工具装进一个由 phprt 自己管理的 rootless 容器�
 # 1. 拉取镜像（一次即可，跨项目共享）
 phprt buildimages add quay.io/fedora/fedora:43 --name fedora43
 
-# 2. 给产品系列选择构建环境
-phprt buildimages use php@8.5 --image fedora43
+# 2. 用 fedora43 建一个全局实例，并起名
+phprt install php@8.5 --image fedora43 --instance-name fedora43mybuild_os
 
-# 3. 正常构建；第一次会在容器里自动装 gcc / make / cmake 等
-phprt install php@8.5
-./myphp-8.5 -v
-
-# 4. 之后的 add / update 也自动沿用
+# 3. 之后的 add / update / install 沿用 state 里的实例
 phprt add php@8.5 swoole
 phprt update php@8.5
+
+# 4. 另一个产品复用同一个实例
+phprt install nginx@1.29 --instance fedora43mybuild_os
 ```
 
-第一次也可以不单独 `use`，直接：
-
-```bash
-phprt install php@8.5 --image fedora43
-```
-
-`--image` 写在本次命令上，选择会写进该系列的 `state.json`，之后不需要再带。
+`--image` + `--instance-name` 写在本次命令上，选择会写进该系列的 `state.json`，
+之后不需要再带。实例是用户级全局对象，名字全局唯一；不给 `--instance-name`
+时默认名是 `<产品>-<系列>-<项目hash8>`。换基础镜像必须新建实例。
+`phprt buildimages list` 同时列出镜像和实例。
 
 ---
 
@@ -87,61 +83,75 @@ phprt buildimages add <镜像引用> [--name <别名>] [--offline]
   rootfs 的层会报错。
 - 会检查镜像里有 `/bin/sh` 和 `dnf` / `apt-get`。
 - 命中镜像家族时会显示家族、设置和原因；家族按镜像内容匹配，见 §9。
-- 不创建容器实例；实例在第一次 `install` / `plan` 时按项目创建。
+- 不创建容器实例；实例在第一次 `install` / `plan` 时创建。实例是全局对象，
+  名字由 `--instance-name` 或默认规则决定；`--instance` 只选择已有实例。
 
 ### 4.2 `phprt buildimages list`
 
-列出本地缓存的镜像：digest 前 12 位、别名、家族、平台、创建时间、大小、原始
-引用。不联网。家族读不出时显示 `-`。
+列出本地缓存的镜像和全局实例，不联网。
+
+- 镜像表：digest 前 12 位、别名、家族、平台、创建时间、大小、使用该 digest 的
+  实例、原始引用；digest 前缀可以直接用在 `--image` / `rm` 上。家族读不出时显示 `-`。
+- 实例表：name、image、owner、used_by、size、running/stopped。`used_by` 通过
+  各项目 `.phprt/*/state.json` 汇总；owner 项目根不存在时标 `missing`。
 
 ### 4.3 `phprt buildimages use`
 
 ```text
-phprt buildimages use <产品>@<系列> --image <digest|别名|引用>
+phprt buildimages use <产品>@<系列> --instance <名字>
+phprt buildimages use <产品>@<系列> --image <digest|digest前缀|别名|引用> [--instance-name <名字>]
 phprt buildimages use <产品>@<系列> --host
 ```
 
+- `--instance` 选择已有的全局实例；`--image` 选择镜像，`--instance-name` 给
+  新实例起名。`--image` 显式给出且本地没有时自动拉取。
 - 把选择写进 `.phprt/<产品>-<系列>/state.json` 的 `build` 段。
+- 只写选择，不创建容器；下一次 `install` / `plan` 才建实例。
 - 该系列还没有方案时，会按 bundle 的默认组件初始化一份方案；效果和第一次
   `install` 的默认方案一致。
 - `--host` 删除 `build` 段，回到宿主构建。
 - 已经安装过的系列切换环境时，必须加 `--force`；否则报错，避免悄悄重编。
-- 只写选择，不创建容器；下一次 `install` / `plan` 才建实例。
-- 会显示所选镜像命中的家族、设置和原因（见 §9）。
 - 只支持本地模式，不能和 `--global --prefix` 一起用。
 
-### 4.4 `phprt install` / `add` / `update` / `plan --image`
+### 4.4 `phprt install` / `add` / `update` / `plan`
 
 ```text
-phprt install php@8.5 --image fedora43
-phprt add php@8.5 swoole --image fedora43
-phprt update php@8.5 --image fedora43
-phprt plan php@8.5 --image fedora43
+phprt install php@8.5 --image fedora43 --instance-name fedora43mybuild_os
+phprt install nginx@1.29 --instance fedora43mybuild_os
+phprt add php@8.5 swoole --instance fedora43mybuild_os
+phprt update php@8.5 --instance fedora43mybuild_os
+phprt plan php@8.5 --instance fedora43mybuild_os
 ```
 
+- `--image <digest|digest前缀|别名|引用>`：新建实例的基础镜像；显式给出且本地没有时自动
+  拉取，`--offline` 时报错。
+- `--instance <名字>`：使用已有全局实例，必须存在。可以同时给 `--image`，但
+  digest 必须一致。
+- `--instance-name <名字>`：新建实例时使用的名字；同名但 digest 不同直接报错。
+- state 里已经有实例时，后续命令不需要再带参数；实例 rootfs 在时不要求镜像
+  缓存，只有实例 rootfs 丢失时才解析/拉取镜像重建。
 - `install` / `add` / `update` 会把选择写进 state，然后进入容器执行。
-- `plan` 只预览：使用镜像里的工具，不写 state、不装构建工具。文本输出会先显示
-  命中的镜像家族和设置；`--json` 不输出这一行。
-- state 里已经有镜像时，后续命令不需要再带 `--image`。
+- `plan` 只预览：不写 state、不装构建工具；文本输出会先显示命中的镜像家族和
+  设置，`--json` 不输出这一行。
 - 已安装的系列换镜像时，`install` 需要 `--force`；`add` / `update` 没有这个语义，
-  会提示先用 `buildimages use --force`。
+  会报错，需先用 `buildimages use --force` 或 `install --force`。
 - `--downloads` 仍然只下载源码，不触发工具安装。
 - `--offline` 下不拉镜像、不装包；镜像和工具必须已经准备好。
 
-### 4.5 `phprt buildimages rm` / `gc`
+### 4.5 `phprt buildimages rm` / `rm-instance`
 
 ```text
-phprt buildimages rm <digest|别名|引用> [--force]
-phprt buildimages gc [--dry-run]
+phprt buildimages rm <digest|digest前缀|别名|引用> [--force]
+phprt buildimages rm-instance <名字> [--force]
 ```
 
-- `rm` 删除镜像目录（rootfs + 层）和索引条目。
-- 当前项目有 state 引用该 digest 时拒绝，`--force` 才删。
-- 其他项目是否引用无法全盘判断；`--force` 只提示，不跨项目扫描。
-- 已有容器实例不会被自动删除：实例有自己的 rootfs，镜像删了仍能继续用，
-  但不能再从镜像重建。
-- `gc` 清理两类东西：索引里没有的镜像目录；项目根已经不存在的实例。
-  `--dry-run` 只列出。
+- `rm-instance`：先拿实例锁，停掉/删除 youki 容器，再删除实例目录。实例正被
+  另一个 phprt 使用时拒绝；项目 state 引用该实例时默认拒绝，`--force` 才删。
+- `rm`：只要还有实例使用该 digest，就拒绝，且不能用 `--force` 绕过；必须先
+  `rm-instance`。只有项目 state 引用、没有实例时，默认拒绝，`--force` 可删；
+  下次 install 会自动拉取。
+- 删除镜像只删镜像目录和索引条目；不会再出现“实例还引用已删镜像”的状态。
+- 没有 `gc`；孤儿实例和残留目录都通过显式 `rm-instance` / `rm` 处理。
 
 ---
 
@@ -160,12 +170,15 @@ phprt buildimages gc [--dry-run]
 │   ├── image.json                         # ref / digest / 层清单 / 平台
 │   └── modes.json                         # 解包时为复制临时放宽的 mode（files / dirs）
 └── instances/<实例 id>/
-    ├── instance.json                      # 镜像、项目根、创建时间、挂载/二进制指纹
+    ├── instance.json                      # name / image / owner / projects / 挂载 / 二进制指纹
+    ├── .lock                              # 实例锁；同一实例串行使用
     └── bundle/
         ├── config.json                    # OCI runtime spec
         └── rootfs/                        # 实例自己的可写 rootfs（含已装工具）
 ```
 
+新实例 id 是 `phprt-<名字>`；旧实例仍保留旧 id
+`phprt-<项目hash8>-<产品>-<系列>-<digest12>`，第一次使用时收编成用户可见名字。
 运行时状态（libcontainer 的容器状态、pid、notify socket）放在：
 
 ```text
@@ -185,14 +198,14 @@ rootfs 重新创建容器，工具不用重装。
   "image": "sha256:c9fbab…",
   "image_ref": "quay.io/fedora/fedora:43",
   "runtime": "youki",
-  "instance": "phprt-9d412bf8-php-8.5-c9fbabbeee0e",
-  "instance_created": ""
+  "instance": "fedora43mybuild_os"
 }
 ```
 
 - `image` 是 manifest digest，不是 tag。
-- `instance` 只是缓存；实例目录或容器对不上就重建。
+- `instance` 是全局实例名，不是内部 id。
 - 没有 `build` 字段表示宿主构建。
+- 实例绑定一个基础镜像 digest；同名实例不能换镜像，换镜像要新建名字。
 
 ---
 
@@ -202,21 +215,23 @@ rootfs 重新创建容器，工具不用重装。
 
 ```text
 宿主 phprt
-  1. 读 state，确认使用哪个 digest
-  2. 镜像不在本地缓存：交互式询问是否拉取；非交互直接报错
-  3. 计算实例 id：项目 hash + 产品 + 系列 + digest 短串
-  4. 实例建过且 rootfs 在：复用；否则从镜像复制 rootfs
-  5. 生成 OCI spec：项目根、download_dir、build_dir、内部目录、recipes（只读）、
+  1. 读 state，拿到实例名和 image digest
+  2. 实例 rootfs 在：直接复用，不要求镜像缓存；rootfs 缺失才解析/拉取镜像
+  3. 实例 id 是 phprt-<名字>；没有名字时用 <产品>-<系列>-<项目hash8>
+  4. 实例没建过：从镜像复制 rootfs；建过：复用
+  5. 项目切了：保留 rootfs，只重启运行时容器并换挂载
+  6. 拿实例锁；同一实例同时只允许一个 phprt，第二个等待
+  7. 生成 OCI spec：项目根、download_dir、build_dir、内部目录、recipes（只读）、
      /phprt、/etc/resolv.conf；共享宿主网络
-  6. 创建 / 复用 libcontainer 实例（rootless + systemd cgroup）
-  7. 探测 /phprt --version，确认二进制能在镜像里跑
-  8. 把整条命令转发进容器
+  8. 创建 / 复用 libcontainer 实例（rootless + systemd cgroup）
+  9. 探测 /phprt --version，确认二进制能在镜像里跑
+ 10. 把整条命令转发进容器
         /phprt <原命令>，环境变量 PHPRT_IN_CONTAINER=1
 容器里的 phprt
-  9. 正常执行 install / add / update / plan；看到 PHPRT_IN_CONTAINER 就不再转发
- 10. 发现缺构建命令：读 plan 的 host_commands，把安装命令去掉 sudo、补 -y
+ 11. 正常执行 install / add / update / plan；看到 PHPRT_IN_CONTAINER 就不再转发
+ 12. 发现缺构建命令：读 plan 的 host_commands，把安装命令去掉 sudo、补 -y
      （apt 先 apt-get update），在容器里执行；复检一次后继续
- 11. 编译、写 state、写入口
+ 13. 编译、写 state、写入口
 ```
 
 `PHPRT_IN_CONTAINER` 是内部标记，不出现在帮助里，用户不需要手动设置。
@@ -252,7 +267,8 @@ apt 镜像会先执行 `apt-get update`，并按 §9 的家族设置在实例里
 ## 7. 签名与 `scheme --lock`
 
 镜像 digest 会进构建签名：切换镜像后，已有节点会按签名重编，不会复用另一套
-libc 编出来的产物。容器 id 不进签名；容器重建不触发重编。
+libc 编出来的产物。实例名和容器 id 不进签名；同名实例换项目、容器重建都不触发
+重编。两个实例 digest 相同时互相切换也不会重编。
 
 `phprt scheme --lock` 会在导出的命令后面追加 `--image <digest>`，并打印一行准备
 镜像的注释：
@@ -269,7 +285,8 @@ phprt buildimages add quay.io/fedora/fedora:43   # 会校验 digest
 phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
 ```
 
-实例和已装工具不导出；目标机器会新建实例并重新装工具。
+实例和已装工具不导出；导出的命令只带 `--image`，不带实例名。目标机器会按默认名
+新建实例并重新装工具。
 
 ---
 
@@ -277,13 +294,17 @@ phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
 
 | 情况 | 行为 |
 | --- | --- |
-| state 有 digest，镜像缓存缺失 | 交互式问是否拉取，默认否；非交互报错并提示 `buildimages add` |
-| 镜像缓存存在，实例 rootfs 缺失 | 自动从镜像复制 rootfs，重建容器 |
-| 宿主重启，运行时状态丢失 | 自动用同一个实例 rootfs 重建容器；工具保留 |
-| 实例存在，工具被删 | 下一次 `install` / `add` 重新发现缺包并安装 |
-| tag 指向了新 digest | state 里的 digest 是权威；`add` 会把新内容缓存成新条目，旧内容保留 |
-| state digest 与 tag 当前 digest 不一致 | 报错，要求显式 `buildimages use --image <新 digest> --force` |
+| state 有实例，rootfs 在 | 直接复用，不要求镜像缓存 |
+| state 有实例，rootfs 缺失 | 按实例 meta 的 image_ref 自动拉取镜像并复制 rootfs；`--offline` 或镜像缺失时报错 |
+| 实例不存在，显式 `--image` | 自动拉取（`--offline` 除外），按 `--instance-name` 或默认名新建 |
+| 项目切换 | 保留 rootfs 和工具，只重启运行时容器并换挂载 |
+| 同名实例遇到不同 digest | 报错，要求用 `--instance-name` 新建；不删 rootfs |
+| 实例被另一个 phprt 使用 | 等待并打印提示；`rm-instance` 直接拒绝 |
+| state 有 digest，镜像缓存缺失 | 实例 rootfs 在就不管；需要重建时自动拉取 |
+| tag 指向了新 digest | state 里的 digest 是权威；显式换镜像要新实例名 |
 | 已安装的系列切换镜像 | 需要 `--force`；否则拒绝 |
+| `rm` 镜像时仍有实例使用 | 拒绝，不能用 `--force` 绕过；先 `rm-instance` |
+| `rm-instance` 时 state 仍引用 | 默认拒绝，`--force` 才删；下次命令按镜像重建 |
 | `phprt` 在镜像里跑不起来 | 报错并提示换 glibc 不低于宿主的镜像 |
 | 镜像没有 dnf / apt-get | `buildimages add` 时报错 |
 | apt 镜像（Debian / Ubuntu） | 按镜像家族写入 apt 沙箱设置，见 §9 |
@@ -376,12 +397,15 @@ phprt __container-exec --instance <实例 id> --workdir <项目根> \
           ...
 ```
 
-`phprt buildimages list` 多一列 `family`；读不出镜像内容时显示 `-`：
+`phprt buildimages list` 的镜像表带 family，并且多一列使用该 digest 的实例：
 
 ```text
-digest         alias  family  platform     created          size  refs
-bfc36aecdece          debian  linux/amd64  2026-11-04...  165.5M  docker.m.daocloud.io/library/debian:13
+digest         alias  family  platform     created          size  instances  refs
+bfc36aecdece          debian  linux/amd64  2026-11-04...  165.5M  php-8.5    docker.m.daocloud.io/library/debian:13
 ```
+
+实例表单独列出 name、image、owner、used_by、size、running/stopped。读不出镜像内容时
+family 显示 `-`。
 
 `phprt plan` 在文本输出第一行显示命中的家族和设置；`--json` 不输出这一行，
 保持 JSON 可解析。
@@ -405,16 +429,81 @@ bfc36aecdece          debian  linux/amd64  2026-11-04...  165.5M  docker.m.daocl
 - 镜像里的 `/etc/resolv.conf` 由宿主只读挂入；镜像自带的会被覆盖。
 - dnf 与 apt 都已实测；Debian / Ubuntu 依赖 §9 的 apt 沙箱设置，没有该设置时
   `apt-get update` 会在 `setgroups` / `setegid` 处失败。
+- 构建镜像决定产物的运行库；Debian 构建的 nginx 在 Fedora 宿主可能缺
+  `libcrypt.so.1`，见 §10.1。
 - rootless 用户命名空间只映射 uid/gid 0；容器内改不了 `_apt` / `nogroup` 的
   uid/gid，也不支持按 subuid 范围给单个用户做映射。
-- 删除镜像不会删除已有实例；也不做跨项目引用统计。`rm --force` 前需自行确认。
-- `gc` 用“项目根路径是否还存在”判断实例是否孤儿；项目放在临时挂载点上时，
-  挂载没挂上会被误判，先 `gc --dry-run` 确认。
-- 没有镜像/实例的并发锁；同时启动两个 phprt 去拉同一个镜像或建同一个实例，
-  行为未定义。
+- 删除镜像不会自动删除实例；只要还有实例使用该 digest，`rm` 就拒绝，必须先
+  `buildimages rm-instance`。不做跨项目引用统计，state 引用用 `--force` 放行。
+- 实例是全局共享的：rootfs 和已装工具共用；项目源码、`.phprt`、`build/` 仍挂
+  当前项目。同一实例同时只允许一个 phprt 使用，第二个会等待实例锁释放；要并行
+  编译请用不同实例。
+- 镜像拉取没有跨进程锁；同一实例的创建、使用和删除有 flock。
+- 项目目录搬家会改变默认实例名里的项目 hash，但 state 里已经写下的实例名仍按
+  全局名字解析。
 - 只有 `install` / `add` / `update` / `plan` 会按 state 进入容器；
   `list` / `scheme` / `graph` / `audit` / `catalog` 仍在宿主上执行。
-- `buildimages` 子命令不能和 `--global --prefix` 的 `use` / `rm` 一起用。
+- `buildimages use` / `rm` / `rm-instance` 不能和 `--global --prefix` 一起用。
+
+### 10.1 构建镜像决定产物的运行库
+
+phprt 只把构建时找到的**非系统库**收进 `<tree>/lib/phprt`，例如 pcre2、openssl、
+zlib；glibc、libcrypt 这类系统库仍然由运行环境提供。所以**产物能直接在哪个发行版
+上跑，取决于构建镜像和目标宿主是不是同一套运行库**。
+
+实测（2026-11-24，Fedora 43 宿主，Debian 13 实例）：
+
+- Debian 13 实例构建的 nginx 链接 `libcrypt.so.1`（Debian 的 libxcrypt）；
+- Fedora 43 只有 `libcrypt.so.2`，在宿主直接运行报：
+
+  ```text
+  error while loading shared libraries: libcrypt.so.1: cannot open shared object file
+  ```
+
+- 同一个二进制在 Debian 13 实例里运行正常：
+
+  ```text
+  nginx version: nginx/1.29.8
+  built by gcc 14.2.0 (Debian 14.2.0-19)
+  built with OpenSSL 3.5.9 29 Sep 2026
+  ```
+
+为什么会缺：
+
+- `libcrypt.so.1` **不是** OpenSSL 的 `libcrypto.so.3`。前者是 `crypt(3)` 密码哈希库
+  （libxcrypt），后者是 OpenSSL 的加密库；名字像，但是两个东西。
+- nginx 的 HTTP Basic auth 会调用 `crypt()`，Debian 镜像的 configure 找到它并链接
+  `-lcrypt`，ELF 里记录的是 `DT_NEEDED libcrypt.so.1`。
+- phprt 只把构建时解析到的**非系统库**收进 `<tree>/lib/phprt`，例如 openssl、pcre2、
+  zlib；glibc、libcrypt 被当作系统库，交给运行环境提供。
+- 实例只是构建沙箱。实例里的 `/lib/x86_64-linux-gnu/libcrypt.so.1` 不会复制到产物树；
+  产物在宿主运行时用的是宿主的 loader 和宿主的系统库。
+- Debian 13 的 libxcrypt SONAME 是 `libcrypt.so.1`，Fedora 43 是 `libcrypt.so.2`。
+  宿主 loader 只按 ELF 里记录的名字找，所以 Fedora 上缺 `libcrypt.so.1`；
+  同一个二进制在实例里能找到实例自己的 `libcrypt.so.1`，所以 `nginx -V` 正常。
+
+用 `ldd` 能直接看到“哪些是随产物带的、哪些是宿主提供的”：
+
+```text
+libcrypt.so.1   => not found
+libssl.so.3     => <tree>/lib/phprt/libssl.so.3
+libcrypto.so.3  => <tree>/lib/phprt/libcrypto.so.3
+libpcre2-8.so.0 => <tree>/lib/phprt/libpcre2-8.so.0
+libz.so.1       => <tree>/lib/phprt/libz.so.1
+libc.so.6       => /lib64/libc.so.6
+```
+
+处理方式：
+
+1. **优先让构建镜像和宿主同族**。Fedora 宿主用 `quay.io/fedora/fedora:43`，
+   产物直接链接宿主已有的运行库。
+2. 必须用 Debian / Ubuntu 镜像构建、又要在 Fedora 上运行时，宿主安装兼容包：
+   `sudo dnf install libxcrypt-compat`（提供 `libcrypt.so.1`）。
+3. 先诊断：`ldd <产物>` 看哪个库 `not found`；`file` / `objdump -T` 看 ELF 和
+   符号版本。
+4. 区分两个问题：`phprt` 自身二进制能在镜像里跑，只说明它需要的 GLIBC 符号版本
+   不高于镜像；**不代表构建出来的产品能在宿主上跑**。产品依赖的是构建镜像里的
+   系统库，不是 phprt 二进制的依赖。
 
 ---
 
@@ -424,6 +513,12 @@ bfc36aecdece          debian  linux/amd64  2026-11-04...  165.5M  docker.m.daocl
 
 宿主二进制要求比镜像新的 glibc。换同代镜像（如宿主 Fedora 43 就用
 `quay.io/fedora/fedora:43`），或换 glibc 不低于宿主的镜像。
+
+**宿主运行产物时报 `libcrypt.so.1` / `GLIBC_2.xx` not found**
+
+这是构建镜像和宿主运行库不一致，不是实例本身坏了。用 `ldd <产物>` 确认缺哪个库；
+优先改用和宿主同族的镜像重新构建。Debian 构建物在 Fedora 上运行时，通常需要
+`sudo dnf install libxcrypt-compat`。详见 §10.1。
 
 **容器创建失败 / systemd scope 报错**
 
@@ -474,14 +569,13 @@ phprt install php@8.5                          # 按宿主签名重编
 **清理空间**
 
 ```bash
-phprt buildimages list
-phprt buildimages gc --dry-run
-phprt buildimages gc
-phprt buildimages rm <digest> --force
+phprt buildimages list                    # 先看哪个实例在用哪个镜像
+phprt buildimages rm-instance <名字>      # 先删实例；被 state 引用时加 --force
+phprt buildimages rm <digest|别名|引用>   # 没有实例使用后才能删镜像
 ```
 
-实例目录 `~/.local/share/phprt/buildimages/instances/<id>` 可以手工删除；
-下一次命令会按需要重建。
+删除镜像时如果还有实例使用，会直接拒绝，`--force` 也不能绕过；先删实例。
+实例正在被另一个 phprt 使用时，`rm-instance` 也会拒绝。
 
 ---
 
@@ -523,6 +617,30 @@ phprt install php@8.5
   `apt-get update && apt-get install -y gcc g++ binutils cmake m4 make perl pkg-config`，
   不再出现 `setgroups` / `setegid` / `seteuid` 错误。
 - 10 个节点编译完成，`./myphp-8.5 -v` 输出 PHP 8.5.13 (NTS)。
+
+2026-11-23 全局实例流程实测：
+
+- 旧实例 `phprt-4add57aa-php-8.5-bfc36aecdece` 自动收编为名字 `php-8.5`，
+  rootfs 和已装工具不复制、不重装。
+- `phprt buildimages list` 同时显示镜像和实例；实例的 `used_by` 显示 `php@8.5`。
+- `phprt buildimages rm <debian digest>` 被拒绝，提示先删实例。
+- `phprt buildimages rm-instance php-8.5` 因 state 仍引用而拒绝，列出 `php@8.5`。
+
+2026-11-24 跨产品复用同一实例实测（Debian 13 实例，Fedora 43 宿主）：
+
+```text
+phprt install nginx@1.29 --instance php-8.5
+# exit 0；zlib 1.3.2 和 nginx 1.29.8 编译完成
+```
+
+- nginx recipe 之前漏了 zlib，`./configure` 会报
+  `the HTTP gzip module requires the zlib library`；已把 zlib 加进 `needs`、
+  `LINES`、bundle `[deps]` 和 `--with-cc-opt` / `--with-ld-opt`。
+- 构建完成后 `buildimages list` 的 `used_by` 显示 `nginx@1.29,php@8.5`。
+- 在实例里执行 `nginx -V` 正常；在 Fedora 宿主直接执行会缺 `libcrypt.so.1`，
+  原因和处理见 §10.1。
+- 用 `plan --instance-name test-instance` 新建实例、再 `rm-instance test-instance`
+  删除成功；`rm-instance` 在实例锁被占用时拒绝。
 
 另外用合成层验证了解包器：opaque / 普通 whiteout 先于本层条目应用、非法
 whiteout 直接报错且不删父目录、符号链接越界被拒绝、文件与目录互换能重建、

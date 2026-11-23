@@ -37,26 +37,38 @@ pub fn ensure_instance(store: &Store, request: &InstanceRequest) -> Result<Insta
     let executable = executable_id(&request.executable)?;
     let mounts = mount_id(&request.mounts);
 
+    let existed = dir.exists();
+    fs::create_dir_all(&dir)?;
     let previous = fs::read_to_string(&meta_path)
         .ok()
         .and_then(|text| serde_json::from_str::<InstanceMeta>(&text).ok());
 
-    let same_base = previous.as_ref().is_some_and(|meta| {
-        meta.image == request.image && meta.project_root == project && rootfs.is_dir()
-    });
-    if dir.exists() && !same_base {
-        delete_instance(&request.id).ok();
-        make_removable(&dir)?;
-        fs::remove_dir_all(&dir).with_context(|| format!("删除旧实例 {}", dir.display()))?;
-    } else if same_base {
-        let changed = previous
-            .as_ref()
-            .is_some_and(|meta| meta.executable != executable || meta.mounts != mounts);
-        if changed {
-            // rootfs 里的工具还能用，只重建运行实例。
-            delete_instance(&request.id).ok();
+    if let Some(meta) = &previous {
+        if meta.image != request.image {
+            bail!(
+                "实例 {} 已绑定镜像 {}，不能换成 {}。\n  \
+                 换镜像请用 --instance-name <新名字> --image <镜像> 新建实例",
+                meta.display_name(),
+                crate::store::short_digest(&meta.image),
+                crate::store::short_digest(&request.image)
+            );
         }
+        if !meta.name.is_empty() && meta.name != request.name {
+            bail!(
+                "实例目录 {} 里的名字是 {}，不是 {}；请用对应名字或换一个实例",
+                request.id,
+                meta.name,
+                request.name
+            );
+        }
+    } else if existed && rootfs.join("usr").is_dir() {
+        bail!(
+            "实例目录 {} 存在 rootfs 但缺少 instance.json；\
+             先执行 phprt buildimages rm-instance <名字> 或手工清理该目录",
+            dir.display()
+        );
     }
+
     fs::create_dir_all(&bundle)?;
     if !rootfs.join("usr").is_dir() {
         let source = store.image_dir(&request.image).join("rootfs");
@@ -71,13 +83,58 @@ pub fn ensure_instance(store: &Store, request: &InstanceRequest) -> Result<Insta
         restore_modes(&store.image_dir(&request.image), &rootfs)?;
     }
 
+    if let Some(meta) = &previous
+        && (meta.executable != executable || meta.mounts != mounts)
+    {
+        // rootfs 里的工具还能用，只重建运行实例。
+        delete_instance(&request.id)
+            .with_context(|| format!("重建实例 {} 的运行时容器失败", request.name))?;
+    }
+
     let spec = build_spec(request, &rootfs)?;
     spec.save(bundle.join("config.json"))?;
+
+    let mut projects = previous
+        .as_ref()
+        .map(InstanceMeta::project_roots)
+        .unwrap_or_default();
+    if !projects.iter().any(|item| item == &project) {
+        projects.push(project.clone());
+    }
+    let owner = previous
+        .as_ref()
+        .map(|meta| meta.owner.clone())
+        .filter(|owner| !owner.is_empty())
+        .unwrap_or_else(|| project.clone());
+    let created = previous
+        .as_ref()
+        .map(|meta| meta.created.clone())
+        .filter(|created| !created.is_empty())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let image_ref = if request.image_ref.is_empty() {
+        previous
+            .as_ref()
+            .map(|meta| meta.image_ref.clone())
+            .unwrap_or_default()
+    } else {
+        request.image_ref.clone()
+    };
+    let image_ref = if image_ref.is_empty() {
+        store
+            .resolve(&request.image)
+            .map(|image| image.reference)
+            .unwrap_or_default()
+    } else {
+        image_ref
+    };
     let meta = InstanceMeta {
         id: request.id.clone(),
+        name: request.name.clone(),
         image: request.image.clone(),
-        project_root: project,
-        created: chrono::Utc::now().to_rfc3339(),
+        image_ref,
+        owner,
+        projects,
+        created,
         executable,
         mounts,
     };
@@ -86,11 +143,74 @@ pub fn ensure_instance(store: &Store, request: &InstanceRequest) -> Result<Insta
     ensure_container(&request.id, &bundle)?;
     Ok(InstanceInfo {
         id: request.id.clone(),
+        name: request.name.clone(),
         image: request.image.clone(),
-        project_root: request.project_root.clone(),
+        image_ref: meta.image_ref.clone(),
+        owner: meta.owner.clone(),
+        projects: meta.projects.clone(),
+        created: meta.created.clone(),
         bundle,
         rootfs,
     })
+}
+
+/// 实例锁；drop 时关闭文件，flock 由内核释放。
+pub struct InstanceLock {
+    _file: File,
+}
+
+/// 尝试拿实例锁；实例正被另一个 phprt 使用时返回 None。
+pub fn try_lock_instance(store: &Store, id: &str) -> Result<Option<InstanceLock>> {
+    let dir = store.instance_dir(id);
+    fs::create_dir_all(&dir)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(".lock"))?;
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(Some(InstanceLock { _file: file }));
+    }
+    let err = std::io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => Ok(None),
+        _ => Err(err).with_context(|| format!("锁定实例 {id} 失败")),
+    }
+}
+
+/// 阻塞等待实例锁。
+pub fn lock_instance(store: &Store, id: &str) -> Result<InstanceLock> {
+    let dir = store.instance_dir(id);
+    fs::create_dir_all(&dir)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(".lock"))?;
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("等待实例 {id} 空闲失败"));
+    }
+    Ok(InstanceLock { _file: file })
+}
+
+/// 运行时容器是否正在 running。只用于展示，不参与判断。
+pub fn is_running(id: &str) -> bool {
+    let container_dir = runtime_state_dir().join(id);
+    Container::load(container_dir)
+        .ok()
+        .and_then(|mut container| {
+            container.refresh_status().ok()?;
+            Some(matches!(
+                container.status(),
+                libcontainer::container::ContainerStatus::Running
+            ))
+        })
+        .unwrap_or(false)
 }
 
 fn executable_id(path: &Path) -> Result<String> {

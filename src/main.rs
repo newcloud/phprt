@@ -117,9 +117,19 @@ enum Cmd {
         /// 把已有组件和依赖锁到 state 记录的实际补丁
         #[arg(long)]
         lock: bool,
-        /// 用哪个构建镜像预览（digest / 别名 / 镜像引用），不写 state
+        /// 用哪个构建镜像预览（digest / digest 前缀 / 别名 / 镜像引用），不写 state
         #[arg(long, value_name = "IMAGE")]
         image: Option<String>,
+        /// 使用已有的全局构建实例
+        #[arg(long, value_name = "INSTANCE", conflicts_with = "instance_name")]
+        instance: Option<String>,
+        /// 新建实例时使用的名字
+        #[arg(
+            long = "instance-name",
+            value_name = "NAME",
+            conflicts_with = "instance"
+        )]
+        instance_name: Option<String>,
         #[command(flatten)]
         components: ComponentArgs,
         #[command(flatten)]
@@ -152,9 +162,19 @@ enum Cmd {
         /// 把已有组件和依赖锁到 state 记录的实际补丁
         #[arg(long)]
         lock: bool,
-        /// 用哪个构建镜像（digest / 别名 / 镜像引用）；之后沿用
+        /// 用哪个构建镜像（digest / digest 前缀 / 别名 / 镜像引用）；本地没有时自动拉取，之后沿用
         #[arg(long, value_name = "IMAGE")]
         image: Option<String>,
+        /// 使用已有的全局构建实例
+        #[arg(long, value_name = "INSTANCE", conflicts_with = "instance_name")]
+        instance: Option<String>,
+        /// 新建实例时使用的名字
+        #[arg(
+            long = "instance-name",
+            value_name = "NAME",
+            conflicts_with = "instance"
+        )]
+        instance_name: Option<String>,
     },
     /// 更新：重新从 catalog 解析该产品线的最新补丁并构建
     Update {
@@ -169,9 +189,19 @@ enum Cmd {
         /// 本次不备份 PHP 扩展的 ini
         #[arg(long = "no-backup-php-ext-ini")]
         no_backup_php_ext_ini: bool,
-        /// 用哪个构建镜像（digest / 别名 / 镜像引用）；之后沿用
+        /// 用哪个构建镜像（digest / digest 前缀 / 别名 / 镜像引用）；本地没有时自动拉取，之后沿用
         #[arg(long, value_name = "IMAGE")]
         image: Option<String>,
+        /// 使用已有的全局构建实例
+        #[arg(long, value_name = "INSTANCE", conflicts_with = "instance_name")]
+        instance: Option<String>,
+        /// 新建实例时使用的名字
+        #[arg(
+            long = "instance-name",
+            value_name = "NAME",
+            conflicts_with = "instance"
+        )]
+        instance_name: Option<String>,
     },
     /// 把组件加入方案并立即增量构建
     Add {
@@ -193,9 +223,19 @@ enum Cmd {
         /// 把已有组件和依赖锁到 state 记录的实际补丁
         #[arg(long)]
         lock: bool,
-        /// 用哪个构建镜像（digest / 别名 / 镜像引用）；之后沿用
+        /// 用哪个构建镜像（digest / digest 前缀 / 别名 / 镜像引用）；本地没有时自动拉取，之后沿用
         #[arg(long, value_name = "IMAGE")]
         image: Option<String>,
+        /// 使用已有的全局构建实例
+        #[arg(long, value_name = "INSTANCE", conflicts_with = "instance_name")]
+        instance: Option<String>,
+        /// 新建实例时使用的名字
+        #[arg(
+            long = "instance-name",
+            value_name = "NAME",
+            conflicts_with = "instance"
+        )]
+        instance_name: Option<String>,
     },
     /// 把组件移出方案并删掉它的产物
     Remove {
@@ -264,35 +304,47 @@ enum BuildimagesCmd {
         #[arg(long)]
         offline: bool,
     },
-    /// 列出本地缓存的镜像
+    /// 列出本地缓存的镜像和全局实例
     List,
-    /// 给一个产品系列选择构建镜像；--host 表示回到宿主构建
+    /// 给一个产品系列选择构建环境；--host 表示回到宿主构建
     Use {
         /// 产品@系列，如 php@8.5
         target: String,
-        /// 镜像 digest / 别名 / 引用
+        /// 镜像 digest / digest 前缀 / 别名 / 引用
         #[arg(long, value_name = "IMAGE")]
         image: Option<String>,
+        /// 使用已有的全局构建实例
+        #[arg(
+            long,
+            value_name = "INSTANCE",
+            conflicts_with_all = ["image", "host", "instance_name"]
+        )]
+        instance: Option<String>,
+        /// 新建实例时使用的名字；需要和 --image 一起用
+        #[arg(long = "instance-name", value_name = "NAME", conflicts_with_all = ["instance", "host"])]
+        instance_name: Option<String>,
         /// 回到宿主构建
-        #[arg(long, conflicts_with = "image")]
+        #[arg(long, conflicts_with_all = ["image", "instance", "instance_name"])]
         host: bool,
         /// 已安装时也强制切换（下一次 install 会重编）
         #[arg(long)]
         force: bool,
     },
-    /// 删除本地镜像缓存
+    /// 删除本地镜像缓存；有实例使用该镜像时拒绝
     Rm {
-        /// 镜像 digest / 别名 / 引用
+        /// 镜像 digest / digest 前缀 / 别名 / 引用
         image: String,
-        /// 即使当前项目 state 引用也删除
+        /// 即使项目 state 引用也删除（有实例时仍然拒绝）
         #[arg(long)]
         force: bool,
     },
-    /// 清理项目已不存在 / 索引里没有的缓存
-    Gc {
-        /// 只列出，不删除
-        #[arg(long = "dry-run")]
-        dry_run: bool,
+    /// 删除一个构建实例
+    RmInstance {
+        /// 实例名或旧实例 id
+        name: String,
+        /// 即使项目 state 引用也删除
+        #[arg(long)]
+        force: bool,
     },
 }
 

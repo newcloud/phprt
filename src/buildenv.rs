@@ -3,16 +3,17 @@
 //! 这里只做 phprt 入口层的判断和转发；镜像/容器本身由 `phprt-buildimages`
 //! 负责。容器内的 phprt 通过 `PHPRT_IN_CONTAINER=1` 识别自己，不再递归转发。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use phprt_buildimages::{
-    InstanceRequest, MountSpec, Store, instance_id, normalize_digest, short_digest,
+    ImageInfo, InstanceInfo, InstanceLock, InstanceRequest, MountSpec, Store, dir_size,
+    instance_id, is_running, legacy_instance_name, lock_instance, normalize_digest, project_hash,
+    short_digest, try_lock_instance, validate_instance_name,
 };
 
 use crate::bundle::Bundle;
@@ -62,12 +63,15 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
     if layout::is_global()
         && matches!(
             command,
-            BuildimagesCmd::Use { .. } | BuildimagesCmd::Rm { .. }
+            BuildimagesCmd::Use { .. }
+                | BuildimagesCmd::Rm { .. }
+                | BuildimagesCmd::RmInstance { .. }
         )
     {
-        bail!("buildimages use / rm 只支持本地模式");
+        bail!("buildimages use / rm / rm-instance 只支持本地模式");
     }
     let store = Store::open()?;
+    let root = canonical_or(&cli.root);
     match command {
         BuildimagesCmd::Add {
             reference,
@@ -90,77 +94,158 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
             println!();
             println!("下一步：");
             println!(
-                "  phprt buildimages use <产品>@<系列> --image {}",
+                "  phprt install <产品>@<系列> --image {} --instance-name <名字>",
                 short_digest(&image.digest)
             );
             println!(
-                "  或 phprt install <产品>@<系列> --image {}",
+                "  或 phprt buildimages use <产品>@<系列> --image {} --instance-name <名字>",
                 short_digest(&image.digest)
             );
+            println!("  phprt buildimages list");
         }
         BuildimagesCmd::List => {
             let images = store.list()?;
+            let instances = store.list_instances()?;
+            let refs = all_state_refs(&root, &store);
+            let mut by_digest: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for instance in &instances {
+                by_digest
+                    .entry(instance.image.clone())
+                    .or_default()
+                    .push(instance.name.clone());
+            }
+
             if images.is_empty() {
                 println!("本地还没有构建镜像。先执行 phprt buildimages add <镜像引用>");
-                return Ok(());
-            }
-            println!(
-                "{:<14} {:<46} {:<10} {:<12} {:<12} {:>8}  refs",
-                "digest", "alias", "family", "platform", "created", "size"
-            );
-            let families = image_family::load(&recipes.join("images.toml"))?;
-            for image in images {
-                let family = image_family::name_for(&families, &image.rootfs())?;
+            } else {
                 println!(
-                    "{:<14} {:<46} {:<10} {:<12} {:<12} {:>7.1}M  {}",
-                    short_digest(&image.digest),
-                    image.aliases.join(","),
-                    family,
-                    image.platform,
-                    image.created,
-                    image.size as f64 / 1024.0 / 1024.0,
-                    image.refs.join(", ")
+                    "{:<14} {:<20} {:<10} {:<12} {:<12} {:>8}  {:<24}  refs",
+                    "digest", "alias", "family", "platform", "created", "size", "instances"
                 );
+                let families = image_family::load(&recipes.join("images.toml"))?;
+                for image in images {
+                    let family = image_family::name_for(&families, &image.rootfs())?;
+                    let users = by_digest
+                        .get(&image.digest)
+                        .map(|names| names.join(","))
+                        .unwrap_or_default();
+                    println!(
+                        "{:<14} {:<20} {:<10} {:<12} {:<12} {:>7.1}M  {:<24}  {}",
+                        short_digest(&image.digest),
+                        image.aliases.join(","),
+                        family,
+                        image.platform,
+                        image.created,
+                        image.size as f64 / 1024.0 / 1024.0,
+                        users,
+                        image.refs.join(", ")
+                    );
+                }
+            }
+
+            println!();
+            if instances.is_empty() {
+                println!("本地还没有构建实例。");
+            } else {
+                println!(
+                    "{:<28} {:<14} {:<36} {:<24} {:>8}  state",
+                    "name", "image", "owner", "used_by", "size"
+                );
+                for instance in instances {
+                    let used = used_by(&refs, &instance);
+                    let owner = if instance.owner.is_empty() {
+                        "-".to_string()
+                    } else if Path::new(&instance.owner).is_dir() {
+                        instance.owner.clone()
+                    } else {
+                        format!("{} (missing)", instance.owner)
+                    };
+                    let state = if is_running(&instance.id) {
+                        "running"
+                    } else {
+                        "stopped"
+                    };
+                    println!(
+                        "{:<28} {:<14} {:<36} {:<24} {:>7.1}M  {}",
+                        instance.name,
+                        short_digest(&instance.image),
+                        owner,
+                        used.join(","),
+                        dir_size(&instance.rootfs) as f64 / 1024.0 / 1024.0,
+                        state
+                    );
+                }
             }
         }
         BuildimagesCmd::Use {
             target,
             image,
+            instance,
+            instance_name,
             host,
             force,
         } => {
-            if *host == image.is_some() {
-                bail!("use 需要 --image <镜像> 或 --host 二选一");
+            let choices = *host as u8 + image.is_some() as u8 + instance.is_some() as u8;
+            if choices != 1 {
+                bail!("use 需要 --image / --instance / --host 三选一");
+            }
+            if instance_name.is_some() && image.is_none() {
+                bail!("--instance-name 需要和 --image 一起用；使用已有实例用 --instance <名字>");
             }
             let (product, series) = resolve_target(target, recipes)?;
-            let (mut selection, family) = if *host {
+            let (selection, family) = if *host {
                 (None, None)
+            } else if let Some(name) = instance {
+                let info = store.resolve_instance(name)?;
+                let family = family_for_digest(&store, recipes, &info.image)?;
+                (
+                    Some(BuildState {
+                        mode: "oci".to_string(),
+                        image: info.image,
+                        image_ref: info.image_ref,
+                        runtime: RUNTIME.to_string(),
+                        instance: info.name,
+                    }),
+                    family,
+                )
             } else {
                 let query = image.as_deref().expect("clap 已保证");
-                let info = store.resolve(query)?;
-                let families = image_family::load(&recipes.join("images.toml"))?;
-                let family = image_family::detect(&families, &info.rootfs())?.cloned();
+                let info = resolve_or_pull(&store, query, false)?;
+                let name = if let Some(name) = instance_name {
+                    validate_instance_name(name)?;
+                    name.clone()
+                } else {
+                    default_instance_name(&product, &series, &root)
+                };
+                validate_instance_name(&name)?;
+                if let Some(existing) = store.find_instance(&name)? {
+                    if existing.image != info.digest {
+                        bail!(
+                            "实例 {name} 已绑定镜像 {}，不能换成 {}。\n  \
+                             换镜像请用另一个 --instance-name",
+                            short_digest(&existing.image),
+                            short_digest(&info.digest)
+                        );
+                    }
+                } else if store.resolve(&name).is_ok() {
+                    bail!("{name} 已经是镜像别名；实例名请换一个，或改用 --image {name}");
+                }
+                let family = family_for_digest(&store, recipes, &info.digest)?;
                 (
                     Some(BuildState {
                         mode: "oci".to_string(),
                         image: info.digest,
                         image_ref: info.reference,
                         runtime: RUNTIME.to_string(),
-                        instance: String::new(),
-                        instance_created: String::new(),
+                        instance: name,
                     }),
                     family,
                 )
             };
-            let state_file = state::state_path(&cli.root, &product, &series);
+
+            let state_file = state::state_path(&root, &product, &series);
             let mut project = ProjectState::load(&state_file)?;
             project.check(&product, &series)?;
-            if let Some(new) = selection.as_mut()
-                && let Some(old) = project.build.as_ref().filter(|old| old.image == new.image)
-            {
-                new.instance = old.instance.clone();
-                new.instance_created = old.instance_created.clone();
-            }
             let current = project.build.as_ref().map(BuildState::signature_key);
             let wanted = selection.as_ref().map(BuildState::signature_key);
             if !project.installed_version.is_empty() && current != wanted && !force {
@@ -188,6 +273,11 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
                     .map(|build| format!("{} {}", short_digest(&build.image), build.image_ref))
                     .unwrap_or_else(|| "宿主".to_string())
             );
+            if let Some(build) = &project.build
+                && !build.instance.is_empty()
+            {
+                println!("实例      {}", build.instance);
+            }
             if let Some(family) = &family {
                 image_family::print_details(family);
             }
@@ -195,28 +285,78 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
             println!("下一次 phprt install {}@{} 生效", product, series);
         }
         BuildimagesCmd::Rm { image, force } => {
-            let referenced = referenced_digests(&cli.root);
-            let instances = store.remove(image, &referenced, *force)?;
-            println!("已删除镜像 {image}");
-            if !instances.is_empty() {
-                println!("以下实例仍保留旧 rootfs，但不能再从镜像重建：");
-                for id in instances {
-                    println!("  {id}");
+            let image = store.resolve(image)?;
+            let users: Vec<String> = store
+                .list_instances()?
+                .into_iter()
+                .filter(|instance| instance.image == image.digest)
+                .map(|instance| format!("{}（{}）", instance.name, instance.id))
+                .collect();
+            if !users.is_empty() {
+                bail!(
+                    "镜像 {} 仍被以下实例使用：\n  {}\n\
+                     先执行 phprt buildimages rm-instance <名字>，再删除镜像",
+                    short_digest(&image.digest),
+                    users.join("\n  ")
+                );
+            }
+            let refs = refs_for_digest(&root, &store, &image.digest);
+            if !refs.is_empty() && !force {
+                bail!(
+                    "镜像 {} 仍被以下 state 引用：\n  {}\n\
+                     加 --force 才删除；下次 install 会重新拉取",
+                    short_digest(&image.digest),
+                    refs.iter()
+                        .map(StateRef::label)
+                        .collect::<Vec<_>>()
+                        .join("\n  ")
+                );
+            }
+            if !refs.is_empty() {
+                println!("警告：以下 state 仍引用该 digest，下次 install 会重新拉取：");
+                for item in &refs {
+                    println!("  {}", item.label());
                 }
             }
+            store.remove_image(&image)?;
+            println!("已删除镜像 {}", short_digest(&image.digest));
         }
-        BuildimagesCmd::Gc { dry_run } => {
-            let removed = store.gc(*dry_run)?;
-            if removed.is_empty() {
-                println!("没有需要清理的缓存");
-            } else {
-                for path in removed {
-                    if *dry_run {
-                        println!("将删除 {}", path.display());
-                    } else {
-                        println!("已删除 {}", path.display());
-                    }
+        BuildimagesCmd::RmInstance { name, force } => {
+            let instance = store.resolve_instance(name)?;
+            let refs = refs_for_instance(&root, &store, &instance);
+            if !refs.is_empty() && !force {
+                bail!(
+                    "实例 {} 仍被以下 state 引用：\n  {}\n\
+                     加 --force 才删除；下次命令会按镜像重建该实例",
+                    instance.name,
+                    refs.iter()
+                        .map(StateRef::label)
+                        .collect::<Vec<_>>()
+                        .join("\n  ")
+                );
+            }
+            if !refs.is_empty() {
+                println!("警告：以下 state 仍指向该实例，下次命令会按镜像重建：");
+                for item in &refs {
+                    println!("  {}", item.label());
                 }
+            }
+            let Some(_lock) = try_lock_instance(&store, &instance.id)? else {
+                bail!(
+                    "实例 {} 正在被另一个 phprt 使用；等命令结束再删除",
+                    instance.name
+                );
+            };
+            let image = instance.image.clone();
+            store.remove_instance(&instance.id)?;
+            println!("已删除实例 {}", instance.name);
+            let remaining = store
+                .list_instances()?
+                .into_iter()
+                .filter(|item| item.image == image)
+                .count();
+            if remaining == 0 {
+                println!("镜像 {} 现在可以删除", short_digest(&image));
             }
         }
     }
@@ -228,61 +368,94 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
     if in_container() {
         return Ok(false);
     }
-    let (target, cli_image, offline, plan, plan_json, force) = match &cli.cmd {
-        Cmd::Plan {
-            target,
-            image,
-            json,
-            ..
-        } => (target.clone(), image.clone(), false, true, *json, false),
-        Cmd::Install {
-            target,
-            image,
-            download,
-            force,
-            ..
-        } => {
-            let target = target.first().cloned().unwrap_or_default();
-            (
+    let (target, cli_image, cli_instance, cli_instance_name, offline, plan, plan_json, force) =
+        match &cli.cmd {
+            Cmd::Plan {
                 target,
+                image,
+                instance,
+                instance_name,
+                json,
+                ..
+            } => (
+                target.clone(),
                 image.clone(),
+                instance.clone(),
+                instance_name.clone(),
+                false,
+                true,
+                *json,
+                false,
+            ),
+            Cmd::Install {
+                target,
+                image,
+                instance,
+                instance_name,
+                download,
+                force,
+                ..
+            } => {
+                let target = target.first().cloned().unwrap_or_default();
+                (
+                    target,
+                    image.clone(),
+                    instance.clone(),
+                    instance_name.clone(),
+                    download.offline,
+                    false,
+                    false,
+                    *force,
+                )
+            }
+            Cmd::Update {
+                target,
+                image,
+                instance,
+                instance_name,
+                download,
+                ..
+            } => (
+                target.first().cloned().unwrap_or_default(),
+                image.clone(),
+                instance.clone(),
+                instance_name.clone(),
                 download.offline,
                 false,
                 false,
-                *force,
-            )
-        }
-        Cmd::Update {
-            target,
-            image,
-            download,
-            ..
-        } => (
-            target.first().cloned().unwrap_or_default(),
-            image.clone(),
-            download.offline,
-            false,
-            false,
-            false,
-        ),
-        Cmd::Add {
-            target,
-            image,
-            download,
-            ..
-        } => (
-            target.clone(),
-            image.clone(),
-            download.offline,
-            false,
-            false,
-            false,
-        ),
-        Cmd::Remove {
-            target, download, ..
-        } => (target.clone(), None, download.offline, false, false, false),
-        _ => return Ok(false),
-    };
+                false,
+            ),
+            Cmd::Add {
+                target,
+                image,
+                instance,
+                instance_name,
+                download,
+                ..
+            } => (
+                target.clone(),
+                image.clone(),
+                instance.clone(),
+                instance_name.clone(),
+                download.offline,
+                false,
+                false,
+                false,
+            ),
+            Cmd::Remove {
+                target, download, ..
+            } => (
+                target.clone(),
+                None,
+                None,
+                None,
+                download.offline,
+                false,
+                false,
+                false,
+            ),
+            _ => return Ok(false),
+        };
     if target.is_empty() {
         return Ok(false);
     }
@@ -292,7 +465,11 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
     project.check(&product, &series)?;
 
     let recorded = project.build.clone().filter(|build| build.is_oci());
-    if recorded.is_none() && cli_image.is_none() {
+    if recorded.is_none()
+        && cli_image.is_none()
+        && cli_instance.is_none()
+        && cli_instance_name.is_none()
+    {
         return Ok(false);
     }
     if layout::is_global() {
@@ -300,62 +477,32 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
     }
 
     let store = Store::open()?;
-    let image = if let Some(query) = &cli_image {
-        let info = resolve_or_pull(&store, query, offline)?;
-        if let Some(current) = &recorded
-            && current.image != info.digest
-            && !project.installed_version.is_empty()
-            && !force
-        {
-            bail!(
-                "{}@{} 已经用镜像 {} 安装过；切换镜像请加 --force，\n  \
-                 或先 phprt buildimages use {}@{} --image {} --force",
-                product,
-                series,
-                short_digest(&current.image),
-                product,
-                series,
-                short_digest(&info.digest)
-            );
-        }
-        info
-    } else {
-        let current = recorded.as_ref().expect("recorded 一定存在");
-        let query = if current.image_ref.is_empty() {
-            current.image.clone()
-        } else {
-            current.image_ref.clone()
-        };
-        let info = resolve_or_pull(&store, &query, offline)?;
-        if info.digest != current.image {
-            bail!(
-                "{}@{} 记录的镜像 {} 和本地/远端解析到的 {} 不一致；\n  \
-                 tag 可能已经前进，确认切换请 phprt buildimages use {}@{} --image {} --force",
-                product,
-                series,
-                short_digest(&current.image),
-                short_digest(&info.digest),
-                product,
-                series,
-                short_digest(&info.digest)
-            );
-        }
-        info
+    let root = std::fs::canonicalize(&cli.root)
+        .with_context(|| format!("读不到项目根 {}", cli.root.display()))?;
+    let Some(choice) = choose_build(
+        &store,
+        &root,
+        &product,
+        &series,
+        recorded.as_ref(),
+        cli_image.as_deref(),
+        cli_instance.as_deref(),
+        cli_instance_name.as_deref(),
+        offline,
+    )?
+    else {
+        return Ok(false);
     };
 
-    let mut build = BuildState {
-        mode: "oci".to_string(),
-        image: image.digest.clone(),
-        image_ref: image.reference.clone(),
-        runtime: RUNTIME.to_string(),
-        instance: String::new(),
-        instance_created: String::new(),
-    };
+    ensure_instance_image(&store, &choice, offline)?;
 
     if !plan {
         let current = project.build.as_ref().map(BuildState::signature_key);
-        let wanted = Some(build.signature_key());
-        if !project.installed_version.is_empty() && current != wanted && !force {
+        let wanted = format!("oci:{}", choice.image);
+        if !project.installed_version.is_empty()
+            && current.as_deref() != Some(wanted.as_str())
+            && !force
+        {
             bail!(
                 "{}@{} 已经安装过；切换构建环境会让产物重编。\n  \
                  确认要换请加 --force",
@@ -366,20 +513,26 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
         if !project.active {
             seed_default_components(&mut project, recipes, &product, &series)?;
         }
-        project.build = Some(build.clone());
+        project.build = Some(BuildState {
+            mode: "oci".to_string(),
+            image: choice.image.clone(),
+            image_ref: choice.image_ref.clone(),
+            runtime: RUNTIME.to_string(),
+            instance: choice.name.clone(),
+        });
         project.save(&state_file)?;
     }
 
-    let root = std::fs::canonicalize(&cli.root)
-        .with_context(|| format!("读不到项目根 {}", cli.root.display()))?;
-    let id = instance_id(&root, &product, &series, &image.digest);
     let request = InstanceRequest {
-        id: id.clone(),
-        image: image.digest.clone(),
+        id: choice.id.clone(),
+        name: choice.name.clone(),
+        image: choice.image.clone(),
+        image_ref: choice.image_ref.clone(),
         project_root: root.clone(),
         mounts: mount_specs(cli, recipes, &root),
         executable: env::current_exe().context("读不到当前 phprt 可执行文件")?,
     };
+    let _lock = acquire_instance_lock(&store, &request.id, &request.name)?;
     let instance = phprt_buildimages::ensure_instance(&store, &request)?;
     let families = image_family::load(&recipes.join("images.toml"))?;
     if let Some(family) = image_family::detect(&families, &instance.rootfs)? {
@@ -390,8 +543,11 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
     }
     probe_instance(&instance.id, &root)?;
 
-    build.instance = instance.id.clone();
     if !plan {
+        let mut build = project.build.clone().unwrap_or_default();
+        build.image = instance.image.clone();
+        build.image_ref = instance.image_ref.clone();
+        build.instance = instance.name.clone();
         project.build = Some(build);
         project.save(&state_file)?;
     }
@@ -407,6 +563,200 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
     };
     let status = forward(&instance.id, &root, &paths)?;
     std::process::exit(status);
+}
+
+struct Choice {
+    id: String,
+    name: String,
+    image: String,
+    image_ref: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn choose_build(
+    store: &Store,
+    root: &Path,
+    product: &str,
+    series: &str,
+    recorded: Option<&BuildState>,
+    cli_image: Option<&str>,
+    cli_instance: Option<&str>,
+    cli_instance_name: Option<&str>,
+    offline: bool,
+) -> Result<Option<Choice>> {
+    if cli_image.is_none()
+        && cli_instance.is_none()
+        && cli_instance_name.is_none()
+        && recorded.is_none()
+    {
+        return Ok(None);
+    }
+    let default_name = default_instance_name(product, series, root);
+
+    if let Some(query) = cli_instance {
+        let instance = store.resolve_instance(query)?;
+        if let Some(image) = cli_image {
+            let info = resolve_or_pull(store, image, offline)?;
+            if info.digest != instance.image {
+                bail!(image_mismatch(
+                    &instance.name,
+                    &instance.image,
+                    &info.digest,
+                    Some(image)
+                ));
+            }
+        }
+        return Ok(Some(Choice {
+            id: instance.id,
+            name: instance.name,
+            image: instance.image,
+            image_ref: instance.image_ref,
+        }));
+    }
+
+    let mut existing = None;
+    let name = if let Some(name) = cli_instance_name {
+        validate_instance_name(name)?;
+        name.to_owned()
+    } else if let Some(recorded) = recorded {
+        if recorded.instance.is_empty() {
+            default_name
+        } else {
+            match store.find_instance(&recorded.instance)? {
+                Some(instance) => {
+                    let name = instance.name.clone();
+                    existing = Some(instance);
+                    name
+                }
+                None if legacy_instance_name(&recorded.instance).is_some() => default_name,
+                None => recorded.instance.clone(),
+            }
+        }
+    } else {
+        default_name
+    };
+    validate_instance_name(&name)?;
+
+    if existing.is_none() {
+        existing = store.find_instance(&name)?;
+    }
+    if let Some(instance) = existing {
+        if let Some(image) = cli_image {
+            let info = resolve_or_pull(store, image, offline)?;
+            if info.digest != instance.image {
+                bail!(image_mismatch(
+                    &instance.name,
+                    &instance.image,
+                    &info.digest,
+                    Some(image)
+                ));
+            }
+        }
+        return Ok(Some(Choice {
+            id: instance.id,
+            name: instance.name,
+            image: instance.image,
+            image_ref: instance.image_ref,
+        }));
+    }
+
+    if store.resolve(&name).is_ok() {
+        bail!("{name} 已经是镜像别名；实例名请换一个，或改用 --image {name}");
+    }
+
+    let query = cli_image.map(str::to_owned).or_else(|| {
+        recorded.map(|recorded| {
+            if recorded.image_ref.is_empty() {
+                recorded.image.clone()
+            } else {
+                recorded.image_ref.clone()
+            }
+        })
+    });
+    let query = query.ok_or_else(|| {
+        anyhow!(
+            "实例 {name} 不存在；新建实例请给 --image <镜像>，\
+             或先 phprt buildimages add <镜像>"
+        )
+    })?;
+    let info = resolve_or_pull(store, &query, offline)?;
+    Ok(Some(Choice {
+        id: instance_id(&name),
+        name,
+        image: info.digest,
+        image_ref: info.reference,
+    }))
+}
+
+fn image_mismatch(name: &str, current: &str, wanted: &str, query: Option<&str>) -> String {
+    let hint = query
+        .map(|query| format!("\n  换镜像请用 --instance-name <新名字> --image {query}"))
+        .unwrap_or_default();
+    format!(
+        "实例 {name} 已绑定镜像 {}，不能换成 {}。{hint}",
+        short_digest(current),
+        short_digest(wanted)
+    )
+}
+
+/// 实例 rootfs 丢失、需要从镜像重建时，先把镜像准备好。
+fn ensure_instance_image(store: &Store, choice: &Choice, offline: bool) -> Result<()> {
+    let rootfs = store.instance_dir(&choice.id).join("bundle/rootfs");
+    if rootfs.join("usr").is_dir() || store.resolve(&choice.image).is_ok() {
+        return Ok(());
+    }
+    if choice.image_ref.is_empty() {
+        bail!(
+            "实例 {} 的 rootfs 已丢失，镜像 {} 也不在本地；\
+             先执行 phprt buildimages add <镜像引用> 再重试",
+            choice.name,
+            short_digest(&choice.image)
+        );
+    }
+    let info = resolve_or_pull(store, &choice.image_ref, offline)?;
+    if info.digest != choice.image {
+        bail!(
+            "实例 {} 需要镜像 {} 才能重建，但 {} 现在指向 {}；\n  \
+             先执行 phprt buildimages add {}（用原 digest）",
+            choice.name,
+            short_digest(&choice.image),
+            choice.image_ref,
+            short_digest(&info.digest),
+            choice.image
+        );
+    }
+    Ok(())
+}
+
+fn acquire_instance_lock(store: &Store, id: &str, name: &str) -> Result<InstanceLock> {
+    match try_lock_instance(store, id)? {
+        Some(lock) => Ok(lock),
+        None => {
+            println!("等待实例 {name} 空闲...");
+            lock_instance(store, id)
+        }
+    }
+}
+
+fn default_instance_name(product: &str, series: &str, root: &Path) -> String {
+    format!("{product}-{series}-{}", project_hash(root))
+}
+
+fn canonical_or(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn family_for_digest(
+    store: &Store,
+    recipes: &Path,
+    digest: &str,
+) -> Result<Option<image_family::Family>> {
+    let rootfs = store.image_dir(digest).join("rootfs");
+    if !rootfs.is_dir() {
+        return Ok(None);
+    }
+    let families = image_family::load(&recipes.join("images.toml"))?;
+    Ok(image_family::detect(&families, &rootfs)?.cloned())
 }
 
 struct ForwardPaths {
@@ -481,11 +831,14 @@ fn filter_forward_args(args: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut out = Vec::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
-        if arg == "--image" {
+        if arg == "--image" || arg == "--instance" || arg == "--instance-name" {
             let _ = args.next();
             continue;
         }
-        if arg.starts_with("--image=") {
+        if arg.starts_with("--image=")
+            || arg.starts_with("--instance=")
+            || arg.starts_with("--instance-name=")
+        {
             continue;
         }
         if PATH_FLAGS.contains(&arg.as_str()) {
@@ -607,38 +960,24 @@ fn seed_default_components(
     Ok(())
 }
 
-fn resolve_or_pull(
-    store: &Store,
-    query: &str,
-    offline: bool,
-) -> Result<phprt_buildimages::ImageInfo> {
+fn resolve_or_pull(store: &Store, query: &str, offline: bool) -> Result<ImageInfo> {
     match store.resolve(query) {
         Ok(image) => Ok(image),
         Err(err) => {
-            if normalize_digest(query).is_some() {
+            let prefix = query.strip_prefix("sha256:").unwrap_or(query);
+            let is_digest_prefix = prefix.len() >= 8
+                && prefix.len() < 64
+                && prefix.chars().all(|c| c.is_ascii_hexdigit());
+            if normalize_digest(query).is_some() || is_digest_prefix {
                 return Err(err);
             }
             if offline {
                 bail!("--offline 下镜像不在本地缓存：{query}");
             }
-            if !confirm(&format!("本地没有镜像 {query}，现在拉取吗?"))? {
-                bail!("镜像 {query} 不在本地。先执行：\n  phprt buildimages add {query}");
-            }
+            println!("本地没有镜像 {query}，开始拉取...");
             store.add_image(query, None, false)
         }
     }
-}
-
-fn confirm(question: &str) -> Result<bool> {
-    if !io::stdin().is_terminal() {
-        return Ok(false);
-    }
-    print!("{question} [y/N] ");
-    io::stdout().flush().ok();
-    let mut line = String::new();
-    io::stdin().read_line(&mut line)?;
-    let answer = line.trim();
-    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 pub fn scheme_text(project: &ProjectState, command: String) -> String {
@@ -658,32 +997,115 @@ pub fn scheme_text(project: &ProjectState, command: String) -> String {
     }
 }
 
-fn referenced_digests(root: &Path) -> Vec<String> {
-    let dir = layout::internal_dir(root);
+#[derive(Debug, Clone)]
+struct StateRef {
+    project: PathBuf,
+    product: String,
+    series: String,
+    digest: String,
+    instance: String,
+}
+
+impl StateRef {
+    fn label(&self) -> String {
+        let target = if self.product.is_empty() && self.series.is_empty() {
+            "?".to_string()
+        } else {
+            format!("{}@{}", self.product, self.series)
+        };
+        format!("{} ({target})", self.project.display())
+    }
+}
+
+fn scan_project_states(project: &Path, internal: &Path) -> Vec<StateRef> {
     let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(internal) else {
         return out;
     };
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.join("state.json").is_file() {
-            continue;
-        }
-        let Ok(text) = fs::read_to_string(path.join("state.json")) else {
+        let state = entry.path().join("state.json");
+        let Ok(text) = fs::read_to_string(&state) else {
             continue;
         };
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue;
         };
-        if let Some(image) = value
-            .get("build")
-            .and_then(|build| build.get("image"))
-            .and_then(|image| image.as_str())
-        {
-            out.push(image.to_string());
+        let Some(build) = value.get("build") else {
+            continue;
+        };
+        let digest = build
+            .get("image")
+            .and_then(|item| item.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if digest.is_empty() {
+            continue;
         }
+        out.push(StateRef {
+            project: project.to_path_buf(),
+            product: value
+                .get("product")
+                .and_then(|item| item.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            series: value
+                .get("series")
+                .and_then(|item| item.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            digest,
+            instance: build
+                .get("instance")
+                .and_then(|item| item.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        });
     }
     out
+}
+
+fn all_state_refs(root: &Path, store: &Store) -> Vec<StateRef> {
+    let mut refs = scan_project_states(root, &layout::internal_dir(root));
+    let mut seen = BTreeSet::new();
+    seen.insert(root.to_path_buf());
+    for instance in store.list_instances().unwrap_or_default() {
+        for project in instance.projects {
+            let project = PathBuf::from(project);
+            if !seen.insert(project.clone()) {
+                continue;
+            }
+            refs.extend(scan_project_states(&project, &project.join(".phprt")));
+        }
+    }
+    refs
+}
+
+fn used_by(refs: &[StateRef], instance: &InstanceInfo) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for item in refs {
+        if item.instance != instance.name && item.instance != instance.id {
+            continue;
+        }
+        if item.product.is_empty() && item.series.is_empty() {
+            continue;
+        }
+        out.insert(format!("{}@{}", item.product, item.series));
+    }
+    out.into_iter().collect()
+}
+
+fn refs_for_instance(root: &Path, store: &Store, instance: &InstanceInfo) -> Vec<StateRef> {
+    all_state_refs(root, store)
+        .into_iter()
+        .filter(|item| item.instance == instance.name || item.instance == instance.id)
+        .collect()
+}
+
+fn refs_for_digest(root: &Path, store: &Store, digest: &str) -> Vec<StateRef> {
+    all_state_refs(root, store)
+        .into_iter()
+        .filter(|item| item.digest == digest)
+        .collect()
 }
 
 fn transform_install(command: &str, pm: &str) -> String {
@@ -740,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_args_drop_image_and_absolute_paths() {
+    fn forwarded_args_drop_image_instance_and_absolute_paths() {
         let args = vec![
             "--root".to_string(),
             "rel".to_string(),
@@ -749,6 +1171,9 @@ mod tests {
             "php@8.5".to_string(),
             "--image".to_string(),
             "fedora43".to_string(),
+            "--instance".to_string(),
+            "fedora43mybuild_os".to_string(),
+            "--instance-name=php-build".to_string(),
             "--recipes=/r".to_string(),
             "--parallel".to_string(),
             "4".to_string(),
@@ -767,7 +1192,7 @@ mod tests {
                 image: "sha256:aa".to_string(),
                 image_ref: "quay.io/fedora/fedora:43".to_string(),
                 runtime: RUNTIME.to_string(),
-                ..BuildState::default()
+                instance: "fedora43mybuild_os".to_string(),
             }),
             ..ProjectState::default()
         };

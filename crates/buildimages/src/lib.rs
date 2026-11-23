@@ -11,16 +11,16 @@ mod unpack;
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 
-pub use store::{digest_hex, dir_size, normalize_digest, short_digest};
+pub use runtime::{
+    InstanceLock, delete_instance, ensure_instance, exec, is_running, lock_instance,
+    try_lock_instance,
+};
+pub use store::{Store, digest_hex, dir_size, normalize_digest, short_digest};
 pub use types::{ImageInfo, InstanceInfo, InstanceRequest, MountSpec};
 pub use unpack::detect_pm;
-
-pub use runtime::{delete_instance, ensure_instance, exec, runtime_state_dir};
-
-pub use store::Store;
 
 impl Store {
     pub fn add_image(
@@ -33,7 +33,7 @@ impl Store {
     }
 }
 
-/// 项目根路径的稳定短 hash，用来隔离不同项目的构建实例。
+/// 项目根路径的稳定短 hash。默认实例名用它避免不同项目意外共享。
 pub fn project_hash(root: &Path) -> String {
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut hasher = Sha256::new();
@@ -46,28 +46,52 @@ pub fn project_hash(root: &Path) -> String {
     out
 }
 
-/// 构建实例 id。libcontainer 会拿它当 systemd scope 名，必须是用户级唯一的。
-pub fn instance_id(root: &Path, product: &str, series: &str, digest: &str) -> String {
-    format!(
-        "phprt-{}-{}-{}-{}",
-        project_hash(root),
-        sanitize(product),
-        sanitize(series),
-        short_digest(digest)
-    )
+/// 构建实例 id。实例是用户级全局对象，id 只由名字决定。
+pub fn instance_id(name: &str) -> String {
+    format!("phprt-{name}")
 }
 
-fn sanitize(value: &str) -> String {
-    value
+/// 实例名会进 id 和 systemd scope，限制成安全字符。
+pub fn validate_instance_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("实例名不能为空");
+    }
+    if name.len() > 64 {
+        bail!("实例名太长（最多 64 个字符）：{name}");
+    }
+    let mut chars = name.chars();
+    let first = chars.next().expect("非空已检查");
+    if !first.is_ascii_alphanumeric() {
+        bail!("实例名必须以字母或数字开头：{name}");
+    }
+    if !name
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        bail!("实例名只能包含字母、数字、点、下划线和连字符：{name}");
+    }
+    Ok(())
+}
+
+/// 从旧实例 id 推导用户可见名字。
+///
+/// 旧格式是 `phprt-<项目hash8>-<产品>-<系列>-<digest12>`；新格式是
+/// `phprt-<name>`，不会命中这里。
+pub fn legacy_instance_name(id: &str) -> Option<String> {
+    let rest = id.strip_prefix("phprt-")?;
+    let parts: Vec<&str> = rest.split('-').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let hash = parts[0];
+    let digest = parts[parts.len() - 1];
+    let is_hex = |value: &str, len: usize| {
+        value.len() == len && value.chars().all(|c| c.is_ascii_hexdigit())
+    };
+    if !is_hex(hash, 8) || !is_hex(digest, 12) {
+        return None;
+    }
+    Some(parts[1..parts.len() - 1].join("-"))
 }
 
 #[cfg(test)]
@@ -84,12 +108,24 @@ mod tests {
     }
 
     #[test]
-    fn instance_ids_are_namespaced() {
-        let a = instance_id(Path::new("/tmp/a"), "php", "8.5", "sha256:aa");
-        let b = instance_id(Path::new("/tmp/b"), "php", "8.5", "sha256:aa");
-        assert_ne!(a, b);
-        assert!(a.starts_with("phprt-"));
-        assert!(a.contains("-php-8.5-"));
+    fn instance_ids_are_global_and_named() {
+        assert_eq!(instance_id("php-8.5"), "phprt-php-8.5");
+        assert!(validate_instance_name("php-8.5").is_ok());
+        assert!(validate_instance_name("fedora43mybuild_os").is_ok());
+        assert!(validate_instance_name("").is_err());
+        assert!(validate_instance_name("-php").is_err());
+        assert!(validate_instance_name("php/8.5").is_err());
+    }
+
+    #[test]
+    fn legacy_instance_names_are_derived() {
+        assert_eq!(
+            legacy_instance_name("phprt-4add57aa-php-8.5-bfc36aecdece").as_deref(),
+            Some("php-8.5")
+        );
+        assert_eq!(legacy_instance_name("phprt-php-8.5"), None);
+        assert_eq!(legacy_instance_name("phprt-my-prod-1.0-4add57aa"), None);
+        assert_eq!(legacy_instance_name("phprt-fedora43mybuild_os"), None);
     }
 
     #[test]
@@ -113,6 +149,7 @@ mod tests {
         let image = store.resolve("fedora43").unwrap();
         assert_eq!(image.digest, digest);
         assert_eq!(store.resolve(digest).unwrap().digest, digest);
+        assert_eq!(store.resolve("c9fbabbeee0e").unwrap().digest, digest);
         assert_eq!(
             store.resolve("quay.io/fedora/fedora:43").unwrap().digest,
             digest
