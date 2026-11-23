@@ -1,6 +1,6 @@
-# 容器镜像 catalog 与包名映射。
-# 镜像模式尚未实现，条目按 docs/IMAGE.md §3.1 先登记；宿主安装提示只读
-# [package_maps.*]（docs/HOST-COMMANDS.md §3）。
+# 容器镜像 catalog、镜像家族与包名映射。
+# [images.*] 登记验证过的镜像线；[families.*] 按镜像内容套用必要的环境设置；
+# [package_maps.*] 供宿主安装提示和容器自动装包共用（docs/HOST-COMMANDS.md §3）。
 
 # ---- 镜像线 ----
 # 只登记验证过的镜像：digest 必填，tag 会漂。gcc 写 major.minor，glibc 用于
@@ -50,6 +50,25 @@ gcc    = "15.2"
 glibc  = "2.43"
 # 同 debian13：perl-base 有 /usr/bin/perl 却缺 FindBin，openssl 编译要完整 perl。
 packages = ["perl"]
+
+# ---- 镜像家族 ----
+# 按镜像内容（包管理器 + /etc/os-release 的 ID / ID_LIKE）匹配，不按引用或
+# digest 匹配：镜像站会换前缀，tag 和 digest 也会漂。
+#
+# 命中的家族设置会在创建实例后写进实例 rootfs；有设置就必须写 reason，
+# 让配置本身说明为什么需要它。id_like 为空表示只按包管理器匹配。
+
+[families.debian]
+pm = "apt"
+id_like = ["debian", "ubuntu"]
+reason = """
+rootless 用户命名空间只映射了 uid/gid 0，libcontainer 还会写 setgroups=deny。
+apt 默认降权到 _apt(42) / nogroup(65534) 做下载沙箱，这两个 id 在命名空间里
+没有映射，setgroups / setegid / seteuid 全部失败，apt-get update 直接报错退出。
+把 APT::Sandbox::User 设成 root 后 apt 不再降权，下载和装包才能进行；
+容器本身仍是 rootless，命令只在用户命名空间内以 uid 0 运行。
+"""
+apt_sandbox = "root"
 
 # ---- 包名映射 ----
 # 命令名 -> 发行版包名，按包管理器分组。

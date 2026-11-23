@@ -26,8 +26,9 @@ OCI 构建环境把工具装进一个由 phprt 自己管理的 rootless 容器�
 - cgroup v2。
 - 普通用户可以创建 user namespace：`/etc/subuid`、`/etc/subgid` 有当前用户的
   映射，并且 `newuidmap` / `newgidmap` 可用。
-- 镜像必须是 Linux、与宿主同架构，并且带 `dnf` 或 `apt-get`；当前只实测了
-  Fedora 43（`quay.io/fedora/fedora:43`，dnf5）。
+- 镜像必须是 Linux、与宿主同架构，并且带 `dnf` 或 `apt-get`；已实测 Fedora 43
+  （`quay.io/fedora/fedora:43`，dnf5）和 Debian 13（`docker.io/library/debian:13`，apt）。
+- Debian / Ubuntu 需要 apt 沙箱设置；phprt 按镜像家族自动写进实例，见 §9。
 - 宿主的 `phprt` 二进制要能在镜像里运行：宿主 glibc 不能比镜像新。宿主和镜像
   同为 Fedora 43 时可以直接跑；宿主比镜像新会报 `GLIBC_2.xx not found`。
 - 构建 `phprt` 本身不再依赖 libseccomp（已关闭该 feature），运行时也不要求镜像里
@@ -85,12 +86,13 @@ phprt buildimages add <镜像引用> [--name <别名>] [--offline]
 - 解包时的 chmod 和 whiteout 删除会检查路径仍在 rootfs 内；通过符号链接逃出
   rootfs 的层会报错。
 - 会检查镜像里有 `/bin/sh` 和 `dnf` / `apt-get`。
+- 命中镜像家族时会显示家族、设置和原因；家族按镜像内容匹配，见 §9。
 - 不创建容器实例；实例在第一次 `install` / `plan` 时按项目创建。
 
 ### 4.2 `phprt buildimages list`
 
-列出本地缓存的镜像：digest 前 12 位、别名、平台、创建时间、大小、原始引用。
-不联网。
+列出本地缓存的镜像：digest 前 12 位、别名、家族、平台、创建时间、大小、原始
+引用。不联网。家族读不出时显示 `-`。
 
 ### 4.3 `phprt buildimages use`
 
@@ -105,6 +107,7 @@ phprt buildimages use <产品>@<系列> --host
 - `--host` 删除 `build` 段，回到宿主构建。
 - 已经安装过的系列切换环境时，必须加 `--force`；否则报错，避免悄悄重编。
 - 只写选择，不创建容器；下一次 `install` / `plan` 才建实例。
+- 会显示所选镜像命中的家族、设置和原因（见 §9）。
 - 只支持本地模式，不能和 `--global --prefix` 一起用。
 
 ### 4.4 `phprt install` / `add` / `update` / `plan --image`
@@ -117,7 +120,8 @@ phprt plan php@8.5 --image fedora43
 ```
 
 - `install` / `add` / `update` 会把选择写进 state，然后进入容器执行。
-- `plan` 只预览：使用镜像里的工具，不写 state、不装构建工具。
+- `plan` 只预览：使用镜像里的工具，不写 state、不装构建工具。文本输出会先显示
+  命中的镜像家族和设置；`--json` 不输出这一行。
 - state 里已经有镜像时，后续命令不需要再带 `--image`。
 - 已安装的系列换镜像时，`install` 需要 `--force`；`add` / `update` 没有这个语义，
   会提示先用 `buildimages use --force`。
@@ -231,7 +235,8 @@ rootfs 重新创建容器，工具不用重装。
 ```
 
 实际执行时变成 `dnf install -y gcc gcc-c++ make perl`（去掉 `sudo`，补 `-y`）；
-apt 镜像会先执行 `apt-get update`。装完仍然缺就报错，不循环安装。
+apt 镜像会先执行 `apt-get update`，并按 §9 的家族设置在实例里关掉 apt 的降权沙箱。
+装完仍然缺就报错，不循环安装。
 
 `--offline` 时不执行这一步，缺什么直接报错。
 
@@ -281,12 +286,109 @@ phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
 | 已安装的系列切换镜像 | 需要 `--force`；否则拒绝 |
 | `phprt` 在镜像里跑不起来 | 报错并提示换 glibc 不低于宿主的镜像 |
 | 镜像没有 dnf / apt-get | `buildimages add` 时报错 |
+| apt 镜像（Debian / Ubuntu） | 按镜像家族写入 apt 沙箱设置，见 §9 |
+| 镜像同时命中多个家族 | 报错，要求收紧 `id_like` |
 | `--offline` | 不拉镜像、不装包；已有镜像和工具可以离线构建 |
 | `--global --prefix` | 构建镜像只支持本地模式；`install` 会报错 |
 
 ---
 
-## 9. 限制
+## 9. 镜像家族与 apt 沙箱
+
+镜像家族按**镜像内容**识别，不按引用或 digest。`recipes/images.toml` 的
+`[families.<名字>]` 只写事实和必要设置：
+
+```toml
+[families.debian]
+pm = "apt"
+id_like = ["debian", "ubuntu"]
+reason = """
+rootless 用户命名空间只映射了 uid/gid 0，libcontainer 还会写 setgroups=deny。
+apt 默认降权到 _apt(42) / nogroup(65534) 做下载沙箱，这两个 id 在命名空间里
+没有映射，setgroups / setegid / seteuid 全部失败，apt-get update 直接报错退出。
+把 APT::Sandbox::User 设成 root 后 apt 不再降权，下载和装包才能进行；
+容器本身仍是 rootless，命令只在用户命名空间内以 uid 0 运行。
+"""
+apt_sandbox = "root"
+```
+
+- `pm`：`apt` 或 `dnf`，必须和镜像里的包管理器一致。
+- `id_like`：和镜像 `/etc/os-release` 的 `ID` / `ID_LIKE` 取交集；省略或为空
+  表示只按 `pm` 匹配。大小写不敏感。
+- `reason`：有设置时必填，写在配置里；`buildimages add` / `use` 会原样显示。
+- `apt_sandbox`：目前只接受 `"root"`。
+
+同时命中多个家族是配置错误，phprt 直接报错，不会按名字挑一个。未知字段、
+未知 `pm`、空 `id_like` 项、缺 `reason`、未知设置值都会让 recipe 加载失败。
+
+### 9.1 为什么 Debian / Ubuntu 需要 `apt_sandbox = "root"`
+
+rootless 容器只有一个用户命名空间，libcontainer 只映射 uid/gid 0，并写入
+`setgroups=deny`。apt 默认把下载和校验降权到 `_apt`（uid 42）和 `nogroup`
+（gid 65534）执行沙箱；这两个 id 在命名空间里没有映射，于是：
+
+```text
+E: setgroups 65534 failed - setgroups (1: Operation not permitted)
+E: setegid 65534 failed - setegid (22: Invalid argument)
+E: seteuid 42 failed - seteuid (22: Invalid argument)
+E: Method http has died unexpectedly!
+```
+
+`apt-get update` 直接失败，后续自动装 gcc / make 等也无法进行。
+
+**没有采用** subuid/subgid 映射 `_apt` / `nogroup`：libcontainer 对 rootless
+容器固定写 `setgroups=deny`，即使有 `/etc/subuid` / `/etc/subgid`，apt 仍然
+会 `setgroups` 失败；而且 `_apt` 写出的文件会落在 subuid 范围，宿主侧清理
+实例时需要额外的权限处理。把 `APT::Sandbox::User` 设成 `root` 只取消 apt 的
+降权，容器本身仍是 rootless，命令仍只在用户命名空间内以 uid 0 运行。
+
+### 9.2 设置写在哪里
+
+创建实例后，如果镜像命中带 `apt_sandbox = "root"` 的家族，phprt 会写入：
+
+```text
+<实例 rootfs>/etc/apt/apt.conf.d/99phprt-rootless-sandbox
+APT::Sandbox::User "root";
+```
+
+- 只写实例 rootfs，不改镜像缓存，不影响宿主。
+- 文件已存在且内容相同就不重复写；内容不对会覆盖。
+- 每次 `install` / `add` / `update` / `plan` 建实例后都会检查，实例重建后会重新写。
+- `buildimages add` 只识别家族并显示，不创建实例，也不写这个文件。
+
+可以在容器里确认：
+
+```bash
+phprt __container-exec --instance <实例 id> --workdir <项目根> \
+  --env PHPRT_IN_CONTAINER=1 -- sh -c 'apt-config dump | grep -i sandbox'
+# APT::Sandbox "";
+# APT::Sandbox::User "root";
+```
+
+### 9.3 输出
+
+`phprt buildimages add` / `use` 会显示命中的家族、设置和 `reason`：
+
+```text
+家族      debian
+设置      apt_sandbox=root
+原因      rootless 用户命名空间只映射了 uid/gid 0，libcontainer 还会写 setgroups=deny。
+          ...
+```
+
+`phprt buildimages list` 多一列 `family`；读不出镜像内容时显示 `-`：
+
+```text
+digest         alias  family  platform     created          size  refs
+bfc36aecdece          debian  linux/amd64  2026-11-04...  165.5M  docker.m.daocloud.io/library/debian:13
+```
+
+`phprt plan` 在文本输出第一行显示命中的家族和设置；`--json` 不输出这一行，
+保持 JSON 可解析。
+
+---
+
+## 10. 限制
 
 - 不是安全沙箱：容器共享宿主网络（否则 dnf 无法联网），rootless 用户命名空间
   只做 UID/GID 映射。不要用它运行不可信镜像。
@@ -301,8 +403,10 @@ phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
   rootfs 的层会被拒绝。
 - 解包跳过设备节点，不应用 xattr / file capability；Fedora 43 基础镜像实测可用。
 - 镜像里的 `/etc/resolv.conf` 由宿主只读挂入；镜像自带的会被覆盖。
-- dnf 已实测；apt 路径已实现（先 update、补 `-y`）但没有在 Debian / Ubuntu 基础
-  镜像上验收。
+- dnf 与 apt 都已实测；Debian / Ubuntu 依赖 §9 的 apt 沙箱设置，没有该设置时
+  `apt-get update` 会在 `setgroups` / `setegid` 处失败。
+- rootless 用户命名空间只映射 uid/gid 0；容器内改不了 `_apt` / `nogroup` 的
+  uid/gid，也不支持按 subuid 范围给单个用户做映射。
 - 删除镜像不会删除已有实例；也不做跨项目引用统计。`rm --force` 前需自行确认。
 - `gc` 用“项目根路径是否还存在”判断实例是否孤儿；项目放在临时挂载点上时，
   挂载没挂上会被误判，先 `gc --dry-run` 确认。
@@ -314,7 +418,7 @@ phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
 
 ---
 
-## 10. 故障排查
+## 11. 故障排查
 
 **`error: phprt 在构建镜像里跑不起来`**
 
@@ -342,6 +446,19 @@ phprt install php@8.5.13 '...' --targets 'cli' --image sha256:c9fbab…
 层试图借符号链接修改或删除 rootfs 外的文件。phprt 会拒绝整个镜像，不会继续
 解包。确认镜像来源可信后再重试。
 
+**apt 报 `setgroups ... failed` / `setegid` / `seteuid`**
+
+镜像命中了 `debian` 家族但实例里缺少 apt 沙箱设置。检查
+`<实例 rootfs>/etc/apt/apt.conf.d/99phprt-rootless-sandbox` 是否存在，内容应为
+`APT::Sandbox::User "root";`。再跑一次 `plan` / `install` 会自动补写；也可以
+删掉实例目录让它重建。不要去改镜像缓存里的文件。
+
+**`error: 镜像同时匹配多个家族`**
+
+`recipes/images.toml` 的两个 `[families.*]` 都命中了该镜像（例如都写了
+`pm = "apt"`，且 `id_like` 与镜像的 ID / ID_LIKE 有交集）。收紧 `id_like`，
+让同一镜像只命中一个家族。
+
 **镜像在本地，但 install 报“不在本地”**
 
 检查 `phprt buildimages list`。state 里的 digest 必须和缓存条目一致；tag 前进
@@ -368,7 +485,7 @@ phprt buildimages rm <digest> --force
 
 ---
 
-## 11. 已验证的流程
+## 12. 已验证的流程
 
 2026-11-23 在 Fedora 43 宿主上实际跑通：
 
@@ -387,6 +504,25 @@ phprt scheme php@8.5 --lock    # 输出带 --image 和准备镜像的注释
 - 实例 rootfs 的 `/usr/bin` 回到 `0555`，`/etc/shadow` 回到 `0000`；
   硬链接（如 getconf、zoneinfo）和 mtime 与镜像缓存一致。
 - 删除运行时状态后从实例 rootfs 重建，工具仍在。
+
+2026-11-23 在 Debian 13 基础镜像上实际跑通（宿主 Fedora 43）：
+
+```text
+phprt buildimages add docker.m.daocloud.io/library/debian:13
+phprt buildimages use php@8.5 --image docker.m.daocloud.io/library/debian:13
+phprt install php@8.5
+./myphp-8.5 -v                 # PHP 8.5.13 (NTS)
+```
+
+- `buildimages add` / `list` / `use` 显示家族 `debian`、设置 `apt_sandbox=root`
+  和配置里的原因。
+- `plan` 文本第一行显示 `镜像家族  debian（apt_sandbox=root）`。
+- 实例 rootfs 写入 `etc/apt/apt.conf.d/99phprt-rootless-sandbox`；容器里
+  `apt-config dump | grep -i sandbox` 输出 `APT::Sandbox::User "root";`。
+- 首次自动执行
+  `apt-get update && apt-get install -y gcc g++ binutils cmake m4 make perl pkg-config`，
+  不再出现 `setgroups` / `setegid` / `seteuid` 错误。
+- 10 个节点编译完成，`./myphp-8.5 -v` 输出 PHP 8.5.13 (NTS)。
 
 另外用合成层验证了解包器：opaque / 普通 whiteout 先于本层条目应用、非法
 whiteout 直接报错且不删父目录、符号链接越界被拒绝、文件与目录互换能重建、

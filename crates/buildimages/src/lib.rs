@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 pub use store::{digest_hex, dir_size, normalize_digest, short_digest};
 pub use types::{ImageInfo, InstanceInfo, InstanceRequest, MountSpec};
+pub use unpack::detect_pm;
 
 pub use runtime::{delete_instance, ensure_instance, exec, runtime_state_dir};
 

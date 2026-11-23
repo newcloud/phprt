@@ -524,7 +524,7 @@ pub(crate) fn restore_modes(image_dir: &Path, rootfs: &Path) -> Result<()> {
 }
 
 /// 镜像里有没有可用的 shell 和包管理器。返回包管理器名（dnf / apt）。
-pub(crate) fn detect_pm(rootfs: &Path) -> Result<&'static str> {
+pub fn detect_pm(rootfs: &Path) -> Result<&'static str> {
     let has = |path: &str| rootfs.join(path).exists();
     if !has("bin/sh") && !has("usr/bin/sh") {
         bail!("镜像里没有 /bin/sh，不能作为构建环境");

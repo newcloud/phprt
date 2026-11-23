@@ -365,7 +365,7 @@ fn pm_from_release(fields: &BTreeMap<String, String>) -> Option<Pm> {
     None
 }
 
-fn parse_os_release(text: &str) -> BTreeMap<String, String> {
+pub(crate) fn parse_os_release(text: &str) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for line in text.lines() {
         let line = line.trim();

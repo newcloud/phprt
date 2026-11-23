@@ -7,6 +7,7 @@ mod bundle;
 mod catalog;
 mod config;
 mod host_commands;
+mod image_family;
 mod layout;
 mod lock;
 mod manage;

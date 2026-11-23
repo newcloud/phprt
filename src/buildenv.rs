@@ -18,6 +18,7 @@ use phprt_buildimages::{
 use crate::bundle::Bundle;
 use crate::catalog::Catalog;
 use crate::host_commands;
+use crate::image_family;
 use crate::layout;
 use crate::state::{self, BuildState, ComponentState, ProjectState};
 use crate::{BuildimagesCmd, Cli, Cmd};
@@ -82,6 +83,10 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
             }
             println!("平台      {}", image.platform);
             println!("大小      {:.1} MB", image.size as f64 / 1024.0 / 1024.0);
+            let families = image_family::load(&recipes.join("images.toml"))?;
+            if let Some(family) = image_family::detect(&families, &image.rootfs())? {
+                image_family::print_details(family);
+            }
             println!();
             println!("下一步：");
             println!(
@@ -100,14 +105,17 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
                 return Ok(());
             }
             println!(
-                "{:<14} {:<46} {:<12} {:<12} {:>8}  refs",
-                "digest", "alias", "platform", "created", "size"
+                "{:<14} {:<46} {:<10} {:<12} {:<12} {:>8}  refs",
+                "digest", "alias", "family", "platform", "created", "size"
             );
+            let families = image_family::load(&recipes.join("images.toml"))?;
             for image in images {
+                let family = image_family::name_for(&families, &image.rootfs())?;
                 println!(
-                    "{:<14} {:<46} {:<12} {:<12} {:>7.1}M  {}",
+                    "{:<14} {:<46} {:<10} {:<12} {:<12} {:>7.1}M  {}",
                     short_digest(&image.digest),
                     image.aliases.join(","),
+                    family,
                     image.platform,
                     image.created,
                     image.size as f64 / 1024.0 / 1024.0,
@@ -125,24 +133,28 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
                 bail!("use 需要 --image <镜像> 或 --host 二选一");
             }
             let (product, series) = resolve_target(target, recipes)?;
-            let selection = if *host {
-                None
+            let (mut selection, family) = if *host {
+                (None, None)
             } else {
                 let query = image.as_deref().expect("clap 已保证");
                 let info = store.resolve(query)?;
-                Some(BuildState {
-                    mode: "oci".to_string(),
-                    image: info.digest,
-                    image_ref: info.reference,
-                    runtime: RUNTIME.to_string(),
-                    instance: String::new(),
-                    instance_created: String::new(),
-                })
+                let families = image_family::load(&recipes.join("images.toml"))?;
+                let family = image_family::detect(&families, &info.rootfs())?.cloned();
+                (
+                    Some(BuildState {
+                        mode: "oci".to_string(),
+                        image: info.digest,
+                        image_ref: info.reference,
+                        runtime: RUNTIME.to_string(),
+                        instance: String::new(),
+                        instance_created: String::new(),
+                    }),
+                    family,
+                )
             };
             let state_file = state::state_path(&cli.root, &product, &series);
             let mut project = ProjectState::load(&state_file)?;
             project.check(&product, &series)?;
-            let mut selection = selection;
             if let Some(new) = selection.as_mut()
                 && let Some(old) = project.build.as_ref().filter(|old| old.image == new.image)
             {
@@ -176,6 +188,9 @@ pub fn handle_buildimages(cli: &Cli, command: &BuildimagesCmd, recipes: &Path) -
                     .map(|build| format!("{} {}", short_digest(&build.image), build.image_ref))
                     .unwrap_or_else(|| "宿主".to_string())
             );
+            if let Some(family) = &family {
+                image_family::print_details(family);
+            }
             println!("已写入 {}", state_file.display());
             println!("下一次 phprt install {}@{} 生效", product, series);
         }
@@ -213,8 +228,13 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
     if in_container() {
         return Ok(false);
     }
-    let (target, cli_image, offline, plan, force) = match &cli.cmd {
-        Cmd::Plan { target, image, .. } => (target.clone(), image.clone(), false, true, false),
+    let (target, cli_image, offline, plan, plan_json, force) = match &cli.cmd {
+        Cmd::Plan {
+            target,
+            image,
+            json,
+            ..
+        } => (target.clone(), image.clone(), false, true, *json, false),
         Cmd::Install {
             target,
             image,
@@ -223,7 +243,14 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
             ..
         } => {
             let target = target.first().cloned().unwrap_or_default();
-            (target, image.clone(), download.offline, false, *force)
+            (
+                target,
+                image.clone(),
+                download.offline,
+                false,
+                false,
+                *force,
+            )
         }
         Cmd::Update {
             target,
@@ -234,6 +261,7 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
             target.first().cloned().unwrap_or_default(),
             image.clone(),
             download.offline,
+            false,
             false,
             false,
         ),
@@ -248,10 +276,11 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
             download.offline,
             false,
             false,
+            false,
         ),
         Cmd::Remove {
             target, download, ..
-        } => (target.clone(), None, download.offline, false, false),
+        } => (target.clone(), None, download.offline, false, false, false),
         _ => return Ok(false),
     };
     if target.is_empty() {
@@ -352,6 +381,13 @@ pub fn maybe_forward(cli: &Cli, recipes: &Path) -> Result<bool> {
         executable: env::current_exe().context("读不到当前 phprt 可执行文件")?,
     };
     let instance = phprt_buildimages::ensure_instance(&store, &request)?;
+    let families = image_family::load(&recipes.join("images.toml"))?;
+    if let Some(family) = image_family::detect(&families, &instance.rootfs)? {
+        image_family::apply(family, &instance.rootfs)?;
+        if plan && !plan_json {
+            println!("镜像家族  {}", image_family::summary(family));
+        }
+    }
     probe_instance(&instance.id, &root)?;
 
     build.instance = instance.id.clone();
