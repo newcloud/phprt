@@ -334,7 +334,7 @@ pub fn run(
         .iter()
         .find(|tool| tool.name == "patchelf")
         .and_then(|tool| tool.prefix.as_ref())
-        .map(|prefix| prefix.join("bin/patchelf"));
+        .map(|prefix| absolute_tool_prefix(prefix).join("bin/patchelf"));
     deploy_libs(
         reg,
         sel,
@@ -680,13 +680,22 @@ fn append_env(env: &mut BTreeMap<String, String>, key: &str, extra: &str) {
     env.insert(key.to_owned(), value);
 }
 
+/// 注入子进程的工具前缀统一换成绝对路径：子进程的工作目录是解压目录，
+/// 按相对 `--root`（默认 `.`）算出的 `./build/tools/...` 在那里找不到。
+fn absolute_tool_prefix(prefix: &Path) -> PathBuf {
+    if prefix.is_absolute() {
+        return prefix.to_path_buf();
+    }
+    std::path::absolute(prefix).unwrap_or_else(|_| prefix.to_path_buf())
+}
+
 /// 工具节点的构建环境：不带产品树、不带库路径；只把自己依赖的 built 工具
 /// 的 bin 前置，宿主 PATH 由 `add_host_env` 在执行时兜底。
 fn tool_build_env(tools: &[PathBuf]) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let path: Vec<String> = tools
         .iter()
-        .map(|tool| tool.join("bin").display().to_string())
+        .map(|tool| absolute_tool_prefix(tool).join("bin").display().to_string())
         .collect();
     env.insert("PATH".to_owned(), path.join(":"));
     env.insert("CFLAGS".to_owned(), "-O2".to_owned());
@@ -846,7 +855,7 @@ fn build_env(
     }
     let mut path: Vec<String> = vec![format!("{tree}/bin")];
     for tool in tools {
-        path.push(tool.join("bin").display().to_string());
+        path.push(absolute_tool_prefix(tool).join("bin").display().to_string());
     }
 
     env.insert("CPPFLAGS".to_owned(), cpp.trim_end().to_owned());
@@ -996,10 +1005,7 @@ fn expand_tool(
         else {
             return Ok(None);
         };
-        let prefix = tool
-            .prefix
-            .as_ref()
-            .expect("刚检查过")
+        let prefix = absolute_tool_prefix(tool.prefix.as_ref().expect("刚检查过"))
             .display()
             .to_string();
         value.replace_range(start..start + 6 + end + 1, &prefix);
@@ -1510,6 +1516,28 @@ mod tests {
         let env = build_env("/tree", "", &deps, &[]);
         assert!(!env["LD_LIBRARY_PATH"].contains("/tree/"));
         assert!(env["LD_LIBRARY_PATH"].starts_with("/deps/zlib/lib"));
+    }
+
+    #[test]
+    fn tool_prefixes_are_absolute_in_build_env() {
+        // `--root` 默认是 `.`，解析出的工具前缀是相对的；子进程在解压目录里跑，
+        // PATH 里必须是绝对路径，否则 phpize 找不到 autoconf。
+        let tools = vec![PathBuf::from("./build/tools/autoconf-2.72")];
+        let env = build_env("/tree", "", &[], &tools);
+        let entries: Vec<&str> = env["PATH"].split(':').collect();
+        assert_eq!(entries[0], "/tree/bin");
+        let autoconf = &entries[1];
+        assert!(Path::new(autoconf).is_absolute(), "{autoconf}");
+        assert!(
+            autoconf.ends_with("build/tools/autoconf-2.72/bin"),
+            "{autoconf}"
+        );
+        assert!(!autoconf.contains("/./"), "{autoconf}");
+
+        let env = tool_build_env(&tools);
+        let entry = env["PATH"].split(':').next().unwrap();
+        assert!(Path::new(entry).is_absolute(), "{entry}");
+        assert!(entry.ends_with("build/tools/autoconf-2.72/bin"), "{entry}");
     }
 
     #[test]
