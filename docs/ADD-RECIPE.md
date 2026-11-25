@@ -12,6 +12,7 @@
 | 新增版本线 | `recipes/catalog.toml` + 消费方的 `LINES` / `PRODUCT_LINES` / `PRODUCT_DEP_LINES`，必要时 `recipes/bundles/<产品>/<系列>.toml` |
 | 换默认线 | `recipes/bundles/<产品>/<系列>.toml` |
 | 新增组件 / 改构建参数 | `recipes/components/<产品>/<名字>.star` |
+| 新增可下载组件（dep / 组件 / 工具） | `recipes/catalog.toml` + 对应的 `recipes/<类别>/<名字>.star` + `recipes/upstream/<名字>.star`（漏了 `cargo test -p phprt-upstream` 会失败） |
 | 新增 bundled 组件事实 | `recipes/products/<产品>/<系列>.star` 的 `bundled` / `bundled_disable` |
 | 默认启用的组件集合 | `recipes/bundles/<产品>/<系列>.toml` 的 `default_components` |
 | 新产品 | `recipes/catalog.toml` + `recipes/products/<产品>/_profile.star` + `recipes/products/<产品>/<系列>.star` + `recipes/bundles/<产品>/<系列>.toml` |

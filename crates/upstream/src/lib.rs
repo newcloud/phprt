@@ -822,3 +822,98 @@ mod tests {
         assert_eq!(selected_lines(all, "openssl", &[]).len(), 3);
     }
 }
+
+/// 仓库自检：catalog 里的每个组件都必须有 upstream 脚本。
+///
+/// upstream 脚本服务 `catalog update` 和用户命令的主线补丁检查，构建不读它；漏加
+/// 不会让构建失败，全量 sweep 记「跳过」，点名更新则失败。这里把「有下载源但没有
+/// 查询规则」变成 `cargo test` 的硬失败，避免 catalog 加了组件却忘了补
+/// `recipes/upstream/<名字>.star`。
+///
+/// 检查用的是当前 workspace 里真实的 `recipes/`（不是夹具），所以直接跑
+/// `cargo test -p phprt-upstream` 就能看到缺口。
+#[cfg(test)]
+mod script_inventory {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    use super::script::Script;
+
+    /// workspace 根下的 recipes；`CARGO_MANIFEST_DIR` 是 `crates/upstream`。
+    fn recipes() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes")
+    }
+
+    /// catalog 的顶层 key 就是「需要下载源码的组件」全集：构建、工具、产品都从
+    /// 这里取 version / url / sha256，构建期不会再有别的下载来源。
+    fn catalog_components(recipes: &Path) -> BTreeSet<String> {
+        let path = recipes.join("catalog.toml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("读不到 {}：{err}", path.display()));
+        let doc: toml::Value = toml::from_str(&text)
+            .unwrap_or_else(|err| panic!("{} 不是合法 TOML：{err}", path.display()));
+        doc.as_table()
+            .unwrap_or_else(|| panic!("{} 顶层必须是表", path.display()))
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn upstream_scripts(recipes: &Path) -> BTreeSet<String> {
+        let dir = recipes.join("upstream");
+        let mut names = BTreeSet::new();
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|err| panic!("读不到 {}：{err}", dir.display()))
+        {
+            let path = entry.expect("读取 upstream 目录").path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("star") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .expect("upstream 脚本有文件名")
+                .to_string_lossy()
+                .into_owned();
+            names.insert(stem);
+        }
+        names
+    }
+
+    fn missing(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> {
+        left.difference(right).cloned().collect()
+    }
+
+    #[test]
+    fn every_catalog_component_has_an_upstream_script() {
+        let recipes = recipes();
+        let missing = missing(&catalog_components(&recipes), &upstream_scripts(&recipes));
+        assert!(
+            missing.is_empty(),
+            "这些 catalog 组件没有 recipes/upstream/<名字>.star，全量更新会跳过它们、\n\
+             点名更新会失败：\n  {}\n\
+             补脚本的契约见 docs/CATALOG-UPDATE.md 4.1。",
+            missing.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn every_upstream_script_matches_a_catalog_component() {
+        let recipes = recipes();
+        let orphan = missing(&upstream_scripts(&recipes), &catalog_components(&recipes));
+        assert!(
+            orphan.is_empty(),
+            "这些 recipes/upstream 脚本没有对应的 catalog 组件，永远不会被执行：\n  {}",
+            orphan.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn every_upstream_script_parses() {
+        let recipes = recipes();
+        for component in upstream_scripts(&recipes) {
+            if let Err(err) = Script::load(&recipes, &component) {
+                panic!("upstream/{component}.star 不合法：{err:#}");
+            }
+        }
+    }
+}

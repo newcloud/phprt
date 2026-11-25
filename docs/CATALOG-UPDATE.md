@@ -1,6 +1,6 @@
 # catalog 自动更新
 
-状态：已实现 catalog 里全部 49 个组件的 upstream 脚本并过验收（2026-11-20，第 14 节有实测结果）。
+状态：已实现 catalog 里全部 50 个组件的 upstream 脚本并过验收（2026-11-20，第 14 节有实测结果；libxcrypt 后补，见 4.4）。
 
 本文讲维护者的全量命令：怎么查上游、怎么写回。用户命令里的主线补丁检查见
 [CATALOG-MODEL.md](CATALOG-MODEL.md)：两边共用 `recipes/upstream/*.star`、版本比较和
@@ -98,7 +98,12 @@ v2 把查询规则写在 recipe 里（`upstream=` / `versions()`），v3 不沿�
 脚本不关心新版本线：只有 catalog 声明过的主线版本才触发更新（见 5、6.2）。
 
 文件放在 `recipes/upstream/<组件名>.star`，组件名与 catalog 的 key 一致；
-提供模板，新组件照抄改三处。脚本 API 已定：顶层一个 `UPSTREAM` 字典，
+提供模板，新组件照抄改三处。catalog 的每个组件都必须有同名脚本，`recipes/upstream/`
+里也不能留 catalog 之外的孤儿脚本：`cargo test -p phprt-upstream` 的
+`script_inventory` 自检会列出缺口和孤儿，并逐个解析脚本（槽位、正则命名组）。
+漏脚本不影响构建，全量更新会跳过这个组件、点名更新会失败，所以必须靠这个自检发现。
+
+脚本 API 已定：顶层一个 `UPSTREAM` 字典，
 
 | 槽位 | 必需 | 内容 |
 | --- | --- | --- |
@@ -325,7 +330,7 @@ v == line
 - 比较逻辑是两个目标共用的（第 6.3 节）。已落在 `crates/upstream/src/version.rs`（带单测）；`src/version.rs::compare` 已删除，`src/catalog.rs` 改调 `phprt_upstream::compare`。
 - star 脚本求值复用现有 starlark 依赖：`crates/upstream` 直接依赖 `starlark`，脚本解析在 `script.rs::Script::parse`；recipe 的 `eval_meta` / `eval_target` 仍在二进制里，两处不共享代码。
 - 下载复用 `phprt-download`：`final_url` / `run_outcomes` / `fetch_text` / `archive_name` 已导出为 `pub`，catalog 更新和 install 走同一条下载路径，不复制第二份；需要下载的条目先全部收进一个批次，一次交给下载队列（10 个文件 / 每站点 2 个），不逐条串行。
-- GitHub 组件默认不查 API：21 个脚本用 `github.com/<仓库>.git/info/refs` 列 tag（git
+- GitHub 组件默认不查 API：22 个脚本用 `github.com/<仓库>.git/info/refs` 列 tag（git
   协议入口，不计 API 额度），release 资产地址按模板拼，写入前由 `final_url` 探测兜底。
   只剩 openssl 还查 `api.github.com`：它有 726 个 tag，refs 约 1.7MB，一次 API 请求更省。
 - `fetch_text` 对 github.com 连接失败时按下载用的 `proxy_urls` 镜像列表重试
@@ -413,7 +418,8 @@ cargo run -- catalog update --fill-sha256 xdebug
   libheif / libde265 / oniguruma 共 9 个 GitHub Releases 源。asset 前缀各写各的
   （`pcre2-`、`c-ares-`、`libssh2-`、`nghttp2-`、`patchelf-`、`libjpeg-turbo-`、
   `libheif-`、`libde265-`、`onig-`），`patchelf-<版本>-x86_64.tar.gz` 这类平台变体
-  靠版本正则排除。下载从逐条串行改成整批进下载队列（10 文件 / 每站点 2）。
+  靠版本正则排除。libxcrypt 后补为第 10 个：tag 带 `v`、资产名不带 `v` 且用
+  `.tar.xz`，join 模板分别拼 `v{link}` 和 `{link}`。下载从逐条串行改成整批进下载队列（10 文件 / 每站点 2）。
 - 4.5 已完成（2026-11-20）：avif / libimagequant / libultrahdr / libmemcached /
   rabbitmq-c / librdkafka 共 6 个 GitHub tag 归档源。Tags API 只给 tag 名，下载
   地址按 `archive/refs/tags/{link}.tar.gz` 拼；version 正则带首尾锚点，`rc` /
@@ -430,7 +436,7 @@ cargo run -- catalog update --fill-sha256 xdebug
   数值比较）。catalog 里 imagemagick 的「只能手工改」注释已同步删掉。
 - 4.8 已完成（2026-11-20）：libtiff（osgeo 目录索引，rc 包靠版本正则排除）/
   libzip（libzip.org 下载页，绝对和相对 href 都接）/ nginx（nginx.org 目录索引）。
-  至此 catalog 的 49 个组件全部有 upstream 脚本。
+  至此 catalog 的 50 个组件全部有 upstream 脚本。
 
 ## 13. 决策与讨论记录
 
