@@ -112,7 +112,8 @@ v2 把查询规则写在 recipe 里（`upstream=` / `versions()`），v3 不沿�
 | `version` | 否 | 从下载连接抽版本的正则，必须有命名组 `version`（`v2.1.33` 这类前缀在正则里过滤掉）；`link` 已给 `version` 组时省略 |
 | `join` | 否 | 连接是相对地址时拼绝对地址的模板，如 `"https://x/fossils/{link}"`；源按线分目录时可含 `{line}`（此时 `url` 必须也带 `{line}`） |
 
-槽位缺名、类型不对、正则不合法都在加载时报错，不静默忽略。GitHub 组件不查 API：
+槽位缺名、类型不对、正则不合法都在加载时报错，不静默忽略。`url` / `join` 里只认
+`{line}` / `{link}`，写错名字或没闭合也在加载时报错，不会带进下载地址。GitHub 组件不查 API：
 `url` 用 `https://github.com/<仓库>.git/info/refs?service=git-upload-pack`（git 协议入口，
 返回全部 tag，不占 API 额度），`link` 从 `refs/tags/<tag>\n` 取 tag；release 资产的文件名
 按 `<前缀>-<版本>.tar.gz` 用 `join` 拼，写入前由 `final_url` 探测兜底。`link` 正则要求

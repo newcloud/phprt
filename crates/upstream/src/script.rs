@@ -88,6 +88,10 @@ impl Script {
         if join.as_deref().is_some_and(|join| join.contains("{line}")) && !url.contains("{line}") {
             bail!("{component} 的 url 没有 {{line}}，join 里不能写 {{line}}");
         }
+        check_placeholders(&url, &["line"], component, "url")?;
+        if let Some(join) = &join {
+            check_placeholders(join, &["link", "line"], component, "join")?;
+        }
         Ok(Self {
             component: component.to_owned(),
             url,
@@ -114,6 +118,29 @@ fn string_field<'a>(fields: &'a serde_json::Map<String, Value>, name: &str) -> R
         .get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("UPSTREAM 缺少字符串字段 {name}"))
+}
+
+/// 槽位里只认约定的占位符。写错的名字（如 `{verison}`）会原样留在下载地址里，
+/// 所以在加载时报错，而不是等到查询时才暴露。
+fn check_placeholders(value: &str, allowed: &[&str], component: &str, slot: &str) -> Result<()> {
+    let mut rest = value;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else {
+            bail!("{component} 的 {slot} 里有没闭合的 {{：{value}");
+        };
+        let name = &after[..end];
+        if !allowed.contains(&name) {
+            let allowed = allowed
+                .iter()
+                .map(|name| format!("{{{name}}}"))
+                .collect::<Vec<_>>()
+                .join(" / ");
+            bail!("{component} 的 {slot} 里有未知占位符 {{{name}}}；只认 {allowed}");
+        }
+        rest = &after[end + 1..];
+    }
+    Ok(())
 }
 
 fn require_group(regex: &Regex, group: &str, component: &str) -> Result<()> {
@@ -189,6 +216,46 @@ UPSTREAM = {
             .map(|m| m.as_str().to_owned())
             .unwrap();
         assert_eq!(version, "2.1.33");
+    }
+
+    #[test]
+    fn unknown_placeholder_in_join_is_rejected() {
+        let src = r#"
+UPSTREAM = {
+    "url": "https://example.com/",
+    "link": r'(?P<link>[^"]+)',
+    "version": r'(?P<version>[0-9.]+)',
+    "join": "https://example.com/{verison}/{link}",
+}
+"#;
+        let err = Script::parse("demo", src).unwrap_err().to_string();
+        assert!(err.contains("{verison}"), "{err}");
+    }
+
+    #[test]
+    fn unknown_placeholder_in_url_is_rejected() {
+        let src = r#"
+UPSTREAM = {
+    "url": "https://example.com/{verison}/",
+    "link": r'(?P<link>[^"]+)',
+    "version": r'(?P<version>[0-9.]+)',
+}
+"#;
+        let err = Script::parse("demo", src).unwrap_err().to_string();
+        assert!(err.contains("{verison}"), "{err}");
+    }
+
+    #[test]
+    fn unclosed_placeholder_is_rejected() {
+        let src = r#"
+UPSTREAM = {
+    "url": "https://example.com/{line/",
+    "link": r'(?P<link>[^"]+)',
+    "version": r'(?P<version>[0-9.]+)',
+}
+"#;
+        let err = Script::parse("demo", src).unwrap_err().to_string();
+        assert!(err.contains("没闭合"), "{err}");
     }
 
     #[test]
