@@ -894,7 +894,7 @@ mod resolve_tests {
     #[test]
     fn store_reuse_beats_catalog() {
         let root = temp_root("store");
-        std::fs::create_dir_all(root.join("build/tools/phprt-demo-tool-xyz-1.2")).unwrap();
+        std::fs::create_dir_all(layout::tools_dir(&root).join("phprt-demo-tool-xyz-1.2")).unwrap();
         let reg = registry(vec![
             tool_node("phprt-demo-tool-xyz", "1.2"),
             tool_node("phprt-demo-tool-xyz", "2.0"),
@@ -925,8 +925,8 @@ mod resolve_tests {
     #[test]
     fn lock_prefers_the_recorded_built_version() {
         let root = temp_root("lock");
-        std::fs::create_dir_all(root.join("build/tools/phprt-demo-tool-xyz-1.2")).unwrap();
-        std::fs::create_dir_all(root.join("build/tools/phprt-demo-tool-xyz-1.5")).unwrap();
+        std::fs::create_dir_all(layout::tools_dir(&root).join("phprt-demo-tool-xyz-1.2")).unwrap();
+        std::fs::create_dir_all(layout::tools_dir(&root).join("phprt-demo-tool-xyz-1.5")).unwrap();
         let reg = registry(vec![
             tool_node("phprt-demo-tool-xyz", "1.2"),
             tool_node("phprt-demo-tool-xyz", "1.5"),

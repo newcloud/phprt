@@ -271,7 +271,7 @@ TARGET = target
 - 禁止产品 / 组件字段。
 - `tools` 是这个依赖构建时需要的工具，如 `["cmake"]` 或
   `[tool("nasm", min = "2.13")]`；宿主满足就用宿主，否则从 catalog 构建到
-  `build/tools/`。`host_tools` 已删除。
+  `.phprt/build/tools/`。`host_tools` 已删除。
 - `features` 由组件的 `dep:NAME[feature]` 间接启用；没启用的 feature 会应用它的
   `disable` 参数（用来关掉上游的自动探测），没有 `disable` 就不传。
 - dep 的 feature 允许写 `requires.commands`（宿主机命令）；不允许 `requires.product` /
@@ -329,7 +329,7 @@ TARGET = target
 - `modules` 是产品启动后应看到的模块名，由产品 profile 的 `verify_modules` 使用。
 - `ini` / `ini_lines` 是安装后的登记文件，只有 profile 的 `register` 动作为 `php-ini` 时使用。
 - `tools` 是构建期工具要求：宿主满足就用宿主，否则从 `recipes/tools/` 构建到
-  `build/tools/<name>-<version>`；参与构建顺序和 `PATH`，不参与 include/lib，
+  `.phprt/build/tools/<name>-<version>`；参与构建顺序和 `PATH`，不参与 include/lib，
   也不进入产品运行时库收集。只有 standalone 组件解析自己的 `tools`。
 - `host_tools` 已删除，构建期工具统一写在 `tools`。
 - `prepare` 是在 standalone 构建之前于源码目录执行的 shell 命令列表，用来给上游源码
@@ -403,7 +403,7 @@ TARGET = target
 
 - 路径是 `recipes/tools/<名字>.star`，节点 id 是 `tool:<名字>@<版本>`。
 - 版本、url、sha256 由 catalog 注入；catalog 里每条线的数组元素都是一个可选版本。
-- 安装前缀是 `build/tools/<名字>-<版本>`，源码目录仍是 `build/<名字>/<stem>`。
+- 安装前缀是 `.phprt/build/tools/<名字>-<版本>`，源码目录仍是 `.phprt/build/<名字>/<stem>`。
 - catalog 里没有同名条目时，这个工具**只由系统提供**：不下载、不编译，只读
   `feature_checks`（例：`recipes/tools/perl.star`）。有没有 catalog 条目就是唯一判据，
   recipe 里不写“可构建 / 只能用宿主机”之类的标记。
@@ -571,7 +571,7 @@ TARGETS = {
 | `{dep:名字}` | `{tree}/deps/<名字>-<版本>` |
 | `{source:名字}` | 对应 dep / component 的解压源码根 |
 | `{component_source}` | 仅 fold 模板：组件源码根 |
-| `{tool:名字}` | built 工具的安装前缀 `build/tools/<名字>-<版本>`；宿主提供时不生成该 env 项 |
+| `{tool:名字}` | built 工具的安装前缀 `.phprt/build/tools/<名字>-<版本>`；宿主提供时不生成该 env 项 |
 
 未知占位符在渲染阶段报错。`{source:名字}` 先找 dep，再找 component；找不到直接报错。
 

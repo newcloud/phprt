@@ -40,12 +40,15 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 
 | 类型 | 工作目录 | 命令 |
 | --- | --- | --- |
-| tool | `build/<名字>/<补丁>` | recipe 的 configure + make，装到 `build/tools/<名字>-<补丁>` |
-| dep | `build/<名字>/<补丁>` | recipe 的 configure + make |
-| product | `build/<产品>/<补丁>` | `./configure <全部参数>` + make |
-| bundled standalone 组件 | `build/<名字>/<产品>-<产品版本>` | 从产品源码的 `source_path` 拷贝 → 组件 `prepare` → profile 的 steps |
-| external standalone 组件 | `build/<名字>/<补丁>` | profile 的 steps |
+| tool | `.phprt/build/<名字>/<补丁>` | recipe 的 configure + make，装到 `.phprt/build/tools/<名字>-<补丁>` |
+| dep | `.phprt/build/<名字>/<补丁>` | recipe 的 configure + make |
+| product | `.phprt/build/<产品>/<补丁>` | `./configure <全部参数>` + make |
+| bundled standalone 组件 | `.phprt/build/<名字>/<产品>-<产品版本>` | 从产品源码的 `source_path` 拷贝 → 组件 `prepare` → profile 的 steps |
+| external standalone 组件 | `.phprt/build/<名字>/<补丁>` | profile 的 steps |
 | fold 组件 | 不执行 | 只贡献源码路径和 configure 参数 |
+
+表格里的路径相对项目根；本地默认构建目录是 `.phprt/build`（跟随 `local_internal_dir`），
+全局模式是 `~/phprtbuild`。
 
 - PHP standalone 组件的 steps 是 `phpize` → `configure --with-php-config=... {flags}` →
   `make` → `make install`。
@@ -72,7 +75,7 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 **前置**到工具生成的值前面，保证 toolchain 档位参数最后生效。宿主 `PATH` /
 `CPPFLAGS` / `LDFLAGS` / `CFLAGS` / `CXXFLAGS` 不参与签名，所以换 shell、
 上 CI、`.bashrc` 里多一条路径都不会让整棵树重编；反过来，改了这些值也不会自动触发
-重编，要重编用 `install --force` 或删 `build/`。
+重编，要重编用 `install --force` 或删 `.phprt/build`。
 
 `MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 同样只用于执行，不进签名：并行度是机器
 属性，改 `parallel`、加 `--parallel`、换一台核数不同的机器都不该让整棵树重编。
@@ -84,7 +87,7 @@ CPU 数 - 1）。phprt 把它写成 `MAKEFLAGS` 和 `CMAKE_BUILD_PARALLEL_LEVEL`
 
 产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX`）。`{tool:NAME}` 只在
 当前节点的 `tools` 含该工具、且工具解析到 built 版本时展开成
-`build/tools/<名字>-<版本>`；宿主提供时跳过这个 env 项，让宿主 PATH 自己找到命令。
+`.phprt/build/tools/<名字>-<版本>`；宿主提供时跳过这个 env 项，让宿主 PATH 自己找到命令。
 fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_INC` / `LUAJIT_LIB`）。
 
 选中的 toolchain 档位把 `cflags` / `cxxflags` 追加进产品、依赖、组件节点的
@@ -92,7 +95,7 @@ fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_IN
 `{tool}` 依赖的 `bin`，不带产品树、`PKG_CONFIG_PATH` 和 `LD_LIBRARY_PATH`。
 
 构建阶段使用绝对路径；`plan` 的输出仍然用相对项目根的路径，便于阅读。
-`--root` 默认是 `.`，解析出的工具前缀（`./build/tools/<名字>-<版本>`）和 `{tool:NAME}`
+`--root` 默认是 `.`，解析出的工具前缀（`./.phprt/build/tools/<名字>-<版本>`）和 `{tool:NAME}`
 在注入子进程环境前会换成绝对路径：子进程的工作目录是解压目录，相对前缀在那里找不到。
 
 state 里有 `build`（OCI 实例）时，上面这些命令在实例里执行：变量、顺序、签名和
@@ -127,7 +130,7 @@ state 里有 `build`（OCI 实例）时，上面这些命令在实例里执行�
 签名不含时间戳、临时目录和随机数，同样的输入必然得到同样的签名。
 
 签名一致且产物齐全时跳过。签名变化时先执行 `make distclean`（忽略失败），
-再重新 configure / make。源码目录在 `build/`，删除它即可强制重新开始。
+再重新 configure / make。源码目录在 `.phprt/build/`，删除它即可强制重新开始。
 
 环境变量按节点裁剪，只放和这个节点产物有关的项。例如只有 `tools` 里有 autoconf 的
 standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加了一个 phpize 类组件
@@ -135,7 +138,7 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
 
 ## 5. 日志与失败
 
-- 每个节点一份日志：`build/logs/<kind>-<name>-<version>.log`；名字和版本相同时只写一次。
+- 每个节点一份日志：`.phprt/build/logs/<kind>-<name>-<version>.log`；名字和版本相同时只写一次。
 - 命令失败时打印日志末尾 40 行，退出 1，不写 state。
 - 已经完成的节点、已解压的源码和已安装的树都会保留，重跑时按签名跳过。
 
@@ -146,11 +149,11 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
 1. `runtime.lib_dir` 非空时，把运行时依赖（`needs` / 已启用 feature 的 `needs` 闭包，
    不含 `tools`）的 `lib/*.so*`（含软链）复制到 `{tree}/<runtime.lib_dir>`。
    只编静态库的依赖（如 nginx 的 `libxcrypt`）没有 `.so` 可复制，靠产品自己的
-   `-l` 参数静态链进可执行文件，不进入 `runtime.lib_dir`。系统库（glibc /
-   libcrypt）不复制，由运行环境提供；跨发行版运行库差异见
+   `-l` 参数静态链进可执行文件，不进入 `runtime.lib_dir`。系统库（glibc 等）不复制，
+   由运行环境提供；nginx 关掉 `xcrypt` 时才会改用系统 libcrypt。跨发行版运行库差异见
    [BUILD-IMAGES.md](BUILD-IMAGES.md) §10.1。
 2. 用 `patchelf --force-rpath` 按 `runtime.rpath` 设置安装树内的 rpath。patchelf 也是
-   构建期工具：本产品解析到 built 版本时用 `build/tools/patchelf-<版本>/bin/patchelf`，
+   构建期工具：本产品解析到 built 版本时用 `.phprt/build/tools/patchelf-<版本>/bin/patchelf`，
    宿主满足时用宿主 PATH 里的 `patchelf`：
    - PHP：`bin/*` → `$ORIGIN/../lib/phprt`；
      `lib/php/extensions/*/*.so` → `$ORIGIN/../../../phprt`。
@@ -182,7 +185,7 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
 | `recipes/tools/*.star` | 可从源码构建的工具；catalog 里每条线都是可选版本 |
 
 解析按节点进行：同名要求取交集（`min` 取大、`max` 取小），宿主优先，其次复用
-`build/tools`，最后从 catalog 取满足区间的最高版本构建。同名工具允许多版本并存，
+`.phprt/build/tools`，最后从 catalog 取满足区间的最高版本构建。同名工具允许多版本并存，
 按 `(name, version)` 去重。工具节点不继承产品 profile 的 `tools`，否则无法跨产品共享。
 
 gcc / g++ 不在这里：它们是 toolchain，只探测、不下载；`tools` 里写编译器名会在
@@ -215,7 +218,7 @@ gd 的图片依赖靠 pkg-config 定位：PHP 8.5 的 `ext/gd/config.m4` 用
 ## 8. 验收
 
 ```bash
-rm -rf .phprt build
+rm -rf .phprt
 
 # PHP 8.5 默认集
 cargo run -- install php@8.5
@@ -243,7 +246,7 @@ cargo run -- install php@8.5 --component 'gd=feature:[]'          # 只保留 PN
 cargo run -- install php@8.5 --component 'gd=dep:jpeg[simd]'      # preset + JPEG SIMD
 cargo run -- install php@8.5 --component 'gd=feature:[jpeg,webp,freetype,avif]'
 ./myphp-8.5 -r 'var_export(gd_info());'
-grep -E 'SIMD extensions' build/logs/dep-jpeg-3.1.4.1.log
+grep -E 'SIMD extensions' .phprt/build/logs/dep-jpeg-3.1.4.1.log
 
 # nginx：默认依赖 PCRE2 + OpenSSL，再动态加 lua 模块
 cargo run -- install nginx@1.29
@@ -263,7 +266,7 @@ cargo run -- install php@8.5 --downloads --offline
 - 8.1 的 `run-tests.php` 有上游 bug：没编 php-cgi / phpdbg 时 `$php_cgi` / `$phpdbg`
   仍被引用（`Undefined variable $php_cgi`），测试跑到 CGI 段就中断。8.2 起改成
   `?? null`，8.1 分支 EOL 没有回填。recipe 不改上游源码，手动把
-  `build/php/php-8.1.34/run-tests.php` 第 1900 ~ 1906 行换成：
+  `.phprt/build/php/php-8.1.34/run-tests.php` 第 1900 ~ 1906 行换成：
 
 ```php
     $php_cgi = $env['TEST_PHP_CGI_EXECUTABLE'] ?? null;

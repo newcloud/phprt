@@ -439,13 +439,13 @@ family 显示 `-`。
 - 镜像里的 `/etc/resolv.conf` 由宿主只读挂入；镜像自带的会被覆盖。
 - dnf 与 apt 都已实测；Debian / Ubuntu 依赖 §9 的 apt 沙箱设置，没有该设置时
   `apt-get update` 会在 `setgroups` / `setegid` 处失败。
-- 构建镜像决定产物的运行库；Debian 构建的 nginx 在 Fedora 宿主可能缺
-  `libcrypt.so.1`，见 §10.1。
+- 构建镜像决定产物的运行库；关掉 nginx 的 `xcrypt` 时，Debian 构建的 nginx 在
+  Fedora 宿主可能缺 `libcrypt.so.1`，见 §10.1。
 - rootless 用户命名空间只映射 uid/gid 0；容器内改不了 `_apt` / `nogroup` 的
   uid/gid，也不支持按 subuid 范围给单个用户做映射。
 - 删除镜像不会自动删除实例；只要还有实例使用该 digest，`rm` 就拒绝，必须先
   `buildimages rm-instance`。不做跨项目引用统计，state 引用用 `--force` 放行。
-- 实例是全局共享的：rootfs 和已装工具共用；项目源码、`.phprt`、`build/` 仍挂
+- 实例是全局共享的：rootfs 和已装工具共用；项目源码、`.phprt`（含 `.phprt/build`）仍挂
   当前项目。同一实例同时只允许一个 phprt 使用，第二个会等待实例锁释放；要并行
   编译请用不同实例。
 - 镜像拉取没有跨进程锁；同一实例的创建、使用和删除有 flock。
@@ -458,8 +458,9 @@ family 显示 `-`。
 ### 10.1 构建镜像决定产物的运行库
 
 phprt 只把构建时找到的**非系统库**收进 `<tree>/lib/phprt`，例如 pcre2、openssl、
-zlib；glibc、libcrypt 这类系统库仍然由运行环境提供。所以**产物能直接在哪个发行版
-上跑，取决于构建镜像和目标宿主是不是同一套运行库**。
+zlib；glibc 这类基础系统库仍然由运行环境提供。libxcrypt 默认由 nginx 静态链入，只有
+关掉 `xcrypt` feature 时才改为链接系统 libcrypt。所以**产物能直接在哪个发行版上跑，
+取决于构建镜像和目标宿主是不是同一套运行库**。
 
 实测（2026-11-24，Fedora 43 宿主，Debian 13 实例）：
 
@@ -489,17 +490,18 @@ nginx 1.29 的默认做法是开 `xcrypt` feature：phprt 自己编译 libxcrypt
 
 - `libcrypt.so.1` **不是** OpenSSL 的 `libcrypto.so.3`。前者是 `crypt(3)` 密码哈希库
   （libxcrypt），后者是 OpenSSL 的加密库；名字像，但是两个东西。
-- nginx 的 HTTP Basic auth 会调用 `crypt()`，Debian 镜像的 configure 找到它并链接
-  `-lcrypt`，ELF 里记录的是 `DT_NEEDED libcrypt.so.1`。
-- phprt 只把构建时解析到的**非系统库**收进 `<tree>/lib/phprt`，例如 openssl、pcre2、
-  zlib；glibc、libcrypt 被当作系统库，交给运行环境提供。
+- 关掉 `xcrypt` 时，nginx 的 HTTP Basic auth 会调用 `crypt()`，Debian 镜像的
+  configure 找到它并链接 `-lcrypt`，ELF 里记录的是 `DT_NEEDED libcrypt.so.1`。
+- 关掉 `xcrypt` 时，libcrypt 就是系统库：phprt 只把构建时解析到的**非系统库**收进
+  `<tree>/lib/phprt`，例如 openssl、pcre2、zlib；glibc、libcrypt 交给运行环境提供。
+  默认开启 `xcrypt` 时，libxcrypt 是静态 dep，不会出现在产物的 `NEEDED` 里。
 - 实例只是构建沙箱。实例里的 `/lib/x86_64-linux-gnu/libcrypt.so.1` 不会复制到产物树；
   产物在宿主运行时用的是宿主的 loader 和宿主的系统库。
 - Debian 13 的 libxcrypt SONAME 是 `libcrypt.so.1`，Fedora 43 是 `libcrypt.so.2`。
   宿主 loader 只按 ELF 里记录的名字找，所以 Fedora 上缺 `libcrypt.so.1`；
   同一个二进制在实例里能找到实例自己的 `libcrypt.so.1`，所以 `nginx -V` 正常。
 
-用 `ldd` 能直接看到“哪些是随产物带的、哪些是宿主提供的”：
+关掉 `xcrypt` 时，`ldd` 能直接看到缺失的 libcrypt，以及哪些库是随产物带的：
 
 ```text
 libcrypt.so.1   => not found
@@ -517,8 +519,8 @@ libc.so.6       => /lib64/libc.so.6
    可以照这个 recipe 模式加：dep 只装静态库，产品 feature 带 `needs`。
 2. **优先让构建镜像和宿主同族**。Fedora 宿主用 `quay.io/fedora/fedora:43`，
    产物直接链接宿主已有的运行库。
-3. 必须用 Debian / Ubuntu 镜像构建、又要在 Fedora 上运行时，宿主安装兼容包：
-   `sudo dnf install libxcrypt-compat`（提供 `libcrypt.so.1`）。
+3. 关掉 `xcrypt`、又必须用 Debian / Ubuntu 镜像构建并在 Fedora 上运行时，宿主安装
+   兼容包：`sudo dnf install libxcrypt-compat`（提供 `libcrypt.so.1`）。
 4. 先诊断：`ldd <产物>` 看哪个库 `not found`；`file` / `objdump -T` 看 ELF 和
    符号版本。
 5. 区分两个问题：`phprt` 自身二进制能在镜像里跑，只说明它需要的 GLIBC 符号版本
@@ -538,7 +540,8 @@ libc.so.6       => /lib64/libc.so.6
 
 这是构建镜像和宿主运行库不一致，不是实例本身坏了。用 `ldd <产物>` 确认缺哪个库；
 优先改用和宿主同族的镜像重新构建。Debian 构建物在 Fedora 上运行时，通常需要
-`sudo dnf install libxcrypt-compat`。详见 §10.1。
+`sudo dnf install libxcrypt-compat`。这只影响关掉 nginx `xcrypt` feature 的产物；
+默认 `xcrypt` 已把 libxcrypt 静态链入。详见 §10.1。
 
 **容器创建失败 / systemd scope 报错**
 

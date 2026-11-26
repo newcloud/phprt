@@ -1,4 +1,4 @@
-# 使用流程（方案）
+# 使用流程
 
 > 状态：已实现。具体行为以 [CLI.md](CLI.md) / [STATE.md](STATE.md) / [BUILD.md](BUILD.md)
 > 为准；本文保留判定矩阵与交互规则的设计说明。
@@ -149,7 +149,7 @@ phprt install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'
 对每个节点：合并产品 profile.tools 与节点 tools（同名求交）
   --lock 且 state.tools 有满足区间的 built 版本 → 用锁定版本
   宿主满足区间                                  → host
-  build/tools 里已有满足区间的版本               → store（复用）
+  .phprt/build/tools 里已有满足区间的版本        → store（复用）
   catalog 里满足区间的最高版本                   → store（需要构建）
   都没有                                       → 记入缺失清单，最后汇总
 ```

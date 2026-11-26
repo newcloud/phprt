@@ -7,8 +7,8 @@ use crate::recipe::{Kind, Target};
 
 /// 没配置 `internal_dir` 时使用的目录名。
 pub const DEFAULT_INTERNAL_DIR: &str = ".phprt";
-/// 没配置 `build_dir` 时使用的目录名。
-pub const DEFAULT_BUILD_DIR: &str = "build";
+/// 没配置 `build_dir` 时使用的目录名：本地模式默认放在工具目录下。
+pub const DEFAULT_BUILD_DIR: &str = ".phprt/build";
 
 static INTERNAL_DIR: OnceLock<String> = OnceLock::new();
 static BUILD_DIR: OnceLock<String> = OnceLock::new();
@@ -156,8 +156,8 @@ pub fn archive_stem(name: &str) -> String {
     name.to_owned()
 }
 
-/// 解压目录，相对于项目根：build/<名字>/<压缩包 stem>。
-/// 产品用产品名（如 build/php/php-8.5.12），组件和依赖库用各自的名字。
+/// 解压目录，相对项目根：<build-dir>/<名字>/<压缩包 stem>，默认 `.phprt/build/...`。
+/// 产品用产品名（如 .phprt/build/php/php-8.5.12），组件和依赖库用各自的名字。
 pub fn build_dir(name: &str, url: &str) -> String {
     build_dir_with(build_dir_name(), name, url)
 }
@@ -171,6 +171,11 @@ fn build_dir_with(base: &str, name: &str, url: &str) -> String {
 /// 构建期工具的安装根：`<build-dir>/tools`。
 pub fn tools_dir(root: &Path) -> PathBuf {
     root.join(build_dir_name()).join("tools")
+}
+
+/// 本地模式默认解压目录：工具目录下的 `build`，如 `.phprt/build`。
+pub fn local_build_dir_for(internal: &str) -> String {
+    format!("{internal}/build")
 }
 
 /// 一个工具版本的安装前缀：`<build-dir>/tools/<name>-<version>`。
@@ -293,19 +298,19 @@ mod tests {
     fn build_dir_is_per_component_and_patch() {
         assert_eq!(
             build_dir("php", "https://php.net/php-8.5.12.tar.xz"),
-            "build/php/php-8.5.12"
+            ".phprt/build/php/php-8.5.12"
         );
         assert_eq!(
             build_dir("libcurl", "https://curl.se/curl-8.23.0.tar.xz"),
-            "build/libcurl/curl-8.23.0"
+            ".phprt/build/libcurl/curl-8.23.0"
         );
         assert_eq!(
             build_dir("swoole", "https://pecl.php.net/get/swoole-6.2.5.tgz"),
-            "build/swoole/swoole-6.2.5"
+            ".phprt/build/swoole/swoole-6.2.5"
         );
         assert_eq!(
             build_dir("nginx", "https://nginx.org/download/nginx-1.29.3.tar.gz"),
-            "build/nginx/nginx-1.29.3"
+            ".phprt/build/nginx/nginx-1.29.3"
         );
     }
 }

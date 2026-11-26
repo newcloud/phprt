@@ -23,7 +23,7 @@ pub struct Config {
     /// recipe 目录；空表示 `./recipes`。相对路径按项目根解析。
     #[serde(default)]
     pub recipes: String,
-    /// 本地模式的源码解压目录；空表示 `build`。可绝对或相对。
+    /// 本地模式的源码解压目录；空表示 `<local_internal_dir>/build`。可绝对或相对。
     #[serde(default)]
     pub local_build_dir: String,
     /// 本地模式的组件登记文件备份目录；空表示用产品 recipe 的默认位置。
@@ -138,7 +138,7 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("{} 不是合法的配置", path.display()))?;
         config.github_proxy()?;
         config.local_internal_dir_name()?;
-        config.local_build_dir_name()?;
+        config.local_build_dir_value()?;
         config.local_backup_dir_name()?;
         config.download_dir_name()?;
         config.global_build_dir_name()?;
@@ -164,10 +164,10 @@ impl Config {
             .unwrap_or_else(|| crate::layout::DEFAULT_INTERNAL_DIR.to_owned()))
     }
 
-    /// 本地模式的解压目录：空配置时是 `build`；可绝对或相对（相对项目根）。
-    pub fn local_build_dir_name(&self) -> Result<String> {
-        Ok(dir_value("local_build_dir", &self.local_build_dir)?
-            .unwrap_or_else(|| crate::layout::DEFAULT_BUILD_DIR.to_owned()))
+    /// 本地模式显式配置的解压目录；None 表示跟随 `<local_internal_dir>/build`。
+    /// 默认值由调用方用实际生效的 `local_internal_dir` 计算，见 `layout::local_build_dir_for`。
+    pub fn local_build_dir_value(&self) -> Result<Option<String>> {
+        dir_value("local_build_dir", &self.local_build_dir)
     }
 
     /// 本地模式的备份目录：空配置时为 None，用产品 recipe 的默认位置。
@@ -302,13 +302,26 @@ mod tests {
         let config: Config =
             toml::from_str("local_build_dir = '/tmp/phprt-build'\nlocal_backup_dir = 'backups'\n")
                 .unwrap();
-        assert_eq!(config.local_build_dir_name().unwrap(), "/tmp/phprt-build");
+        assert_eq!(
+            config.local_build_dir_value().unwrap().as_deref(),
+            Some("/tmp/phprt-build")
+        );
         assert_eq!(
             config.local_backup_dir_name().unwrap().as_deref(),
             Some("backups")
         );
         assert_eq!(Config::default().local_backup_dir_name().unwrap(), None);
-        assert_eq!(Config::default().local_build_dir_name().unwrap(), "build");
+        assert_eq!(Config::default().local_build_dir_value().unwrap(), None);
+
+        // 没配 local_build_dir 时跟随工具目录。
+        let internal = Config::default().local_internal_dir_name().unwrap();
+        assert_eq!(
+            crate::layout::local_build_dir_for(&internal),
+            ".phprt/build"
+        );
+        let config: Config = toml::from_str("local_internal_dir = 'data'\n").unwrap();
+        let internal = config.local_internal_dir_name().unwrap();
+        assert_eq!(crate::layout::local_build_dir_for(&internal), "data/build");
     }
 
     #[test]

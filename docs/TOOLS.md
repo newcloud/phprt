@@ -8,7 +8,7 @@
 构建期工具拆清楚：
 
 - **Tool**：patchelf、cmake、nasm、autoconf、bison、re2c 这类独立构建辅助程序。
-  优先用宿主机；宿主不满足时从 catalog 取源码构建，装到 `build/tools/`。用构建镜像
+  优先用宿主机；宿主不满足时从 catalog 取源码构建，装到 `.phprt/build/tools/`。用构建镜像
   时，下面的「宿主」都指实例 rootfs，见 §4.6。
 - **Toolchain**：gcc / g++ 这类基础编译环境。产品声明版本档位，每档可以带兼容
   CFLAGS；Rust 只探测、选档、记录，不下载 gcc；执行环境由构建环境决定
@@ -119,14 +119,14 @@ TARGET = tool_target(
 
 不新建 `ToolStore`、`ToolResolver` 的第二套下载/构建实现。
 
-### 3.2 安装位置：`build/tools/`
+### 3.2 安装位置：`<build-dir>/tools/`
 
-工具是**可重建的构建缓存**，放在 `build/` 下，不放 `.phprt/`，也不放进产品树：
+工具是**可重建的构建缓存**，放在构建目录下（本地默认 `.phprt/build`），不放进产品树：
 
 ```text
-build/
+.phprt/build/                       # 本地默认构建目录，跟随 local_internal_dir
 ├── autoconf/
-│   └── autoconf-2.72/              # 源码解压目录（现有 build/<name>/<stem>）
+│   └── autoconf-2.72/              # 源码解压目录（<build-dir>/<name>/<stem>）
 ├── tools/
 │   └── autoconf-2.72/              # 工具安装前缀
 │       ├── bin/autoconf
@@ -137,11 +137,11 @@ build/
 
 - `layout::tools_dir(root)` 返回 `<build-dir>/tools`。
 - `--build-dir` / `local_build_dir` / `global_build_dir` 同时决定工具位置。
-- 本地默认 `./build/tools`；全局默认 `~/phprtbuild/tools`。
-- 产品重建不删 `build/`，所以工具跨产品、跨系列复用。
-- `rm -rf build`、换 `--build-dir`、切全局/本地会丢失工具，下次重编；这是
+- 本地默认 `./.phprt/build/tools`；全局默认 `~/phprtbuild/tools`。
+- 产品重建不删构建目录，所以工具跨产品、跨系列复用。
+- `rm -rf .phprt/build`、换 `--build-dir`、切全局/本地会丢失工具，下次重编；这是
   “可重建缓存”的明确语义，文档必须写清楚。
-- `build/tools` 是保留目录，不和 `build/<name>/<stem>` 混用。
+- `<build-dir>/tools` 是保留目录，不和 `<build-dir>/<name>/<stem>` 混用。
 
 约束：
 
@@ -221,7 +221,7 @@ tools = [tool("nasm", min = "2.13"), "cmake"]
 `{tool:NAME}` 只在该节点的 `tools` 包含 `NAME` 时展开：
 
 - **built**：展开为工具安装前缀，如
-  `build/tools/autoconf-2.72`；
+  `.phprt/build/tools/autoconf-2.72`；
 - **host**：跳过该 env 项，让宿主的 `PATH` 自己找到命令。
 
 它用于“上游不接受 PATH、必须用环境变量指定工具路径”的少数场景。
@@ -241,7 +241,7 @@ recipe 的 `env` 里。
 对每个节点，先合并 profile.tools 与节点 tools（同名求交：min 取大、max 取小）；
 工具节点例外，只用自己的 tools（见 §3.2）。然后：
   host 探测通过（存在且满足区间） -> Host
-  已有 build/tools 版本满足区间   -> Store（复用）
+  已有 .phprt/build/tools 版本满足区间 -> Store（复用）
   catalog 有满足区间的最高版本    -> Store（需要构建）
   都没有                         -> 报错
 ```
@@ -252,7 +252,7 @@ recipe 的 `env` 里。
   `>= 2.70`，同一次构建会产出两个 autoconf，各自用在自己的编译命令里。
 - 同一节点的同名工具只取一个版本；不同节点可以解析到不同 provider
   （host / store），同一次构建里可以混用。
-- 一次构建允许同名工具多个版本：`build/tools/<name>-<version>` 并存，按
+- 一次构建允许同名工具多个版本：`.phprt/build/tools/<name>-<version>` 并存，按
   `(name, version)` 去重。
 - 工具依赖工具时递归解析，同样允许多版本；有环直接报错。
 - 同名约束求交为空时报错，并点名是哪个节点的哪条约束冲突。
@@ -284,11 +284,11 @@ recipe 的 `env` 里。
 ### 3.6 构建
 
 - 工具步骤排在所有消费节点之前；多工具按依赖拓扑排序；同名多版本各自有独立步骤。
-- UI 标签 `[tools] autoconf 2.72`；日志 `build/logs/tool-autoconf-2.72.log`。
+- UI 标签 `[tools] autoconf 2.72`；日志 `.phprt/build/logs/tool-autoconf-2.72.log`。
 - 工具节点的 `PATH` 前置它自己依赖的工具 `bin`；消费节点的 `PATH` 前置**本节点
   解析到的那一版** built 工具 `bin`。
 - 工具产物检查、`.phprt-sig`、失败日志复用现有 `phprt_build`。
-- `build/tools/<name>-<version>/.phprt-installed` 是**安装完成标记 + tool-sig**（构建
+- `.phprt/build/tools/<name>-<version>/.phprt-installed` 是**安装完成标记 + tool-sig**（构建
   成功且产物齐全后写入），
   用来判断这个前缀和当前 recipe / 编译器是否匹配。它是可重建缓存的清单，
   不进产品 marker，也不进 state 的产品身份。
@@ -392,7 +392,7 @@ Toolchain 不提供可执行文件，不进 PATH，不参与安装。
 
 | | Tool | Toolchain |
 | --- | --- | --- |
-| 宿主缺失 / 版本不满足 | 从 catalog 取源码构建到 `build/tools/` 使用 | **停止**，报环境不满足；缺命令时附安装命令 |
+| 宿主缺失 / 版本不满足 | 从 catalog 取源码构建到 `.phprt/build/tools/` 使用 | **停止**，报环境不满足；缺命令时附安装命令 |
 | 来源 | 宿主或 catalog 源码 | 只有当前主机（将来可能是镜像） |
 | 作用 | 单个节点的构建命令 | 整次构建的编译器版本与 CFLAGS |
 | 是否可下载 | 是 | 否 |
@@ -560,7 +560,7 @@ toolchain = TOOLCHAIN,
 | `docs/DESIGN.md` | 第 14 节登记本文；四层数据补充 Tool / Toolchain |
 | `docs/ADD-RECIPE.md` | 新增 Tool recipe、添加 toolchain 档位的步骤 |
 | `docs/HOST-COMMANDS.md` | 宿主缺命令时的安装提示、`[package_maps.*]`、包管理器识别、聚合与输出 |
-| `AGENTS.md` / `README.md` | 简要说明 `recipes/tools/`、`build/tools/`、host-first、toolchain 档位 |
+| `AGENTS.md` / `README.md` | 简要说明 `recipes/tools/`、`.phprt/build/tools/`、host-first、toolchain 档位 |
 
 ---
 
@@ -571,7 +571,7 @@ toolchain = TOOLCHAIN,
 ### Phase 1：Tool
 
 1. `Kind::Tool`、`recipes/tools/` 加载、`tool_target(...)`。
-2. `layout::tools_dir(root)` = `<build-dir>/tools`；工具源码仍在 `build/<name>/<stem>`。
+2. `layout::tools_dir(root)` = `<build-dir>/tools`；工具源码仍在 `.phprt/build/<name>/<stem>`。
 3. 统一 `tools` 字段，删除 `host_tools`；`Target.tools: Vec<ToolSpec>`。
 4. Tool resolver：节点级 host → store → catalog；工具拓扑排序；错误文案。
 5. 构建：工具步骤、PATH、`{tool:}`、签名、日志、marker。
@@ -633,7 +633,7 @@ toolchain = TOOLCHAIN,
 
 1. **宿主缺失 → catalog 构建**
    本机没有 autoconf，catalog 有 2.72。`install php@7.4 'zlib=mode:shared' --offline`
-   应构建 `build/tools/autoconf-2.72`，zlib 成功，`php -m` 有 zlib。
+   应构建 `.phprt/build/tools/autoconf-2.72`，zlib 成功，`php -m` 有 zlib。
 2. **宿主版本不匹配 → catalog 构建**
    临时在 PATH 前放一个假 `autoconf`，`--version` 报 2.60，其他参数直接失败；
    声明 `min = "2.68"`。解析应选 catalog 2.72；zlib 能编过就证明没有用假脚本。
@@ -696,7 +696,7 @@ phprt audit php@8.5
 - `gxx` 是否与 `gcc` 共用同一张表：当前设计分开，因为 C 和 C++ 的标准参数不同。
 - host 工具版本是否需要 `--lock` 固定：当前建议不固定，host 工具属于环境，换机器
   重新探测。
-- Tool store 是否提供清理命令：当前不做 `phprt clean`，用户删 `build/` 即可。
+- Tool store 是否提供清理命令：当前不做 `phprt clean`，用户删 `.phprt/build` 即可。
 - patchelf 的源码 recipe：本次不写；等 rpath 后端确定后再决定是否需要。
 - 包名映射会随发行版漂移：只维护验证过的条目，映射错了由工具检查兜底，详见
   [HOST-COMMANDS.md](HOST-COMMANDS.md) 和 [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。

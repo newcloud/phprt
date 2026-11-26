@@ -11,7 +11,7 @@ phprt [-c <配置>] [--recipes <目录>] [--root <目录>] [--global --prefix <�
 | `--recipes` | `./recipes` | recipe 目录；`catalog.toml`、`bundles/` 也在这里。空或未指定时用 `phprt.toml` 的 `recipes`，再退回 `./recipes`；命令行优先 |
 | `--root` | `.` | 项目根目录；本地模式的工具目录默认 `<root>/.phprt` |
 | `--internal-dir` | 无 | 本地模式专用；覆盖 `local_internal_dir`，可绝对或相对 |
-| `--build-dir` | 无 | 覆盖 `local_build_dir`（本地）/ `global_build_dir`（全局）；可绝对或相对 |
+| `--build-dir` | 无 | 覆盖 `local_build_dir`（本地）/ `global_build_dir`（全局）；可绝对或相对。本地默认 `<工具目录>/build`（即 `.phprt/build`），全局默认 `~/phprtbuild` |
 | `--backup-dir` | 无 | 覆盖 `local_backup_dir`（本地）/ `global_backup_dir`（全局）；可绝对或相对 |
 | `--download-dir` | 无 | 覆盖 `phprt.toml` 的 `download_dir`；两种模式都可用 |
 | `--parallel` | CPU 数 - 1 | 编译并发数（`make -j` / cmake 并行度）；覆盖 `phprt.toml` 的 `parallel`。所有子命令都接受。shell 里 export 的 `MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 不起作用 |
@@ -36,7 +36,7 @@ download_dir = ""
 # 项目根是 /www/blog 时：空 → /www/blog/.phprt，data → /www/blog/data，/opt/php → /opt/php。
 local_internal_dir = ""
 
-# 源码解压目录；空用 build。可绝对或相对（相对项目根）。
+# 源码解压目录；空用 local_internal_dir/build（默认 .phprt/build）。可绝对或相对（相对项目根）。
 local_build_dir = ""
 
 # 组件 ini 备份目录；空用产品 recipe 的默认位置（local_internal_dir/backup）。
@@ -566,7 +566,7 @@ phprt install nginx@1.29 --downloads --offline
 | `--ui auto\|plain\|progress` | auto | 下载、解压和编译的进度显示方式 |
 
 - 缓存目录是 `<root>/.phprt/downloads/`，所有产品共用；每个源码包在
-  `<缓存>/<项名>/` 下，解压目录是 `<root>/build/<名字>/<补丁>/`。
+  `<缓存>/<项名>/` 下，解压目录是 `<root>/.phprt/build/<名字>/<补丁>/`。
 - 下载失败、解压失败或编译失败都退出 1，并且不写状态。
 - `--downloads` 结束时只打印源码缓存位置，不修改 state。
 - `--downloads` 不检查工具链版本；解析不到的工具不会让命令失败，只在 `plan` 里提示，
@@ -578,7 +578,7 @@ phprt install nginx@1.29 --downloads --offline
 
 ## 编译
 
-解压之后按构建顺序编译，日志在 `<root>/build/logs/`：
+解压之后按构建顺序编译，日志在 `<root>/.phprt/build/logs/`：
 
 ```bash
 phprt install php@8.5 --targets="cli"
@@ -593,12 +593,13 @@ phprt install nginx@1.29
 - 依赖库收进 `.phprt/<产品>-<版本>/lib/phprt`，用 `$ORIGIN` rpath。
 - PHP 选中 `cli` target 后写项目根 `myphp-<系列>`；项目里只有一个 PHP 系列时再写
   `myphp`。只选 `fpm` / `cgi` 时不生成入口；nginx 不生成入口。
-- 需要系统 gcc / g++ / make / binutils / pkg-config / patchelf / m4 / perl；
-  产品声明了 `toolchain` 时 gcc / g++ 必须落在声明的档位里。autoconf 和缺的纯
-  Perl 模块由 phprt 自己准备：宿主满足用宿主，否则从 `recipes/tools/` 构建到
-  `build/tools/`。用构建镜像（`buildimages`）时，缺的工具按
-  [HOST-COMMANDS.md](HOST-COMMANDS.md) 的包名映射在实例里自动安装，见
-  [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
+- 构建需要系统的 gcc / g++ / make / binutils / pkg-config / m4 / perl 等命令；
+  产品声明了 `toolchain` 时 gcc / g++ 必须落在声明的档位里。这些命令由 phprt 在解析
+  阶段检测，缺的时候一次列全，能识别出 apt / dnf 发行版时给出安装命令，见
+  [HOST-COMMANDS.md](HOST-COMMANDS.md)。catalog 里有源码的构建工具（如 autoconf、
+  patchelf）宿主不满足时由 phprt 构建到 `.phprt/build/tools/`；perl 只由系统提供，缺失或
+  模块不全时进入安装提示。用构建镜像（`buildimages`）时，缺的工具按同一张包名映射
+  在实例里自动安装，见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
 
 ## buildimages
 
@@ -724,8 +725,8 @@ phprt list php@8.5 --pending
 
 ```text
 product        version      tree
-php@8.5        8.5.12       .phprt/php-8.5.12
-nginx@1.29     1.29.8       .phprt/nginx-1.29.8
+php@8.5        8.5.13       ./.phprt/php-8.5.13
+nginx@1.29     1.29.8       ./.phprt/nginx-1.29.8
 ```
 
 组件状态：
@@ -738,8 +739,8 @@ nginx@1.29     1.29.8       .phprt/nginx-1.29.8
 
 ```text
 name             source    modes              version    status
-curl             bundled   static,shared      8.5.12     installed
-swoole           external  shared             6.2.5      pending
+curl             bundled   static,shared      8.5.13     installed
+swoole           external  shared             6.2.6      pending
 xdebug           external  shared             3.5.3      available
 ```
 

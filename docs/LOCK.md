@@ -51,7 +51,7 @@ catalog 里 openssl 3.5 线新增 3.5.10
 
 - 独立 `phprt.lock` 文件；
 - recipe hash、编译器 hash、环境快照；
-- 完整 reproducible build、gcc/tool 锁定；
+- 完整 reproducible build、gcc / 宿主工具锁定；
 - 把 `url` / `sha256` 复制进 state。
 
 ## 3. 解析顺序
@@ -361,6 +361,9 @@ phprt install php@8.5.12 \
 - 版本来源是 state 记录优先；闭包里 state 没有 `version` 记录的节点，用本次解析
   实际选中的 artifact version 补齐，不允许整条 pin 漏掉（比如 `state.deps` 缺一条
   记录时，闭包里的依赖仍然会被 `--dep 名字=<补丁>` 导出）；
+- 不导出 built 工具版本：`scheme --lock` 只写产品补丁、组件和依赖版本；目标机器没有
+  源项目的 `state.tools`，工具按当地宿主 / catalog 重新解析。built 工具版本只在本项目
+  的 `--lock` 解析里复用；
 - bundled 组件的 `version` 是产品补丁，永远不会被当成它自己的源码版本；同名依赖库
   （如 dep openssl / dep zlib）仍按依赖导出。
 

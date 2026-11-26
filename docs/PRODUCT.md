@@ -167,7 +167,7 @@ TARGET = product(
 和运行时收库目录。
 
 `env` 里的 `{tool:NAME}` 只在当前构建节点的 `tools` 含该工具、且这个工具解析到
-built 版本时展开成 `build/tools/<name>-<version>`；宿主提供的工具跳过这个 env 项，
+built 版本时展开成 `.phprt/build/tools/<name>-<version>`；宿主提供的工具跳过这个 env 项，
 让宿主 PATH 自己找到命令（见 [TOOLS.md](TOOLS.md) §3.4）。phpize 的
 `autoconf` / `autoheader` 直接从 PATH 找，不再用 `PHP_AUTOCONF` / `PHP_AUTOHEADER`。
 
@@ -205,7 +205,7 @@ tool("perl", min = "5.20", probe = ["-e", "print $^V"], feature_checks = ["findb
 ```
 
 解析发生在下载源码之前，按节点进行：宿主满足区间就用宿主，否则复用
-`build/tools` 里已有的版本，再否则从 catalog 取满足区间的最高版本源码构建。
+`.phprt/build/tools` 里已有的版本，再否则从 catalog 取满足区间的最高版本源码构建。
 宿主有命令但版本不满足时不会静默回退，错误会写清是哪一种情况：
 
 ```text
@@ -223,7 +223,7 @@ Fedora Linux 43（dnf）上执行：
   sudo dnf install gcc gcc-c++ cmake make m4
 ```
 
-宿主工具不下载、不安装；built 工具装到 `build/tools/<name>-<version>`，跨产品复用。
+宿主工具不下载、不安装；built 工具装到 `.phprt/build/tools/<name>-<version>`，跨产品复用。
 `--downloads` 只下载本次解析到、需要构建的工具源码，不检查、不构建。
 
 用构建镜像时，上面这些「宿主」指实例 rootfs；缺的命令由 phprt 按同一份映射直接
@@ -266,7 +266,7 @@ dep(
 （`min` 取大、`max` 取小），交集为空时报错。
 
 同名工具允许在同一次构建里解析出多个版本：不同节点可以落到不同版本，
-`build/tools/<name>-<version>` 并存。工具节点只用自己的 `tools`，不继承产品
+`.phprt/build/tools/<name>-<version>` 并存。工具节点只用自己的 `tools`，不继承产品
 profile 的基线（否则工具会被绑回某个产品的依赖树，无法跨产品共享）。
 
 被选中 feature 的 `requires.commands` 由选择阶段检查，不进入这个集合。

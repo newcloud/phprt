@@ -1,8 +1,8 @@
 # 解压
 
 `install` / `update` 在下载阶段之后，把方案里的源码包按构建顺序解压到
-`build/<组件>/<补丁>/`。解压后的目录就是源码根，后面的 `phpize` / `./configure`
-都在这里执行。
+`.phprt/build/<组件>/<补丁>/`（默认构建目录，跟随 `local_internal_dir`）。解压后的
+目录就是源码根，后面的 `phpize` / `./configure` 都在这里执行。
 
 ## 1. 触发方式
 
@@ -37,16 +37,18 @@ phprt update --offline               # 用缓存下载，再解压
 
 ```text
 <root>/
-├── .phprt/downloads/php/php-8.5.12.tar.xz  # 压缩包缓存
-└── build/
-    ├── php/php-8.5.12/                     # unpack
-    ├── libcurl/curl-8.23.0/
-    ├── nghttp2/nghttp2-1.64.0/
-    └── swoole/swoole-6.2.5/
+└── .phprt/
+    ├── downloads/php/php-8.5.12.tar.xz     # 压缩包缓存
+    └── build/                              # 默认构建目录，跟随 local_internal_dir
+        ├── php/php-8.5.12/                 # unpack
+        ├── libcurl/curl-8.23.0/
+        ├── nghttp2/nghttp2-1.64.0/
+        └── swoole/swoole-6.2.5/
 ```
 
 - 目录名 = 组件名 + 压缩包去后缀的 stem；补丁升级会落到新目录，旧目录不自动删除。
-- `build/` 在项目根，不在 `.phprt/` 下；删除它只会触发重新解压，不影响下载缓存。
+- 解压目录由 `local_build_dir` 决定，默认是 `<local_internal_dir>/build`（即 `.phprt/build/`）；
+  删除它只会触发重新解压，不影响下载缓存。不要删整个 `.phprt`，安装树和 state 也在里面。
 - `unpack` 路径由 `src/layout.rs` 统一计算，计划输出、下载清单、解压共用。
 
 ## 4. 格式
@@ -86,9 +88,9 @@ phprt update --offline               # 用缓存下载，再解压
 
 ```text
 解压源码（按构建顺序，3 个）
-[1/3] [product] php 8.5.12 解压 php-8.5.12.tar.xz → build/php/php-8.5.12
+[1/3] [product] php 8.5.12 解压 php-8.5.12.tar.xz → .phprt/build/php/php-8.5.12
 [product] php 8.5.12 ✓ 解压完成
-[2/3] [deps] nghttp2 1.64.0 解压 nghttp2-1.64.0.tar.gz → build/nghttp2/nghttp2-1.64.0
+[2/3] [deps] nghttp2 1.64.0 解压 nghttp2-1.64.0.tar.gz → .phprt/build/nghttp2/nghttp2-1.64.0
 [deps] nghttp2 1.64.0 ✓ 解压完成
 [deps] libcurl 8.23.0 ✓ 已解压
 解压完成: 2 个，已存在 1 个
@@ -117,7 +119,7 @@ phprt update --offline               # 用缓存下载，再解压
 | `crates/extract/src/archive.rs` | 后缀分派、tar/zip 解包、解压进度 |
 | `crates/source/src/lib.rs` | 下载/解压共用的 `Source` 清单 |
 | `crates/ui/src/lib.rs` | 进度框、逐行日志、标签与大小格式 |
-| `src/layout.rs` | `build/<组件>/<stem>` 路径计算 |
+| `src/layout.rs` | `<build-dir>/<组件>/<stem>` 路径计算（默认 `.phprt/build`） |
 
 ## 10. 测试
 

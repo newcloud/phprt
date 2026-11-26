@@ -134,7 +134,7 @@
   `tool("make", min = "4.0")`、`tool("autoconf", min = "2.68")`。
   产品 profile 的 `tools` 是产品 / 依赖 / 组件节点的基线；只有部分依赖需要的命令
   （cmake、nasm）写在该 dep / component 的 `tools`。解析宿主优先，宿主不满足时
-  复用 `build/tools`，再否则从 `recipes/tools/<名字>.star` 构建；同名工具允许
+  复用 `.phprt/build/tools`，再否则从 `recipes/tools/<名字>.star` 构建；同名工具允许
   多版本并存。gcc / g++ 不写在 `tools` 里，由产品系列 recipe 的
   `toolchain = TOOLCHAIN` 声明档位。详见 `docs/TOOLS.md`。
 - 安装后行为写在产品 profile 的 `post_install`：`ensure_dir` / `write_file` /

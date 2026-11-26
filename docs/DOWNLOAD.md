@@ -64,7 +64,7 @@ recipes = ""
 # ---- 本地模式（默认）----
 # 工具目录（状态、安装树、缓存、备份）；留空用 .phprt，相对项目根
 local_internal_dir = ""
-# 源码解压目录；留空用 build
+# 源码解压目录；留空用 local_internal_dir/build（默认 .phprt/build）
 local_build_dir = ""
 # 组件 ini 备份目录；留空用 local_internal_dir/backup
 local_backup_dir = ""

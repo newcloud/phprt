@@ -17,7 +17,8 @@ download_dir = "/home/z/testphp/downloads"
 # 例：项目根 /www/blog → 空是 /www/blog/.phprt，"data" 是 /www/blog/data。
 local_internal_dir = ""
 
-# 源码解压目录；留空用 build。 例如 local_build_dir = "" => /www/blog/build ; local_build_dir = ".phprt/build" => /www/blog/.phprt/build
+# 源码解压目录；留空用 local_internal_dir/build（默认 .phprt/build）。
+# 例：local_build_dir = "" => /www/blog/.phprt/build ; local_build_dir = "build" => /www/blog/build
 local_build_dir = ""
 
 # 组件 ini 的备份目录；留空用 local_internal_dir/backup（即 .phprt/backup）。

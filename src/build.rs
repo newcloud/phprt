@@ -300,15 +300,18 @@ pub fn run(
             env,
             artifacts,
             sig,
-            log: root.join("build/logs").join(format!(
-                "{}-{}.log",
-                target.kind.as_str(),
-                if target.name == target.version {
-                    target.name.clone()
-                } else {
-                    format!("{}-{}", target.name, target.version)
-                }
-            )),
+            log: root
+                .join(crate::layout::build_dir_name())
+                .join("logs")
+                .join(format!(
+                    "{}-{}.log",
+                    target.kind.as_str(),
+                    if target.name == target.version {
+                        target.name.clone()
+                    } else {
+                        format!("{}-{}", target.name, target.version)
+                    }
+                )),
         });
     }
 

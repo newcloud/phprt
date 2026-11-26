@@ -12,7 +12,7 @@ patchelf --set-rpath <rpath> --force-rpath <file>
 ```
 
 `patchelf` 因此出现在 php / nginx 产品 profile 的 `tools` 清单里。它优先用宿主机；
-宿主版本不满足时，phprt 会从 `recipes/tools/patchelf.star` 构建到 `build/tools/`，
+宿主版本不满足时，phprt 会从 `recipes/tools/patchelf.star` 构建到 `.phprt/build/tools/`，
 `patchelf_rpath()` 用的是解析到的那一版（见 [TOOLS.md](../TOOLS.md) 第 3 节）。
 
 目标：默认不依赖任何外部命令，且设置结果与 `patchelf --set-rpath --force-rpath`

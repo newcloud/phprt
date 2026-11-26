@@ -56,9 +56,9 @@ Sim { root, tree, targets, toolchain, tools, host_commands, order: [Node] }
 | 依赖库 | `{tree}/<产品 profile 的 runtime.lib_dir>`；PHP / nginx 当前是 `{tree}/lib/phprt` |
 | dep 前缀 | `{tree}/deps/<name>-<version>` |
 | 源码缓存 | `<root>/.phprt/downloads/<项名>/<URL 最后一段>` |
-| 解压目录 | `build/<目标名>/<源码目录名>` |
-| bundled standalone 组件源码 | `build/<产品>/<产品源码目录名>/<source_path>` |
-| bundled standalone 组件构建目录 | `build/<组件名>/<产品>-<产品版本>` |
+| 解压目录 | `.phprt/build/<目标名>/<源码目录名>`（默认，跟随 `local_internal_dir`） |
+| bundled standalone 组件源码 | `.phprt/build/<产品>/<产品源码目录名>/<source_path>` |
+| bundled standalone 组件构建目录 | `.phprt/build/<组件名>/<产品>-<产品版本>` |
 | external 组件源码 | 下载地址最后一段，解压到构建目录 |
 | ini | `{tree}/etc/conf.d/<ini>` |
 | `.so`（PHP） | `lib/php/extensions/*/<name>.so` |
@@ -85,10 +85,10 @@ toolchain
 
 tools
   ar  (host)
-  autoconf 2.71 (store) -> build/tools/autoconf-2.71  for xdebug
-  autoconf 2.72 (store) -> build/tools/autoconf-2.72  for zlib
+  autoconf 2.71 (store) -> .phprt/build/tools/autoconf-2.71  for xdebug
+  autoconf 2.72 (store) -> .phprt/build/tools/autoconf-2.72  for zlib
   make 4.4.1 (host)
-  patchelf 0.19.3 (store) -> build/tools/patchelf-0.19.3  for all nodes
+  patchelf 0.19.3 (store) -> .phprt/build/tools/patchelf-0.19.3  for all nodes
   ...
 
 host commands
@@ -179,7 +179,7 @@ build order
   },
   "tools": [
     {"name": "make", "version": "4.4.1", "provider": "host", "prefix": ""},
-    {"name": "autoconf", "version": "2.72", "provider": "store", "prefix": "build/tools/autoconf-2.72"}
+    {"name": "autoconf", "version": "2.72", "provider": "store", "prefix": ".phprt/build/tools/autoconf-2.72"}
   ],
   "host_commands": {
     "pm": "dnf",
@@ -265,7 +265,7 @@ xdebug           external  shared             3.5.3      available
 
 ```text
 解压源码（按构建顺序，3 个）
-[1/3] [product] php 8.5.12 解压 php-8.5.12.tar.xz → build/php/php-8.5.12
+[1/3] [product] php 8.5.12 解压 php-8.5.12.tar.xz → .phprt/build/php/php-8.5.12
 [product] php 8.5.12 ✓ 解压完成
 [deps] libcurl 8.23.0 ✓ 已解压
 解压完成: 1 个，已存在 1 个
@@ -375,7 +375,7 @@ swoole 已在方案里（shared），产物齐全
 audit php@8.5
 
 component:openssl
-  source  build/php/php-8.5.12/ext/openssl
+  source  .phprt/build/php/php-8.5.12/ext/openssl
   --with-openssl                     configure
   --with-openssl-argon2              feature argon2
   --with-openssl-legacy-provider     ignored: 会改变默认 TLS 行为，需要单独验证

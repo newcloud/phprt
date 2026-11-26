@@ -205,7 +205,7 @@ def target(ctx):
 TARGET = target
 ```
 
-- 工具装到 `build/tools/<名字>-<版本>`，跨产品复用；删 `build/` 会重编。
+- 工具装到 `.phprt/build/tools/<名字>-<版本>`，跨产品复用；删 `.phprt/build/` 会重编。
 - 工具不能声明 `needs`，只能声明 `tools`（工具依赖工具）。
 - 编译器（`gcc` / `g++` / `gxx` / `cc` / `c++`）不能做成 Tool recipe，也不能写进
   `tools`；它们只属于产品 `toolchain`。

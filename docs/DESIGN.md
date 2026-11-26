@@ -67,7 +67,7 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 直接写回 `recipes/catalog.toml`（追加，不删除），见 [CATALOG-MODEL.md](CATALOG-MODEL.md)。
 
 Tool / Toolchain 不新增层：Tool 的 recipe 在 `recipes/tools/`、源码版本仍走
-`catalog.toml`，构建产物放在 `build/tools/`（可重建缓存，不进 state 的产品身份）；
+`catalog.toml`，构建产物放在 `.phprt/build/tools/`（可重建缓存，不进 state 的产品身份）；
 Toolchain 是产品 recipe 的字段，只探测和合并参数。构建环境（`phprt buildimages`）
 是执行层，不进这四层，见 [BUILD-IMAGES.md](BUILD-IMAGES.md)；`recipes/images.toml`
 只放镜像家族 `[families.*]` 和包名映射 `[package_maps.*]`，后者同时服务宿主模式的
@@ -188,7 +188,7 @@ dep → fold 组件 → product → standalone 组件
 
 ### 5.7 解压源码
 
-按拓扑序解压到 `build/<名字>/<源码目录名>`；顶层只有一个目录时提升一层。
+按拓扑序解压到 `.phprt/build/<名字>/<源码目录名>`；顶层只有一个目录时提升一层。
 bundled 组件不单独下载，源码在产品 tarball 里。
 
 ### 5.8 编译与安装
@@ -241,7 +241,7 @@ bundled 组件不单独下载，源码在产品 tarball 里。
 9. 同一次产品构建里，每个依赖库（dep）只能有一个版本：整个闭包共用
    `deps/<名字>-<版本>/` 这一份库，不允许同名 dep 按节点出现多个版本。
    这跟 Tool 不同：Tool 是构建期辅助程序，按节点解析，允许同名多版本并存
-   （`build/tools/<名字>-<版本>/`）。
+   （`.phprt/build/tools/<名字>-<版本>/`）。
 
 ## 9. 演进成本
 
@@ -282,7 +282,7 @@ src/
 ├── manage.rs     add / remove 的现场检查、确认交互、ini 备份、产物删除
 ├── audit.rs      上游选项盘点
 ├── state.rs      state.json
-├── tools.rs      构建期工具解析（宿主 / build/tools / catalog）、版本探测
+├── tools.rs      构建期工具解析（宿主 / .phprt/build/tools / catalog）、版本探测
 ├── toolchain.rs  编译器探测、档位选择、CFLAGS 合并
 ├── host_commands.rs  宿主识别（包管理器 / 发行版 id / family）、包名映射、缺命令提示；向 recipe 注入 host ctx
 ├── buildenv.rs   构建环境调度：镜像选型、实例创建 / 复用 / 锁、命令转发进容器（BUILD-IMAGES.md）
@@ -359,7 +359,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [CLI.md](CLI.md) | 子命令、`产品@系列`、`--component`、`--dep`、错误与退出码 |
 | [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle、targets |
 | [PRODUCT.md](PRODUCT.md) | 产品共享 profile、工具版本区间、toolchain 档位、安装后动作、入口模板 |
-| [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / build/tools、同名工具多版本、tool-sig、toolchain 档位与构建镜像里的编译器 |
+| [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / .phprt/build/tools、同名工具多版本、tool-sig、toolchain 档位与构建镜像里的编译器 |
 | [HOST-COMMANDS.md](HOST-COMMANDS.md) | 宿主缺命令时的安装提示：包名映射、包管理器识别、聚合与输出 |
 | [BUILD-IMAGES.md](BUILD-IMAGES.md) | 用 OCI 镜像构建：`buildimages` 命令、镜像缓存、全局实例、锁与删除、运行库差异 |
 | [TARGETS.md](TARGETS.md) | `--targets`、target 声明、默认值、state/scheme 与构建身份 |

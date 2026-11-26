@@ -36,7 +36,7 @@ phprt audit php@8.5
 
 ```text
 component:openssl
-  source  build/php/php-8.5.12/ext/openssl
+  source  .phprt/build/php/php-8.5.12/ext/openssl
   --with-openssl                     configure
   --with-openssl-argon2              feature argon2
   --with-openssl-legacy-provider     ignored: 会改变默认 TLS 行为，需要单独验证

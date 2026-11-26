@@ -59,7 +59,7 @@ struct Cli {
     #[arg(long = "internal-dir", global = true, value_parser = path_value)]
     internal_dir: Option<PathBuf>,
 
-    /// 解压目录；覆盖 local_build_dir / global_build_dir，可绝对或相对
+    /// 解压目录；默认 <工具目录>/build（全局模式 ~/phprtbuild），可绝对或相对
     #[arg(long = "build-dir", global = true, value_parser = path_value)]
     build_dir: Option<PathBuf>,
 
@@ -493,8 +493,8 @@ fn run() -> Result<()> {
         )?;
         let build = effective_dir(
             cli.build_dir.as_deref(),
-            &config.local_build_dir_name()?,
-            layout::DEFAULT_BUILD_DIR,
+            &config.local_build_dir_value()?.unwrap_or_default(),
+            &layout::local_build_dir_for(&internal),
             "local_build_dir",
         )?;
         layout::set_internal_dir_name(&internal);
