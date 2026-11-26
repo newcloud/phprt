@@ -34,11 +34,6 @@ global_backup_dir = ""
 # 注释掉时用 CPU 数 - 1（最少 1）；数字必须 >= 1。命令行 --parallel 优先。
 # parallel = 8
 
-# ---------- 容器构建（--buildbyimage）----------
-# 用哪个容器运行时：podman / docker / kiri。
-# 注释掉时依次试 podman → docker → kiri；写了只用它，连不上就报错，不回落。
-# container_runtime = "podman"
-
 # ---------- 主线补丁检查 ----------
 # install / update / add / remove 在真正下载或编译前是否询问检查上游最新补丁。
 # false = 不问、不查，直接用本地；default_answer 只能是 y / n。
