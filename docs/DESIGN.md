@@ -384,6 +384,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | --- | --- |
 | [plan/RUNTIME-IMAGE.md](plan/RUNTIME-IMAGE.md) | 把安装树产出为运行镜像：入口、配置覆盖、文件清单、runtime base 同源、OCI 输出、compose、`phprt build` |
 | [plan/RPATH.md](plan/RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收 |
+| [plan/STATIC-LTO.md](plan/STATIC-LTO.md) | 依赖静态链接与 LTO：dep 的 modes / lto、全局开关、nginx 参数合成、切换清理 |
 
 ### 14.3 记录
 
