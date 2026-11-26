@@ -85,6 +85,14 @@ feature、依赖转授、版本线、绑定），以及每个组件在这棵树�
 CPU 数 - 1）。phprt 把它写成 `MAKEFLAGS` 和 `CMAKE_BUILD_PARALLEL_LEVEL` 传给子进程，
 所以 **shell 里 `export MAKEFLAGS=4`、`export CMAKE_BUILD_PARALLEL_LEVEL=4` 都不生效**。
 
+宿主构建时，`PHPRT_SCCACHE=1` 会把每个节点的 `CC` / `CXX` 在执行期换成
+`sccache gcc` / `sccache g++`：已有值就包一层，dep / tool 节点本来没有就补上；
+`g++` 不在 PATH 时不补 `CXX`，已经包过 sccache 的值不再套一层。和宿主 `CFLAGS`
+一样，这层包装只在执行时接上，不进签名，也不参与编译器探测——gcc 版本判断始终用
+profile 或进程环境里的真实编译器名。`PHPRT_IN_CONTAINER=1` 的实例构建不生效
+（实例环境整体替换，镜像里也没有 sccache）；设了开关但 PATH 里找不到 `sccache`
+会直接报错。
+
 产品 profile 的 `env` 再追加产品专用变量（PHP 的 `CC` / `CXX`）。`{tool:NAME}` 只在
 当前节点的 `tools` 含该工具、且工具解析到 built 版本时展开成
 `.phprt/build/tools/<名字>-<版本>`；宿主提供时跳过这个 env 项，让宿主 PATH 自己找到命令。
@@ -113,7 +121,7 @@ state 里有 `build`（OCI 实例）时，上面这些命令在实例里执行�
   见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §7；
 - configure 程序和全部参数；
 - 组件 `prepare` / profile mode 的 steps / make 命令（按声明顺序）；
-- 注入的环境变量（只算工具生成的部分，见第 3 节；`MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 不算）；
+- 注入的环境变量（只算工具生成的部分，见第 3 节；`MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 不算，`PHPRT_SCCACHE` 的包装也不算）；
 - 预期的产物路径；
 - `copy_from` 源码目录的内容指纹（相对路径 + 内容 hash，软链记目标）；
 - 依赖闭包里每个 dep 的名字、版本和它的构建签名。

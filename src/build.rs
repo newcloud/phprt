@@ -47,6 +47,7 @@ pub fn run(
     let product_build = root.join(layout::build_dir_of(product));
     let parallel = opts.parallel;
     let host = HostEnv::from_process();
+    let sccache = Sccache::from_process(product)?;
     let mut dep_sigs: BTreeMap<String, String> = BTreeMap::new();
     let mut tool_sigs: BTreeMap<(String, String), String> = BTreeMap::new();
     let tools_dir = layout::tools_dir(&root);
@@ -284,8 +285,12 @@ pub fn run(
         }
 
         // 签名只用工具生成的确定性环境；宿主的 PATH / CFLAGS 和并行度在这里才接上，
-        // 换 shell、上 CI、机器核数不同都不会让整棵树重编。
+        // 换 shell、上 CI、机器核数不同都不会让整棵树重编。sccache 包装同理：
+        // 只改执行用的 CC / CXX，签名里仍然是真实编译器名。
         add_host_env(&mut env, &host, parallel);
+        if let Some(sccache) = &sccache {
+            sccache.apply(&mut env);
+        }
 
         steps.push(Step {
             tag: format!(
@@ -953,6 +958,68 @@ fn add_host_env(env: &mut BTreeMap<String, String>, host: &HostEnv, parallel: us
     }
 }
 
+/// sccache 包装：只在执行期把 `CC` / `CXX` 换成 `sccache gcc` / `sccache g++`。
+///
+/// 这是宿主本机的加速开关（`PHPRT_SCCACHE=1`），和签名、编译器探测都无关：
+/// 注入发生在 `signature()` / `tool_signature()` 之后，探测始终读 profile 或进程
+/// 环境里的真实编译器名。容器构建不生效：实例里的环境是整体替换的，镜像里也没有
+/// sccache。
+struct Sccache {
+    cc: String,
+    cxx: Option<String>,
+}
+
+impl Sccache {
+    const TOGGLE: &'static str = "PHPRT_SCCACHE";
+
+    fn from_process(product: &Target) -> Result<Option<Self>> {
+        if std::env::var(Self::TOGGLE).as_deref() != Ok("1") {
+            return Ok(None);
+        }
+        if crate::buildenv::in_container() {
+            return Ok(None);
+        }
+        if !crate::tools::on_path("sccache") {
+            bail!("{} 设为 1，但 PATH 里找不到 sccache", Self::TOGGLE);
+        }
+        let cxx = crate::toolchain::cxx_name(product);
+        Ok(Some(Self {
+            cc: crate::toolchain::cc_name(product),
+            // C++ 编译器本来就不存在时不硬塞 CXX，避免 configure 因找不到它报错。
+            cxx: crate::tools::on_path(&cxx).then_some(cxx),
+        }))
+    }
+
+    /// 每个节点都接上 CC / CXX。dep / tool 节点本来没有这两个变量，补上后
+    /// configure / cmake 会显式用 `gcc` / `g++`，和原来默认找到的一致。
+    fn apply(&self, env: &mut BTreeMap<String, String>) {
+        wrap_sccache(env, "CC", &self.cc);
+        if let Some(cxx) = &self.cxx {
+            wrap_sccache(env, "CXX", cxx);
+        }
+    }
+}
+
+fn wrap_sccache(env: &mut BTreeMap<String, String>, key: &str, fallback: &str) {
+    let current = env
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let name = current.unwrap_or(fallback);
+    if is_sccache(name) {
+        return;
+    }
+    env.insert(key.to_owned(), format!("sccache {name}"));
+}
+
+/// 已经包过 sccache（例如用户 profile 里写了）就不再套一层。
+fn is_sccache(value: &str) -> bool {
+    let program = value.split_whitespace().next().unwrap_or_default();
+    Path::new(program)
+        .file_name()
+        .is_some_and(|name| name == "sccache")
+}
+
 /// 产品 profile 声明的环境变量；引用了不在本次构建里的工具时跳过。
 /// 同一个变量只注入 `tools` 里包含对应工具 dep 的节点，
 /// 例如 PHP profile 的 `{tool:autoconf}` 不会进 nginx 或 dep 节点。
@@ -1579,6 +1646,50 @@ mod tests {
         let mut env = build_env("/tree", "", &deps, &[]);
         add_host_env(&mut env, &host, 4);
         assert_eq!(env["CPPFLAGS"], "-I/deps/zlib/include -DHOST");
+    }
+
+    #[test]
+    fn sccache_wraps_cc_and_cxx_only_for_execution() {
+        let mut env = build_env("/tree", "", &[], &[]);
+        let before = env.clone();
+        Sccache {
+            cc: "gcc".to_owned(),
+            cxx: Some("g++".to_owned()),
+        }
+        .apply(&mut env);
+        assert_eq!(env["CC"], "sccache gcc");
+        assert_eq!(env["CXX"], "sccache g++");
+        for (key, value) in &before {
+            if key == "CC" || key == "CXX" {
+                continue;
+            }
+            assert_eq!(env.get(key), Some(value), "{key} 只应在执行时追加");
+        }
+        assert_eq!(env.len(), before.len() + 2);
+    }
+
+    #[test]
+    fn sccache_keeps_existing_values_and_skips_rewrap() {
+        let mut env = BTreeMap::new();
+        env.insert("CC".to_owned(), "clang".to_owned());
+        Sccache {
+            cc: "gcc".to_owned(),
+            cxx: None,
+        }
+        .apply(&mut env);
+        assert_eq!(env["CC"], "sccache clang");
+        assert!(!env.contains_key("CXX"));
+
+        for wrapped in ["sccache gcc", "/usr/bin/sccache clang"] {
+            let mut env = BTreeMap::new();
+            env.insert("CC".to_owned(), wrapped.to_owned());
+            Sccache {
+                cc: "gcc".to_owned(),
+                cxx: None,
+            }
+            .apply(&mut env);
+            assert_eq!(env["CC"], wrapped);
+        }
     }
 
     #[test]
