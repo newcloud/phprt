@@ -2289,7 +2289,6 @@ dependencies = [
  "serde",
  "serde_json",
  "starlark",
- "toml",
  "toml_edit",
 ]
 

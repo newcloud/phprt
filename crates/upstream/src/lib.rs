@@ -850,12 +850,12 @@ mod script_inventory {
         let path = recipes.join("catalog.toml");
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("读不到 {}：{err}", path.display()));
-        let doc: toml::Value = toml::from_str(&text)
+        let doc: toml_edit::DocumentMut = text
+            .parse()
             .unwrap_or_else(|err| panic!("{} 不是合法 TOML：{err}", path.display()));
         doc.as_table()
-            .unwrap_or_else(|| panic!("{} 顶层必须是表", path.display()))
-            .keys()
-            .cloned()
+            .iter()
+            .map(|(key, _)| key.to_owned())
             .collect()
     }
 
