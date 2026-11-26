@@ -226,6 +226,9 @@ Fedora Linux 43（dnf）上执行：
 宿主工具不下载、不安装；built 工具装到 `build/tools/<name>-<version>`，跨产品复用。
 `--downloads` 只下载本次解析到、需要构建的工具源码，不检查、不构建。
 
+用构建镜像时，上面这些「宿主」指实例 rootfs；缺的命令由 phprt 按同一份映射直接
+装进实例，不是只提示，见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
+
 ### 4.1 检查的命令要和实际使用的一致
 
 PHP / nginx 的 configure 默认调用 `cc`。如果只检查 `gcc`，系统 `cc` 可能指向别的
@@ -271,7 +274,7 @@ profile 的基线（否则工具会被绑回某个产品的依赖树，无法跨
 ## 4.3 编译器版本与 toolchain
 
 gcc / g++ 不写在 `tools` 里（写了会在加载时报错），也不从 Tool catalog 解析；
-它们是宿主提供的编译环境，只做版本适配，不满足就停止。产品在系列 recipe 里声明
+它们由执行环境（宿主或构建实例）提供，只做版本适配，不满足就停止。产品在系列 recipe 里声明
 编译器区间和兼容参数档位。完整机制见 [TOOLS.md](TOOLS.md) 第 4 节。
 
 产品在系列 recipe 里声明编译器区间和兼容参数档位：
@@ -307,8 +310,9 @@ TARGET = product(
   依赖和组件节点，不作用于 Tool 节点。
 - **gcc / g++ 的原始版本号不进节点签名**：同一档内换补丁版本不重编，跨档改变
   flags 才重编。Tool 节点另算：`tool-sig` 记实际编译器版本。
-- 镜像构建：用镜像 catalog 里的 `gcc` 匹配同一套区间；`glibc` 只提示运行下限，
-  不参与构建判断。详见 [IMAGE.md](IMAGE.md)。
+- 用构建镜像时，在实例里探测 `gcc` / `g++`，套用同一套档位；`glibc` 只影响产物对
+  运行系统的要求，不参与构建判断。见 [BUILD-IMAGES.md](BUILD-IMAGES.md)；
+  运行镜像仍是方案，见 [plan/RUNTIME-IMAGE.md](plan/RUNTIME-IMAGE.md)。
 - 编译器太新带来的 flags 只写在档位里，Rust 不按版本号推导。
 - dep / component 默认不写 gcc；确实有已知不兼容时写一条只收窄的约束，
   只求交、不带 flags。

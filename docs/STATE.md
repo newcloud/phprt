@@ -23,8 +23,8 @@
 
 ## 2. 格式
 
-状态 schema 是版本 3；`targets` / `tools` 是新增的可选字段，旧文件没有它们时沿用
-bundle 默认值 / 重新解析工具：
+状态 schema 是版本 3；`targets` / `tools` / `build` 是新增的可选字段，旧文件没有它们时
+沿用 bundle 默认值 / 重新解析工具 / 按宿主构建：
 
 ```json
 {
@@ -93,23 +93,24 @@ bundle 默认值 / 重新解析工具：
 | `deps.<名字>.version` | 依赖实际补丁；`--lock` 把它当作精确版本 |
 | `deps.<名字>.features` | 当前构建使用的 feature 并集 |
 | `tools` | 上次构建实际解析到的工具：`name` / `version` / `provider`（`host` / `store`）；旧文件没有这个字段 |
-| `image` | 镜像模式的记录：`line` / `image` / `digest` / `gcc` / `glibc` / `container`；宿主模式没有这个字段 |
+| `build` | 构建环境：`mode`（当前只写 `oci`；`host` 等价于没有这个字段）、`image`（digest）、`image_ref`、`runtime`、`instance`；没有这个字段表示宿主构建 |
 
-`image.container` 是长驻容器的记录：
+`build` 记录这次构建用的镜像和实例：
 
 ```json
-"container": {
-  "name": "phprt-php-8.5-3f2a91c0",
-  "id": "9b1d…",
-  "created": "2026-11-22T00:45:00Z",
-  "mounts": ["/home/z/blog:/home/z/blog"]
+"build": {
+  "mode": "oci",
+  "image": "sha256:...",
+  "image_ref": "quay.io/fedora/fedora:43",
+  "runtime": "youki",
+  "instance": "php-build"
 }
 ```
 
-下次镜像模式的命令先看这条记录：容器还在就直接 `exec`，不在了就用同一个原镜像重建。
-容器 id 只是缓存，和 `inspect` 的结果不一致时以 `inspect` 为准。容器不参与方案指纹，
-也不参与节点签名；原镜像的 digest 才进签名。字段和生命周期见
-[CONTAINER.md](CONTAINER.md) 第 3、7 节。
+后续命令沿用 `instance`；实例是用户级全局对象，实例名和容器 id 不参与任何指纹，
+镜像 digest 同时进方案指纹和节点签名。`scheme` / `scheme --lock` 在导出的命令末尾加
+`--image <digest>`，目标机器按 digest 准备镜像；规则见
+[BUILD-IMAGES.md](BUILD-IMAGES.md) §7、§8。
 
 `tools` 按版本列，不按名字做 key，同名工具可以有多条；它是上次构建的解析结果，
 不写进 `components` / `bindings`，也不参与方案指纹。`--lock` 复用其中
@@ -212,9 +213,9 @@ CLI 显式选择整体覆盖 line + version，不会留下跨线组合。只有�
 7. 写完成标记 `.phprt/<产品>-<补丁>/.phprt-installed`。
 8. 更新 `state.json`。
 
-`add` 只把组件写进方案（待安装）；`remove` 改状态并删掉该组件的 `conf.d` ini（PHP），
-让它在下次启动时不再加载。全新项目上的 `add` / `remove` 会先把当前系列的默认集
-seed 进 state。
+`add` 把组件写进方案并立即增量构建；`remove` 改状态并删掉该组件的产物和 `conf.d`
+ini（PHP），静态组件要和产品一起重编。全新项目上的 `add` / `remove` 会先把当前系列的
+默认集 seed 进 state。
 
 `--disable-default-component` 从方案里扣除默认组件：首次 install 时影响
 `default_components`，已有 state 时从 `state.components` 移除。它不修改 bundle，也不做

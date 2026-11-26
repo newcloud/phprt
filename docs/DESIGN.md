@@ -68,11 +68,13 @@ v3 把它们拆开，同时把“只服务 PHP”推广成“产品 / 组件 / �
 
 Tool / Toolchain 不新增层：Tool 的 recipe 在 `recipes/tools/`、源码版本仍走
 `catalog.toml`，构建产物放在 `build/tools/`（可重建缓存，不进 state 的产品身份）；
-Toolchain 是产品 recipe 的字段，只探测和合并参数。镜像线放在
-`recipes/images.toml`，镜像部分待实施；同一文件里的 `[package_maps.*]` 现在也服务
-宿主模式的安装提示，不改变这四层，见 [TOOLS.md](TOOLS.md)、[IMAGE.md](IMAGE.md)
-和 [HOST-COMMANDS.md](HOST-COMMANDS.md)。用户侧只查闭包组件主线的补丁，维护者做全量
-更新，见 [CATALOG-MODEL.md](CATALOG-MODEL.md) 和 [CATALOG-UPDATE.md](CATALOG-UPDATE.md)。
+Toolchain 是产品 recipe 的字段，只探测和合并参数。构建环境（`phprt buildimages`）
+是执行层，不进这四层，见 [BUILD-IMAGES.md](BUILD-IMAGES.md)；`recipes/images.toml`
+只放镜像家族 `[families.*]` 和包名映射 `[package_maps.*]`，后者同时服务宿主模式的
+安装提示，见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。把安装树产出为运行镜像仍是方案，
+见 [plan/RUNTIME-IMAGE.md](plan/RUNTIME-IMAGE.md)。用户侧只查闭包组件主线的补丁，
+维护者做全量更新，见 [CATALOG-MODEL.md](CATALOG-MODEL.md) 和
+[CATALOG-UPDATE.md](CATALOG-UPDATE.md)。
 
 ## 4. 三个核心概念
 
@@ -288,7 +290,7 @@ src/
 ├── version.rs    版本区间比较（tool / toolchain 共用）
 ├── layout.rs     源码 / 安装路径
 ├── sources.rs    下载清单
-└── config.rs     下载 / catalog 交互 / rpath 配置
+└── config.rs     下载 / catalog 交互配置
 
 crates/
 ├── buildimages/  OCI 镜像拉取 / 解包、用户级缓存、libcontainer 实例与 exec（BUILD-IMAGES.md）
@@ -297,8 +299,7 @@ crates/
 ├── extract/      解压、原子目录、路径安全
 ├── build/        命令执行、签名、日志、产物检查
 ├── source/       下载清单类型
-├── ui/           进度显示
-└── rpath/        rpath 设置（oxipatch 库 / patchelf 命令双后端，见 RPATH.md）
+└── ui/           进度显示
 
 recipes/
 ├── products/<产品>/<系列>.star
@@ -348,33 +349,48 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 
 ## 14. 子文档
 
+索引按状态分组。**现行文档只描述已经实现的行为，不得把 `plan/` 里的内容当作已实现
+引用**；方案文档在落地前只作设计依据。
+
+### 14.1 现行
+
 | 文档 | 内容 |
 | --- | --- |
 | [CLI.md](CLI.md) | 子命令、`产品@系列`、`--component`、`--dep`、错误与退出码 |
 | [CONTRACT.md](CONTRACT.md) | recipe 字段、ctx、`LINES`、`PRODUCT_LINES`、profile、bundle、targets |
 | [PRODUCT.md](PRODUCT.md) | 产品共享 profile、工具版本区间、toolchain 档位、安装后动作、入口模板 |
-| [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / build/tools、同名工具多版本、tool-sig、toolchain 档位与镜像筛选 |
+| [TOOLS.md](TOOLS.md) | 构建期 Tool 与 Toolchain：host-first / build/tools、同名工具多版本、tool-sig、toolchain 档位与构建镜像里的编译器 |
 | [HOST-COMMANDS.md](HOST-COMMANDS.md) | 宿主缺命令时的安装提示：包名映射、包管理器识别、聚合与输出 |
+| [BUILD-IMAGES.md](BUILD-IMAGES.md) | 用 OCI 镜像构建：`buildimages` 命令、镜像缓存、全局实例、锁与删除、运行库差异 |
 | [TARGETS.md](TARGETS.md) | `--targets`、target 声明、默认值、state/scheme 与构建身份 |
 | [SOLVER.md](SOLVER.md) | 选线、依赖线交集、依赖边、feature 并集 |
 | [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |
-| [STATE.md](STATE.md) | state.json、bindings、line/version |
+| [STATE.md](STATE.md) | state.json、bindings、line/version、构建环境记录 |
 | [LOCK.md](LOCK.md) | 解析顺序、`--lock`、`update`、`scheme --lock`、catalog 旧补丁保留 |
 | [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
 | [CATALOG-UPDATE.md](CATALOG-UPDATE.md) | 上游版本查询、每组件 upstream star 脚本、catalog 写回与备份、sha256 获取 |
 | [CATALOG-MODEL.md](CATALOG-MODEL.md) | catalog 文件、两类使用者、用户侧主线补丁检查、交互与写回 |
 | [EXTRACT.md](EXTRACT.md) | 解压顺序、目录布局、格式、原子解压、安全与失败 |
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
-| [CONTAINER.md](CONTAINER.md) | 容器构建：原镜像、长驻容器、复用与重建、检查点与主线文件、`--stop-after`、podman / docker / kiri（待实施方案） |
-| [RPATH.md](RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收（待实施方案） |
-| [IMAGE.md](IMAGE.md) | 镜像线（`recipes/images.toml`、gcc/glibc facts、包名映射、`bootstrap`/`packages`、`--buildbyimage`）、容器化构建、OCI 镜像（入口与配置声明、文件清单、base 同源、gzip 层与可复现、compose 运行提示）、裸镜像实测记录（待实施，代码未实现） |
-| [../BUILD-IMAGES.md](../BUILD-IMAGES.md) | 用 OCI 镜像构建：`buildimages` 命令、镜像缓存、全局实例、锁与删除、运行库差异 |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
 | [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
 | [FLOW.md](FLOW.md) | install / add / remove / scheme 的流程、判定矩阵、交互、`--force`、ini 备份 |
-| [GLOSSARY.md](GLOSSARY.md) | 名词字典：三层对象、line/补丁、mode / fold / standalone、闭包、state 与标记 |
-| [GENERIC.md](GENERIC.md) | 通用化设计的完整走查；与本文冲突时以本文和 CONTRACT.md 为准 |
+| [GLOSSARY.md](GLOSSARY.md) | 名词字典：三层对象、line/补丁、mode / fold / standalone、闭包、构建环境、state 与标记 |
+
+### 14.2 方案（未实现）
+
+| 文档 | 内容 |
+| --- | --- |
+| [plan/RUNTIME-IMAGE.md](plan/RUNTIME-IMAGE.md) | 把安装树产出为运行镜像：入口、配置覆盖、文件清单、runtime base 同源、OCI 输出、compose、`phprt build` |
+| [plan/RPATH.md](plan/RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收 |
+
+### 14.3 记录
+
+| 文档 | 内容 |
+| --- | --- |
+| [notes/GENERIC.md](notes/GENERIC.md) | 通用化设计的完整走查；与本文冲突时以本文和 CONTRACT.md 为准 |
+| [notes/BUILDIMAGES-SPIKE.md](notes/BUILDIMAGES-SPIKE.md) | youki / libcontainer 构建环境的一次性验证记录：方法、结果、踩坑与实现要求 |
 
 ## 15. 验收
 

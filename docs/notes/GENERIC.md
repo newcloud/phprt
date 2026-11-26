@@ -1,5 +1,8 @@
 # 通用化构建
 
+状态：设计走查记录。通用化模型已经落地；与现行文档冲突时以
+[DESIGN.md](../DESIGN.md)、[CONTRACT.md](../CONTRACT.md) 为准。
+
 本文回答一个问题：怎样把 phprtv3 从“PHP 专用构建器”推广成能构建 nginx、CPython
 这类产品的通用工具。设计不保留旧命令和旧 recipe 布局的兼容层：所有产品统一写成
 `产品@系列`，一条命令只处理一个产品；PHP 不再是默认产品，也不引入默认版本或当前
@@ -19,8 +22,8 @@
 上游 `configure --help` 核对。
 
 本文是通用化的完整走查。PHP 和 nginx 已经按此落地；CPython 仍是示例，用来验证
-产品模型不依赖 autoconf/make 的固定组合。字段和命令以 [CONTRACT.md](CONTRACT.md)、
-[CLI.md](CLI.md)、[PRODUCT.md](PRODUCT.md) 为准；产品级工具和安装后动作以
+产品模型不依赖 autoconf/make 的固定组合。字段和命令以 [CONTRACT.md](../CONTRACT.md)、
+[CLI.md](../CLI.md)、[PRODUCT.md](../PRODUCT.md) 为准；产品级工具和安装后动作以
 PRODUCT.md 为准。
 
 ## 1. 现在哪些地方是 PHP 专用的
@@ -164,7 +167,7 @@ PHP 的 `modules` / `ini` / `origin` 不再是通用字段：
 | CPython | `native` | CPython 构建完成后，用产品自己的解释器编 C 扩展，装进 `site-packages` |
 
 所以 profile 不能只写“static/shared”，而要声明**策略**和**步骤模板**。下面是 PHP 的
-`products/php/_profile.star`（节选，完整内容见 [PRODUCT.md](PRODUCT.md) §2）：
+`products/php/_profile.star`（节选，完整内容见 [PRODUCT.md](../PRODUCT.md) §2）：
 
 ```python
 PROFILE = product_profile(
@@ -266,7 +269,7 @@ profile 字段的含义：
 
 | 字段 | 说明 |
 | --- | --- |
-| `tools` | 产品总是需要的宿主机命令；可带最低版本，详见 [PRODUCT.md](PRODUCT.md) |
+| `tools` | 产品总是需要的宿主机命令；可带最低版本，详见 [PRODUCT.md](../PRODUCT.md) |
 | `post_install` | 安装后动作：`ensure_dir` / `write_file` / `copy_ca_bundle` / `write_component_ini` |
 | `modes` | 产品支持的挂载方式 → `mode(strategy, steps, artifacts, configure)`；`fold` 表示组件只贡献参数/源码，`standalone` 表示产品之后单独构建 |
 | `modes.*.configure` | fold 时追加到产品 `configure` 的参数模板；`{component_source}` 是组件源码根 |
@@ -277,7 +280,7 @@ profile 字段的含义：
 | `register` | 组件装好后怎么让产品看见它：登记动作名，与 `post_install` 的 `write_component_ini(register=...)` 对应 |
 | `runtime` | 运行时库目录和 rpath 模板 |
 | `verify` / `verify_modules` | 产品启动验证；`verify_modules` 可以检查组件是否真的加载 |
-| `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件（如 `entry.sh`）；PHP 的 `cli` target 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；有 targets 的产品把入口放在 target 里（见 [TARGETS.md](TARGETS.md)）；nginx 不生成，CPython 可以是 `python3.5` |
+| `entry` / `entry_template` | 项目入口名模板和产品目录下的模板文件（如 `entry.sh`）；PHP 的 `cli` target 用 `myphp-<系列>`，只有一个 PHP 系列时额外生成 `myphp`；有 targets 的产品把入口放在 target 里（见 [TARGETS.md](../TARGETS.md)）；nginx 不生成，CPython 可以是 `python3.5` |
 | `env` | 产品专用环境变量；PHP 的 `PHP_AUTOCONF` 不再污染其他节点 |
 | `audit` | 选项清单来源：`php-config-m4` / `configure-help` / `none` |
 

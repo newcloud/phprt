@@ -1,6 +1,6 @@
 # RPATH 设置：oxipatch / patchelf 双后端
 
-本文是待实施的方案。实施后 BUILD.md、PRODUCT.md 等按第 9 节的清单同步更新；
+状态：方案，未实现。实施后 BUILD.md、PRODUCT.md 等按第 9 节的清单同步更新；
 文档与代码冲突时以代码实际行为为准。
 
 ## 1. 背景
@@ -13,7 +13,7 @@ patchelf --set-rpath <rpath> --force-rpath <file>
 
 `patchelf` 因此出现在 php / nginx 产品 profile 的 `tools` 清单里。它优先用宿主机；
 宿主版本不满足时，phprt 会从 `recipes/tools/patchelf.star` 构建到 `build/tools/`，
-`patchelf_rpath()` 用的是解析到的那一版（见 [TOOLS.md](TOOLS.md) 第 3 节）。
+`patchelf_rpath()` 用的是解析到的那一版（见 [TOOLS.md](../TOOLS.md) 第 3 节）。
 
 目标：默认不依赖任何外部命令，且设置结果与 `patchelf --set-rpath --force-rpath`
 在加载器可见语义上完全一致；同时保留 patchelf 命令作为可选后端，一行配置即可切换。
@@ -106,7 +106,7 @@ patchelf 是多年生产验证的工具。保留双后端 = 风险对冲：默�
 GreatSQL 的做法：下载固定版本 patchelf 源码包，在编译环境里自己
 `configure && make && make install`，不依赖系统包。对我们而言这能把
 「patchelf 后端」从「要求宿主机已安装」升级为「phprt 自带构建」。工具源码
-构建管线已由 [TOOLS.md](TOOLS.md) 设计（待实施），但 patchelf 的源码 recipe
+构建管线见 [TOOLS.md](../TOOLS.md)（已实现），但 patchelf 的源码 recipe
 不在那次的第一个真实用户里；还要接 downloads/ 缓存、sha256 校验、多架构编译。
 当前双后端已覆盖风险（oxipatch 默认 + 系统 patchelf 可选回退），方案 C 只
 在「oxipatch 出现修不好的边界问题且宿主机不允许装 patchelf」时才有价值，
@@ -125,7 +125,7 @@ Fedora Linux 43（dnf）上执行：
   sudo dnf install patchelf
 ```
 
-安装命令由 [HOST-COMMANDS.md](HOST-COMMANDS.md) 的同一个生成器给出，不在这里写死
+安装命令由 [HOST-COMMANDS.md](../HOST-COMMANDS.md) 的同一个生成器给出，不在这里写死
 发行版文案。
 
 ## 8. ARM 兼容

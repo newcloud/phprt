@@ -1,8 +1,8 @@
 # 宿主缺命令：安装提示
 
 本文描述的行为已经实现（`src/host_commands.rs`、`recipes/images.toml`）。改行为时
-同步 README、CLI.md、OUTPUT.md、FLOW.md、TOOLS.md、IMAGE.md、BUILD.md、
-RPATH.md 和 DESIGN.md；本文与代码冲突时以代码实际行为为准。
+同步 README、CLI.md、OUTPUT.md、FLOW.md、TOOLS.md、BUILD.md、BUILD-IMAGES.md
+和 DESIGN.md；本文与代码冲突时以代码实际行为为准。
 
 宿主缺少构建命令时，phprt 不再只说“缺 make”，而是把本次方案缺的命令收齐，
 按发行版拼成一条可以直接复制的安装命令。只提示，不执行。
@@ -48,10 +48,10 @@ error: 探测编译器 gcc 失败: 跑不起来 gcc: No such file or directory (
 ## 3. 数据：`recipes/images.toml` 的 `[package_maps.*]`
 
 包名映射是数据，不写进 Rust：发行版改包名、拆包、EOL 都只改这里，不用重新编译
-phprt。这张表和镜像模式的自动安装共用一份，镜像部分见 [IMAGE.md](IMAGE.md) §3.1。
+phprt。这张表和构建镜像实例里的自动装包共用一份，见
+[BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
 
-同一个文件里还有 `[images.*]` 镜像条目（镜像模式待实施，见 IMAGE.md）。宿主提示只读
-`[package_maps.*]`。TOML 的裸键不能含 `+`，`g++` / `c++` / `clang++` 要加引号：
+TOML 的裸键不能含 `+`，`g++` / `c++` / `clang++` 要加引号：
 
 ```toml
 # 命令名 -> 发行版包名，按包管理器分组。
@@ -104,11 +104,10 @@ autoconf   = "autoconf"
   （`$CXX`，缺省 `g++`）；`CC` / `CXX` 可以指向 clang，所以 clang 也有条目。
 - **未映射 = 不安装。** 不拼进安装命令，单列一行让用户自己确认包名。宁可少给一条
   命令，也不给出装不上的包名。
-- `package_maps` 下只允许 `apt` / `dnf` 两张表；其它表名报错，不做通用抽象
-  （同 IMAGE.md §3.1）。某张表可以不写，缺的表按全部未映射处理。
+- `package_maps` 下只允许 `apt` / `dnf` 两张表；其它表名报错，不做通用抽象。
+  某张表可以不写，缺的表按全部未映射处理。
 - 值必须是非空字符串；重复键由 TOML 自己报错。
 - 文件不存在时映射为空，行为等同“全部未映射”，不报错（`--recipes` 指向别处时）。
-- 现在只读 `[package_maps.*]`；`[images.*]` 的校验归镜像模式，实施时再加。
 - 同一份 `Env` 还把 `id` / `family` 注入 recipe 的 `ctx["host"]`，recipe 据此选跟
   系统路径有关的构建参数（`dep/openssl.star` 的 `--openssldir`），见
   [CONTRACT.md](CONTRACT.md) 的 ctx 一节。
@@ -299,7 +298,7 @@ toolchain
 | --- | --- |
 | `src/recipe.rs` 的 `feature_available` | §5.3 的两行提示 |
 | BUILD.md §7 | 说明“缺什么由 phprt 生成命令”，示例用本机的真实输出 |
-| RPATH.md §3 / §7 的 patchelf 提示 | 实施 RPATH.md 时调用同一生成器 |
+| `docs/plan/RPATH.md` §3 / §7 的 patchelf 提示 | 实施该方案时调用同一生成器 |
 
 命令模板只有一份：
 
@@ -308,8 +307,9 @@ toolchain
 | apt | `sudo apt-get install <包...>` |
 | dnf | `sudo dnf install <包...>` |
 
-镜像模式用同一张映射表，但由宿主在容器里执行：`podman exec -u 0 <容器> <pm> install ...`，
-不写 `sudo`，apt 先 `update`；模板见 IMAGE.md §4.3。本表只管宿主提示。
+构建镜像（`buildimages`）复用同一张映射表：安装命令去掉 `sudo`、补 `-y`，
+apt 先 `update`，在实例里执行；规则见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
+本表只管宿主提示。
 
 ## 8. 文件清单
 
@@ -321,7 +321,7 @@ toolchain
 | `src/main.rs` | `prepare_order` 始终 lenient；聚合与报错；`plan` 把结果传进 `Sim` |
 | `src/render.rs` | `Sim` 加 `host_commands`；文本段；`toolchain` 段显示 `(缺少)` |
 | `src/recipe.rs` | `feature_available` 改用生成器 |
-| `recipes/images.toml` | 新增：只有 `[package_maps.apt]` / `[package_maps.dnf]` |
+| `recipes/images.toml` | `[package_maps.apt]` / `[package_maps.dnf]`；镜像家族 `[families.*]` 见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §9 |
 | `docs/*` | 第 7 节和 DESIGN.md 索引列出的同步 |
 
 ## 9. 验收
@@ -409,12 +409,12 @@ error: 宿主 make 3.8 不满足 >= 4.0，catalog 也没有可用版本
 - 未知 pm 不产生 `install`。
 - 宿主 ctx：`id` / `family` 注入 recipe。
 
-### 9.7 容器/最小系统
+### 9.7 构建实例 / 最小系统
 
-容器里还有三件事它管不了（实测见 [IMAGE.md](IMAGE.md) §4.6、perl 拆包详见 §4.7）：
+实例里还有三件事它管不了（实测见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1、§9）：
 
-- **Debian 基础镜像没有 `sudo`**：容器里以 root 跑时去掉 `sudo`，宿主提示保持原样。
-- **全新容器先 `apt-get update`**：否则 `apt-get install` 报 `Unable to locate package`。
+- **Debian 基础镜像没有 `sudo`**：实例里以 root 跑时去掉 `sudo`，宿主提示保持原样。
+- **全新实例先 `apt-get update`**：否则 `apt-get install` 报 `Unable to locate package`。
   提示里不带 `update`，那是包管理器状态，不是缺命令。
 - **Debian / Ubuntu 的 `perl-base` 有 `/usr/bin/perl` 却缺 `FindBin`**：现在由
   `openssl.star` 声明 `feature_checks = ["findbin"]`，检查写在 `recipes/tools/perl.star`

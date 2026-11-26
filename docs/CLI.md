@@ -72,10 +72,6 @@ default_answer = "y"
 全局模式对应 `--build-dir`/`global_build_dir`、`--backup-dir`/`global_backup_dir`。本地模式的相对路径按项目根解析；
 全局模式的相对路径按 `$HOME` 解析。
 
-容器构建用的运行时只由 `phprt.toml` 的 `container_runtime` 指定，没有命令行参数；
-取值 `podman` / `docker` / `kiri`。不写时依次试 `podman` → `docker` → `kiri`，
-写了就只用它，连不上直接报错。
-
 ### 主线补丁检查
 
 `install` / `update` / `add` / `remove` 在真正下载或编译前询问一次；只查本次方案用到的
@@ -173,10 +169,15 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `remove <产品>@<系列> <组件> [--force] [--lock]` | 移出方案并删掉产物；静态组件重编 | 是 |
 | `audit <产品>@<系列> [--json]` | 对照上游选项清单检查 recipe 的处置 | 否 |
 | `catalog update [--dry-run] [--fill-sha256] [组件名...]` | 查上游最新补丁，写进 `catalog.toml`（写前备份） | 否（改 catalog.toml） |
-| `list_oci_images` | 打印镜像 catalog：线名、镜像、GCC、glibc、包管理器（待实施，见 [IMAGE.md](IMAGE.md)） | 否 |
-| `build <产品>@<系列> [--buildbyimage [镜像]]` | 构建并输出 OCI 镜像（待实施，见 [IMAGE.md](IMAGE.md)、[CONTAINER.md](CONTAINER.md)） | 否 |
+| `buildimages add <引用> [--name <名字>] [--offline]` | 拉取并缓存 OCI 构建镜像 | 否（用户级缓存） |
+| `buildimages list` | 列出本地缓存的镜像和实例 | 否 |
+| `buildimages use <产品>@<系列> --image <镜像> [--instance-name <名字>] [--force]` | 用指定镜像新建或复用实例 | 是 |
+| `buildimages use <产品>@<系列> --instance <名字> [--force]` | 复用已有实例 | 是 |
+| `buildimages use <产品>@<系列> --host [--force]` | 回到宿主构建 | 是 |
+| `buildimages rm <镜像> [--force]` | 删除镜像缓存；还有实例使用时拒绝 | 否 |
+| `buildimages rm-instance <实例> [--force]` | 删除构建实例 | 否 |
 
-`install` / `update` / `plan` / `build` 另外支持：
+`install` / `update` / `plan` 另外支持：
 
 | 参数 | 说明 |
 | --- | --- |
@@ -184,11 +185,13 @@ error: install 只接受一个产品，例如 phprt install php@8.5；多个产�
 | `--dep <NAME=LINE>` | 绑定依赖库版本线；可重复 |
 | `--disable-default-component <NAME>` | 禁用该产品系列的默认组件；可重复 |
 | `--targets <SPEC>` | 产品构建目标；如 `cli`、`cli,fpm=user:www-data,group:www-data`。见 [TARGETS.md](TARGETS.md) |
-| `--buildbyimage [镜像]` | 进入镜像构建模式；空值用默认线，写线名用 catalog，写完整 ref 用本地镜像。`install` / `build` / `plan`（待实施，见 [CONTAINER.md](CONTAINER.md)） |
-| `--stop-after <检查点>` | 在指定检查点产出之后退出：`packages`（装包命令）/ `mainline`（依赖主线）/ `download` / `extract`；退出码 0，不写安装 state。`install` / `add` / `remove` / `update` / `build`（待实施） |
 
 持久化组件方案用 `add` / `remove`；`install --component` 只影响这一次构建。
 `--targets` 在 `install` / `update` / `plan` 上接收；`add` / `remove` 沿用 state 里的选择。
+
+`install` / `update` / `add` / `plan` 还接受构建环境参数：`--image <镜像>`、
+`--instance <名字>`、`--instance-name <名字>`。本地没有镜像时自动拉取，选择写进
+state，后续命令沿用；`plan` 只预览不写 state。见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §4.4。
 
 `install` / `plan` / `add` / `remove` 还支持 `--lock`：按 state 记录的实际补丁解析当前方案，
 只锁当前闭包里的节点，不写状态。`state.tools` 里记录过的 built 工具版本也参与锁定，
@@ -487,6 +490,8 @@ phprt install php@8.5 'curl=mode:static,dep:libcurl[ssl],gd=mode:static,feature:
 - 用户用 `--dep` 钉的依赖线，写成命令行上的 `--dep NAME=LINE`；
 - **不含**补丁号、解析出的依赖线交集、feature 并集、展开后的 configure 参数
   （targets 只导出选择，不展开 flags）；要连补丁一起复制用 `scheme --lock`。
+- 构建环境是 OCI 实例时，命令末尾加 `--image <digest>`，并打印准备镜像的注释；
+  实例名不导出。见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §7。
 
 导入就是 `install` 的第二个位置参数，并带同样的 `--targets`：
 
@@ -591,48 +596,31 @@ phprt install nginx@1.29
 - 需要系统 gcc / g++ / make / binutils / pkg-config / patchelf / m4 / perl；
   产品声明了 `toolchain` 时 gcc / g++ 必须落在声明的档位里。autoconf 和缺的纯
   Perl 模块由 phprt 自己准备：宿主满足用宿主，否则从 `recipes/tools/` 构建到
-  `build/tools/`。镜像构建时这些工具按 [IMAGE.md](IMAGE.md) 的包名映射在容器里
-  自动安装。
+  `build/tools/`。用构建镜像（`buildimages`）时，缺的工具按
+  [HOST-COMMANDS.md](HOST-COMMANDS.md) 的包名映射在实例里自动安装，见
+  [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
 
-## 镜像（待实施）
+## buildimages
 
-镜像 catalog、长驻容器和 OCI 产出的完整方案见 [IMAGE.md](IMAGE.md) 与
-[CONTAINER.md](CONTAINER.md)。
+构建环境（用 OCI 镜像里的工具编译）的选择和缓存，完整说明见
+[BUILD-IMAGES.md](BUILD-IMAGES.md)。
 
 ```bash
-phprt list_oci_images
-phprt install php@8.5 --buildbyimage
-phprt install php@8.5 --buildbyimage debian13
-phprt install php@8.5 --buildbyimage docker.io/library/debian:13
-phprt install php@8.5 --stop-after packages
-phprt install php@8.5 --stop-after mainline
-phprt build php@8.5
+phprt buildimages add quay.io/fedora/fedora:43 --name fedora43
+phprt install php@8.5 --image fedora43 --instance-name php-build
+phprt buildimages use php@8.5 --host
+phprt buildimages list
+phprt buildimages rm-instance php-build --force
+phprt buildimages rm fedora43
 ```
 
-- `list_oci_images` 读 `recipes/images.toml`，打印线名、镜像、GCC、glibc、包管理器；
-  不联网、不拉镜像。
-- `--buildbyimage` 空值用 bundle 的 `[image].line`；写 catalog 线名用该条目的
-  image / digest / pm / gcc / glibc；写完整镜像 ref 当作用户自己 pull 的镜像。
-- 原镜像必须在本地。没有就报错提示先 pull，phprt 不自动拉。
-- phprt 从原镜像起一个长期运行的容器，把工具装在里面，state 记容器名和 id；
-  之后的 `install` / `add` / `remove` / `update` 直接 `exec` 进去，不重装工具。
-  容器被删了自动重建，并提示工具会重装一遍。
-- 结束时打印容器还在运行，以及 `podman kill … && podman rm …` 的删除命令。
-- 不生成工具链镜像、Dockerfile、compose。
-- 流程是四个检查点：`packages`（生成装包命令）→ `mainline`（复检工具、写主线）
-  → `download`（宿主 catalog 更新 + 下载）→ `extract`（解压）→ 容器里编译。
-  `--stop-after <检查点>` 在产出之后退出，把控制权交回宿主。
-- `--stop-after mainline` 写 `.phprt/plan/<产品>-<系列>.json`：产品、系列、每个节点的
-  版本线 / 补丁 / URL / sha256，以及每个工具的最终来源（`image` / `source`）。
-  宿主下次运行优先读它，`resolution_digest` 对不上才重新解析。
-- 打断之后重跑同一条命令（或不带参数）就继续；每个检查点做一次幂等检查。
-- 产品声明了 `toolchain` 时，catalog 线用条目的 `gcc` 预检；用户给的镜像在容器里
-  跑 `gcc --version` 验证，不满足报错。
-- `glibc` 只打印“产物要求运行系统 glibc >= X”的提示，不做构建判断。
-- 镜像里缺的 make / perl / patchelf 等按 `[package_maps.<pm>]` 和
-  `[images.*].packages` 装包；装完复检一次，仍缺就报错，不再装第二轮。
-- `plan --json` 的 `image` 段给出原镜像、digest、容器名和状态，`builder` 段给出
-  每个工具的状态和要装的包。
+- `add` 拉取镜像到用户级缓存；`--offline` 只用本地缓存，`--name` 起别名。
+- `install` / `update` / `add` / `plan` 接受 `--image` / `--instance` /
+  `--instance-name`；前三个把选择写进 state，后续命令沿用，`plan` 只预览不写。
+- `use` 只改选择，不马上编译；已经装过时加 `--force`，下次 `install` 才会重编。
+- `rm` / `rm-instance` 都是显式删除，没有 gc。`rm` 在还有实例使用该镜像时直接拒绝，
+  `--force` 不能绕过；只有项目 state 引用时 `--force` 可删。`rm-instance` 被 state
+  引用时默认拒绝，`--force` 才删。
 
 ## audit
 

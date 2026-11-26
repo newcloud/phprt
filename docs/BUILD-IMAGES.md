@@ -1,7 +1,8 @@
 # OCI 构建环境（`phprt buildimages`）
 
-**本文是独立文档，不参与 `docs/` 设计文档体系，也不修改已有文档。**
-已有文档里基于 podman / docker 的容器方案与本文无关；本文只描述当前实现。
+状态：已实现。本文描述构建环境（用 OCI 镜像里的工具编译）；把安装树产出为运行镜像
+仍是方案，见 [plan/RUNTIME-IMAGE.md](plan/RUNTIME-IMAGE.md)。与代码冲突时以代码
+实际行为为准。
 
 ---
 
@@ -23,9 +24,11 @@ OCI 构建环境把工具装进一个由 phprt 自己管理的 rootless 容器�
 ## 2. 前置条件
 
 - Linux + systemd（libcontainer 依赖 systemd 管理 cgroup）。
-- cgroup v2。
-- 普通用户可以创建 user namespace：`/etc/subuid`、`/etc/subgid` 有当前用户的
-  映射，并且 `newuidmap` / `newgidmap` 可用。
+- cgroup v2（已验证；libcontainer 也编进了 v1 支持，但未实测）。
+- 普通用户可以创建 user namespace；实例只映射当前 uid/gid（容器内是 0）。
+  多数发行版无需额外配置；如果报 user namespace / id mapping 错误，确认
+  `/etc/subuid`、`/etc/subgid` 有当前用户的映射，并且 `newuidmap` /
+  `newgidmap` 在 PATH 上。
 - 镜像必须是 Linux、与宿主同架构，并且带 `dnf` 或 `apt-get`；已实测 Fedora 43
   （`quay.io/fedora/fedora:43`，dnf5）和 Debian 13（`docker.io/library/debian:13`，apt）。
 - Debian / Ubuntu 需要 apt 沙箱设置；phprt 按镜像家族自动写进实例，见 §9。
@@ -104,7 +107,8 @@ phprt buildimages use <产品>@<系列> --host
 ```
 
 - `--instance` 选择已有的全局实例；`--image` 选择镜像，`--instance-name` 给
-  新实例起名。`--image` 显式给出且本地没有时自动拉取。
+  新实例起名。`--image` / `--instance` / `--host` 三选一，`--instance-name` 只能
+  和 `--image` 一起用。`--image` 显式给出且本地没有时自动拉取。
 - 把选择写进 `.phprt/<产品>-<系列>/state.json` 的 `build` 段。
 - 只写选择，不创建容器；下一次 `install` / `plan` 才建实例。
 - 该系列还没有方案时，会按 bundle 的默认组件初始化一份方案；效果和第一次
@@ -124,19 +128,22 @@ phprt plan php@8.5 --instance fedora43mybuild_os
 ```
 
 - `--image <digest|digest前缀|别名|引用>`：新建实例的基础镜像；显式给出且本地没有时自动
-  拉取，`--offline` 时报错。
+  拉取；`install` / `update` / `add` 加 `--offline` 时报错（`plan` 没有 `--offline`）。
 - `--instance <名字>`：使用已有全局实例，必须存在。可以同时给 `--image`，但
   digest 必须一致。
 - `--instance-name <名字>`：新建实例时使用的名字；同名但 digest 不同直接报错。
 - state 里已经有实例时，后续命令不需要再带参数；实例 rootfs 在时不要求镜像
   缓存，只有实例 rootfs 丢失时才解析/拉取镜像重建。
 - `install` / `add` / `update` 会把选择写进 state，然后进入容器执行。
-- `plan` 只预览：不写 state、不装构建工具；文本输出会先显示命中的镜像家族和
-  设置，`--json` 不输出这一行。
+- `plan` 只预览：不写项目的 `state.json`、不装构建工具；但会像 `install` 一样创建或
+  复用实例，再把命令转发进去取结果。文本输出会先显示命中的镜像家族和设置，
+  `--json` 不输出这一行。
 - 已安装的系列换镜像时，`install` 需要 `--force`；`add` / `update` 没有这个语义，
   会报错，需先用 `buildimages use --force` 或 `install --force`。
-- `--downloads` 仍然只下载源码，不触发工具安装。
-- `--offline` 下不拉镜像、不装包；镜像和工具必须已经准备好。
+- `install` / `update` / `add` 的 `--downloads` 仍然只下载源码，不触发工具安装；
+  `plan` 不接受 `--downloads`。
+- `install` / `update` / `add` 的 `--offline` 下不拉镜像、不装包；镜像和工具必须已经
+  准备好。
 
 ### 4.5 `phprt buildimages rm` / `rm-instance`
 
@@ -170,7 +177,7 @@ phprt buildimages rm-instance <名字> [--force]
 │   ├── image.json                         # ref / digest / 层清单 / 平台
 │   └── modes.json                         # 解包时为复制临时放宽的 mode（files / dirs）
 └── instances/<实例 id>/
-    ├── instance.json                      # name / image / owner / projects / 挂载 / 二进制指纹
+    ├── instance.json                      # name / image / owner / projects / 挂载 / phprt 二进制标识
     ├── .lock                              # 实例锁；同一实例串行使用
     └── bundle/
         ├── config.json                    # OCI runtime spec
@@ -179,6 +186,9 @@ phprt buildimages rm-instance <名字> [--force]
 
 新实例 id 是 `phprt-<名字>`；旧实例仍保留旧 id
 `phprt-<项目hash8>-<产品>-<系列>-<digest12>`，第一次使用时收编成用户可见名字。
+`instance.json` 里的二进制标识由 phprt 可执行文件的路径、大小和 mtime 组成；
+它或挂载列表变了，只重建运行时容器，rootfs 和已装工具保留。
+
 运行时状态（libcontainer 的容器状态、pid、notify socket）放在：
 
 ```text
@@ -221,8 +231,8 @@ rootfs 重新创建容器，工具不用重装。
   4. 实例没建过：从镜像复制 rootfs；建过：复用
   5. 项目切了：保留 rootfs，只重启运行时容器并换挂载
   6. 拿实例锁；同一实例同时只允许一个 phprt，第二个等待
-  7. 生成 OCI spec：项目根、download_dir、build_dir、内部目录、recipes（只读）、
-     /phprt、/etc/resolv.conf；共享宿主网络
+  7. 生成 OCI spec：项目根、download_dir、build_dir、内部目录、备份目录、
+     配置文件（只读）、recipes（只读）、/phprt、/etc/resolv.conf；共享宿主网络
   8. 创建 / 复用 libcontainer 实例（rootless + systemd cgroup）
   9. 探测 /phprt --version，确认二进制能在镜像里跑
  10. 把整条命令转发进容器
@@ -264,14 +274,14 @@ apt 镜像会先执行 `apt-get update`，并按 §9 的家族设置在实例里
 
 ---
 
-## 7. 签名与 `scheme --lock`
+## 7. 签名与 `scheme` 导出
 
-镜像 digest 会进构建签名：切换镜像后，已有节点会按签名重编，不会复用另一套
-libc 编出来的产物。实例名和容器 id 不进签名；同名实例换项目、容器重建都不触发
-重编。两个实例 digest 相同时互相切换也不会重编。
+镜像 digest 会进方案指纹和节点签名：切换镜像后，已有节点会按签名重编，不会复用
+另一套 libc 编出来的产物。实例名和容器 id 都不进指纹；同名实例换项目、容器重建都不
+触发重编。两个实例 digest 相同时互相切换也不会重编。
 
-`phprt scheme --lock` 会在导出的命令后面追加 `--image <digest>`，并打印一行准备
-镜像的注释：
+`phprt scheme`（带不带 `--lock` 都一样）会在导出的命令末尾追加 `--image <digest>`，
+并打印一行准备镜像的注释：
 
 ```text
 # 目标机器先准备镜像：phprt buildimages add quay.io/fedora/fedora:43

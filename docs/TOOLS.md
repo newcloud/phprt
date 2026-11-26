@@ -1,16 +1,18 @@
 # 构建工具与工具链（Tool / Toolchain）
 
-状态：已实现（Tool 与 Toolchain 的宿主模式；镜像执行仍见 [IMAGE.md](IMAGE.md)）。
+状态：已实现（Tool 与 Toolchain 的宿主模式；用 OCI 镜像执行见
+[BUILD-IMAGES.md](BUILD-IMAGES.md)）。
 本文定机制、字段和验收，与代码不一致时以代码实际行为为准。
 
 目标是把现在混在 `host_tools`、`profile.tools`、`Target.tools` 和普通 dep 里的
 构建期工具拆清楚：
 
 - **Tool**：patchelf、cmake、nasm、autoconf、bison、re2c 这类独立构建辅助程序。
-  优先用宿主机；宿主不满足时从 catalog 取源码构建，装到 `build/tools/`。
+  优先用宿主机；宿主不满足时从 catalog 取源码构建，装到 `build/tools/`。用构建镜像
+  时，下面的「宿主」都指实例 rootfs，见 §4.6。
 - **Toolchain**：gcc / g++ 这类基础编译环境。产品声明版本档位，每档可以带兼容
-  CFLAGS；Rust 只探测、选档、记录，不下载 gcc，也不启动容器。glibc / ld / binutils
-  不声明。
+  CFLAGS；Rust 只探测、选档、记录，不下载 gcc；执行环境由构建环境决定
+  （[BUILD-IMAGES.md](BUILD-IMAGES.md)）。glibc / ld / binutils 不声明。
 
 两者都不新建一套平行的构建管线：Tool 复用现有 dep 节点的下载、解压、构建、日志、
 签名和跳过逻辑；Toolchain 只做环境探测和参数合并。
@@ -323,9 +325,9 @@ recipe 的 `env` 里。
   节点，不影响无关节点。
 - `compiler` 取**实际编译工具的编译器**（产品 `CC` / `CXX`，缺省 `gcc` / `g++`），
   不能固定探测 `gcc`。
-- 宿主模式下就是宿主编译器版本；容器化后是所选镜像的 facts。工具目录跨产品共享，
-  不同编译器版本会触发工具重编；要避免抖动就把目录按 toolchain key 分开，
-  这件事留到容器方案落地时定。
+- 宿主模式下就是宿主编译器版本；用构建镜像时是实例里探测到的编译器版本。
+  工具目录跨产品共享，不同编译器版本会触发工具重编；要避免抖动就把目录按
+  toolchain key 分开（当前未做）。
 - Tool 不进入 `resolution_digest`；它不是版本解析的一部分。
 - Tool 不进入 scheme digest；它不是用户选择。
 
@@ -368,7 +370,7 @@ gcc / g++ 不是 Tool：它们是**宿主机提供的编译环境**，只做版�
 - 不能像 patchelf 一样下载一个可执行文件替换；
 - 它们决定 ABI、C 标准默认值；
 - 它们的作用范围是整次构建，不是单个节点；
-- 容器化时要按它们选择完整构建环境。
+- 构建镜像时要按它们核对实例里的编译器。
 
 glibc / ld / binutils **不声明**：它们跟随 gcc 所在的系统或镜像，版本一致兼容；
 它们只影响编译出的程序能否在目标系统上运行，不影响能不能编。
@@ -381,7 +383,8 @@ glibc / ld / binutils **不声明**：它们跟随 gcc 所在的系统或镜像�
 - 记录实际环境；
 - 不满足声明时报错（不下载、不安装、不回退）；命令不存在时附发行版安装命令，
   见 [HOST-COMMANDS.md](HOST-COMMANDS.md)；
-- 为未来镜像 catalog 提供同一份 `ToolchainFacts`，作为镜像筛选条件。
+- 用构建镜像时，对实例里的编译器产出同一份 `ToolchainFacts`，见
+  [BUILD-IMAGES.md](BUILD-IMAGES.md)。
 
 Toolchain 不提供可执行文件，不进 PATH，不参与安装。
 
@@ -522,26 +525,21 @@ toolchain = TOOLCHAIN,
 - Toolchain facts 写进产品 marker，供 `plan` / `audit` 展示，不参与 scheme 和
   `resolution_digest`。
 - 工具的签名另行处理：`tool-sig` 包含实际编译器版本，见 §3.7。
-- 容器化后原镜像 digest 进节点签名；容器 id 不进，规则见 [IMAGE.md](IMAGE.md) 第 3.4 节。
+- 用构建镜像时，原镜像 digest 进节点签名；实例名不进，规则见
+  [BUILD-IMAGES.md](BUILD-IMAGES.md) §7。
 
-### 4.6 镜像模式
+### 4.6 构建镜像
 
-- 宿主模式：只做断言和选档；不满足就报错。
-- 镜像模式：
-  - catalog 线：用条目的 `gcc` 匹配同一套档位区间，不匹配报错并列出满足的线；
-  - 用户自己 pull 的镜像：无法预检，容器起来后跑 `gcc --version` 验证。
-- **glibc 不参与判断**：镜像条目里的 glibc 只在选镜像和 `plan` 时提示
-  “产物要求运行系统 glibc >= X”。用户选这个镜像就代表接受这个运行下限。
-- 镜像里缺 make / perl / patchelf 等工具时，在容器里实际探测，由宿主
-  `podman exec -u 0` 装包；装完照常跑 `tools` 检查和 `feature_checks`，版本不满足
-  按现有逻辑报错。细节见 [IMAGE.md](IMAGE.md) 第 4.3 节和
-  [CONTAINER.md](CONTAINER.md) 第 5 节。
+- 工具解析仍在同一份 plan 里完成；命令在实例内执行，环境变量和顺序不变。
+- 实例里缺 make / perl / patchelf 等工具时，按 [HOST-COMMANDS.md](HOST-COMMANDS.md)
+  的包名映射生成安装命令，在实例里执行；装完照常跑 `tools` 检查和
+  `feature_checks`，版本不满足按现有逻辑报错。规则见
+  [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
 - bundle 继续只约束依赖版本线，不声明 toolchain。
 - 产品声明的 gcc 范围覆盖整次构建；bundle 里选的依赖线必须在这个范围内可编，
   这是 recipe / bundle 的验收责任。
-- 容器条目提供同一套 `ToolchainFacts`（gcc、triple 等）；不引入
-  `ContainerToolchain` 类型。构建执行器接收“环境”，本机还是容器对构建逻辑透明。
-- 本文不实现镜像执行、不引入 Docker/podman 依赖、不下载 gcc。
+- 本文不下载 gcc，也不引入 docker / podman 依赖；实例由 `crates/buildimages`
+  管理。
 
 ---
 
@@ -560,7 +558,6 @@ toolchain = TOOLCHAIN,
 | `docs/OUTPUT.md` | `plan --json` 的 `tools` / `toolchain` 字段 |
 | `docs/FLOW.md` | 下载前解析工具；工具构建失败不写 state；add/remove 不接收工具参数 |
 | `docs/DESIGN.md` | 第 14 节登记本文；四层数据补充 Tool / Toolchain |
-| `docs/IMAGE.md` | 第 3 节改为 `recipes/images.toml`：条目字段 `image` / `digest` / `pm` / `gcc` / `glibc`；gcc 是唯一构建筛选条件，glibc 只提示运行下限；新增 `[package_maps.apt]` / `[package_maps.dnf]`、`phprt list_oci_images`、`--buildbyimage [镜像]`；删除 `libc` 声明和 `--builder` |
 | `docs/ADD-RECIPE.md` | 新增 Tool recipe、添加 toolchain 档位的步骤 |
 | `docs/HOST-COMMANDS.md` | 宿主缺命令时的安装提示、`[package_maps.*]`、包管理器识别、聚合与输出 |
 | `AGENTS.md` / `README.md` | 简要说明 `recipes/tools/`、`build/tools/`、host-first、toolchain 档位 |
@@ -594,7 +591,8 @@ toolchain = TOOLCHAIN,
 
 ### 不在本文范围
 
-- 容器化构建、镜像 catalog、OCI 镜像；
+- 构建环境与运行镜像（见 [BUILD-IMAGES.md](BUILD-IMAGES.md)、
+  [plan/RUNTIME-IMAGE.md](plan/RUNTIME-IMAGE.md)）；
 - 下载或编译 gcc；
 - cmake / nasm 的源码 recipe（autoconf、patchelf 已有 `recipes/tools/` 下的真实用户）；
 - 节点级 CFLAGS 档位；节点级 gcc 约束只做断言，不带 flags；
@@ -700,5 +698,5 @@ phprt audit php@8.5
   重新探测。
 - Tool store 是否提供清理命令：当前不做 `phprt clean`，用户删 `build/` 即可。
 - patchelf 的源码 recipe：本次不写；等 rpath 后端确定后再决定是否需要。
-- 镜像 catalog 的包名映射会随发行版漂移：只维护验证过的条目，映射错了由工具检查
-  兜底，详见 [IMAGE.md](IMAGE.md)。
+- 包名映射会随发行版漂移：只维护验证过的条目，映射错了由工具检查兜底，详见
+  [HOST-COMMANDS.md](HOST-COMMANDS.md) 和 [BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。

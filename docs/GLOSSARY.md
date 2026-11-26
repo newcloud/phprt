@@ -87,7 +87,17 @@ configure 参数变了 → PHP 整个重编。`shared` → standalone → 只多
 | 完成标记 | 安装树里的 `.phprt-installed`；字段 `version` / `scheme` / `resolution` / `scheme_cmd`，用于重复安装判定和指纹比对 |
 | resolution digest | 固定节点排序 + line + version + sha256 的哈希；版本变了才会判“解析结果不同” |
 
-## 7. 命令面速查
+## 7. 构建环境
+
+| 词 | 意思 |
+| --- | --- |
+| 构建环境 | 编译命令在哪里执行：宿主，或一个 OCI 构建实例 |
+| 构建镜像 | 从 Registry 拉取、解包到用户级缓存的 OCI 镜像；`buildimages add` 管理 |
+| 构建实例 | 镜像 rootfs 的副本 + 已装工具 + 运行时容器；`--image` / `--instance` 选择，用户级全局对象 |
+| `state.build` | state.json 里记录构建环境的段：`mode` / `image`（digest）/ `image_ref` / `runtime` / `instance`；没有这段表示宿主构建 |
+| build signature | 进方案指纹和节点签名的 `host` 或 `oci:<digest>`；实例名不参与 |
+
+## 8. 命令面速查
 
 | 词 | 意思 |
 | --- | --- |
@@ -100,3 +110,4 @@ configure 参数变了 → PHP 整个重编。`shared` → standalone → 只多
 | `--lock` | 把闭包内、state 有记录的节点锁到实际补丁；缺旧补丁报错不回落 |
 | `--force` | 跳过重复安装 / 中断判定和重编确认 |
 | `--downloads` / `--offline` | 只下载到缓存 / 只用缓存不联网 |
+| `buildimages` | 管理构建镜像和实例：`add` / `list` / `use` / `rm` / `rm-instance`；不参与版本解析 |

@@ -95,9 +95,9 @@ fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_IN
 `--root` 默认是 `.`，解析出的工具前缀（`./build/tools/<名字>-<版本>`）和 `{tool:NAME}`
 在注入子进程环境前会换成绝对路径：子进程的工作目录是解压目录，相对前缀在那里找不到。
 
-镜像模式（`--buildbyimage`）只换执行环境：变量、顺序、签名规则都不变，源码和安装树
-仍用宿主绝对路径，挂进容器后路径不变。容器怎么建、工具怎么装见
-[CONTAINER.md](CONTAINER.md)。
+state 里有 `build`（OCI 实例）时，上面这些命令在实例里执行：变量、顺序、签名和
+路径规则都不变，源码和安装树用宿主绝对路径挂进实例。实例怎么建、工具怎么装见
+[BUILD-IMAGES.md](BUILD-IMAGES.md) §6。
 
 ## 4. 跳过与重编
 
@@ -106,6 +106,8 @@ fold 组件的 `env` 合并进产品节点（如 lua-nginx-module 的 `LUAJIT_IN
 - 节点 id、版本、源码 `url` / `sha256`、挂载策略；
 - 本节点实际使用的工具：宿主写 `tool=NAME provider=host`，built 写
   `tool=NAME provider=store:<版本> sig=<tool-sig>`；
+- 构建环境：OCI 实例写 `build=oci:<digest>`，宿主不写这一行；实例名不进签名，
+  见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §7；
 - configure 程序和全部参数；
 - 组件 `prepare` / profile mode 的 steps / make 命令（按声明顺序）；
 - 注入的环境变量（只算工具生成的部分，见第 3 节；`MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` 不算）；
@@ -146,7 +148,7 @@ standalone 组件节点会拿到 autoconf 的 `bin`，dep 节点不会因为加�
    只编静态库的依赖（如 nginx 的 `libxcrypt`）没有 `.so` 可复制，靠产品自己的
    `-l` 参数静态链进可执行文件，不进入 `runtime.lib_dir`。系统库（glibc /
    libcrypt）不复制，由运行环境提供；跨发行版运行库差异见
-   [BUILD-IMAGES.md](../BUILD-IMAGES.md) §10.1。
+   [BUILD-IMAGES.md](BUILD-IMAGES.md) §10.1。
 2. 用 `patchelf --force-rpath` 按 `runtime.rpath` 设置安装树内的 rpath。patchelf 也是
    构建期工具：本产品解析到 built 版本时用 `build/tools/patchelf-<版本>/bin/patchelf`，
    宿主满足时用宿主 PATH 里的 `patchelf`：
@@ -202,6 +204,8 @@ Fedora Linux 43（dnf）上执行：
 ```
 
 只提示，不执行；包名映射和发行版识别规则见 [HOST-COMMANDS.md](HOST-COMMANDS.md)。
+用构建镜像时，这段检查在实例里做，缺的工具按同一份映射直接装进实例，见
+[BUILD-IMAGES.md](BUILD-IMAGES.md) §6.1。
 
 gd 的图片依赖靠 pkg-config 定位：PHP 8.5 的 `ext/gd/config.m4` 用
 `PKG_CHECK_MODULES` 查找 `libpng` / `libjpeg` / `libwebp` / `libavif` / `freetype2`，

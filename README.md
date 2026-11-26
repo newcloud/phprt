@@ -308,8 +308,9 @@ myphp-8.5                     项目入口（选中 cli target 时生成）
 
 ## 构建工具
 
-编译前按节点解析宿主机工具；宿主满足就用宿主，否则从 `recipes/tools/` 构建到
-`build/tools/`，跨产品复用。下列是产品至少需要的：
+编译前按节点解析执行环境里的工具；宿主满足就用宿主，否则从 `recipes/tools/` 构建到
+`build/tools/`，跨产品复用。用构建镜像（`buildimages`）时，「宿主」换成实例 rootfs。
+下列是产品至少需要的：
 
 | 产品 | 命令 |
 | --- | --- |
@@ -388,7 +389,7 @@ phprt buildimages rm fedora43             # 还有实例用这个镜像时拒绝
 限制：只支持本地模式（不能和 `--global --prefix` 一起用）、Linux 同架构、gzip / 未压缩
 tar 层；共享宿主网络，不是安全沙箱。用镜像编出来的产物能直接在哪个发行版上跑，取决于
 两边的系统库（例如 Debian 编的 nginx 在 Fedora 上会缺 `libcrypt.so.1`，nginx 的 `xcrypt`
-feature 已默认静态链接 libcrypt）。完整说明见 [BUILD-IMAGES.md](BUILD-IMAGES.md)。
+feature 已默认静态链接 libcrypt）。完整说明见 [docs/BUILD-IMAGES.md](docs/BUILD-IMAGES.md)。
 
 ## 可装的产品
 
@@ -402,63 +403,12 @@ PHP 8.6 目前用 8.6.0RC3 构建（catalog 的 8.6 线）。
 PHP 扩展用 `phprt list php@8.5` 查看，包含内置扩展（curl、gd、mbstring…）和 PECL 扩展
 （swoole、xdebug、redis、imagick…），以及每个扩展支持的方式（static / shared）。
 
-## 目标
-
-现状：用简单方式构建复杂的软件。一条命令对 recipe 求解依赖、按声明编译 PHP（nginx 和其它产品同理），
-产物是一棵自包含的安装树。
-
-但今天已经很少有人手工做这件事了：搭环境、配参数、排依赖，基本交给 AI agent。所以真实需求不是
-「再支持一条版本线」，而是**方便地定制软件容器镜像**——从一份声明直接得到能跑的最小镜像。
-工具的形态也要跟着变：一条命令、默认值够用、输出能校验（`plan --json` 是这个方向），而不是一屏参数。
-
-理想状态：
-
-> 卧槽，我只写了一条命令，它自己把这堆破事全处理了。
-
-目标链路：
-
-```text
-Builder image
-    ↓
-phprt build
-    ↓
-artifact
-    ↓
-minimal runtime image
-```
-
-放进更大的价值链看，前四段已经成立，后两段是空的：
-
-```text
-源码
- ↓
-Recipe
- ↓
-依赖解析
- ↓
-精确构建
- ↓
-Runtime
- ↓
-OCI Image
-```
-
-| 环节 | 现在 |
-| --- | --- |
-| Builder image | 已实现：`phprt buildimages add` + `--image`，用 OCI 镜像里的工具编译（[BUILD-IMAGES.md](BUILD-IMAGES.md)） |
-| artifact | 产物就是 `.phprt/php-8.5.12/` 整棵树；搬走要连库一起拷，没有清单、没有校验 |
-| minimal runtime image | 用户手写 Dockerfile、裁库、试错缺哪个 `.so` |
-
-判据只有一条：在一台没装过工具链的机器上，一条命令产出能跑 PHP 的镜像；中间不手拷文件、
-不手写 Dockerfile、不手猜缺哪个 `.so`。
-
-当前状态离这条判据还很远。这一节写的是终点，不是现状说明，也不是已实现用法。
-
 ## 更多
 
 - [docs/CLI.md](docs/CLI.md)：完整命令、参数、错误
 - [docs/BUILD.md](docs/BUILD.md)：构建、日志、跳过规则
-- [BUILD-IMAGES.md](BUILD-IMAGES.md)：用 OCI 镜像构建的完整说明（缓存、实例、删除、运行库差异）
+- [docs/BUILD-IMAGES.md](docs/BUILD-IMAGES.md)：用 OCI 镜像构建的完整说明（缓存、实例、删除、运行库差异）
+- [docs/plan/RUNTIME-IMAGE.md](docs/plan/RUNTIME-IMAGE.md)：从安装树产出运行镜像（未实现的设计）
 - [docs/DESIGN.md](docs/DESIGN.md)：设计与各子文档入口
 
 ## 许可

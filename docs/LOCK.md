@@ -352,6 +352,7 @@ phprt install php@8.5.12 \
 | 依赖库 | `--dep 名字=<补丁>` |
 | mode / feature / dep 转授 | 和普通 `scheme` 一样 |
 | 构建目标 | `--targets '...'`，来自 state.targets 或 bundle 默认值 |
+| 构建环境 | state 有 `build`（OCI 实例）时，普通 `scheme` 和 `scheme --lock` 都在末尾加 `--image <digest>`，见 [BUILD-IMAGES.md](BUILD-IMAGES.md) §7；实例名不导出 |
 
 - 只导出当前闭包里的节点：已删除组件留在 `state.deps` / `state.bindings` 的历史记录
   不写进命令；`bindings` 在渲染前按闭包过滤；
