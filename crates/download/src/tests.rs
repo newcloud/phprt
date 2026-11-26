@@ -95,6 +95,23 @@ impl Drop for Server {
     }
 }
 
+/// 取走一次 RST 配额；还有配额时返回 true。
+///
+/// `AtomicUsize::fetch_update` 在新版 Rust 改名为 `try_update` 并弃用，
+/// 这里用 CAS 循环做等价实现，老版本稳定版也能编译。
+fn take_reset(resets: &AtomicUsize) -> bool {
+    let mut left = resets.load(Ordering::Relaxed);
+    loop {
+        if left == 0 {
+            return false;
+        }
+        match resets.compare_exchange_weak(left, left - 1, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(actual) => left = actual,
+        }
+    }
+}
+
 fn serve(
     mut stream: TcpStream,
     payload: &[u8],
@@ -159,17 +176,12 @@ fn serve(
         }
         "/norange" => serve_file(&mut stream, payload, range.as_deref(), false),
         "/reset" => {
-            if resets
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                    left.checked_sub(1)
-                })
-                .is_err()
-            {
-                serve_file(&mut stream, payload, range.as_deref(), true)
-            } else {
+            if take_reset(resets) {
                 reset_connection(&stream);
                 drop(stream);
                 Ok(())
+            } else {
+                serve_file(&mut stream, payload, range.as_deref(), true)
             }
         }
         _ => serve_file(&mut stream, payload, range.as_deref(), true),
