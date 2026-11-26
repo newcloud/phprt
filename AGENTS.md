@@ -148,8 +148,9 @@
 ```bash
 cargo fmt --all
 cargo test --workspace
-cargo clippy --workspace --all-targets
-# `.github/workflows/ci.yml` 在每次 push / PR 跑这三条。
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace --release
+# `.github/workflows/ci.yml` 在每次 push / PR 跑这四条。
 
 cargo run -- audit php@8.5                        # 上游开关必须全部处置
 cargo run -- install php@8.5                      # 默认组件 + PHP

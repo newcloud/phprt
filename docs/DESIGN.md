@@ -374,7 +374,6 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [BUILD.md](BUILD.md) | 构建顺序、环境、签名跳过、日志、rpath、验证、入口 |
 | [FEATURES.md](FEATURES.md) | 上游开关盘点、feature 取舍、默认值判据、`audit` |
 | [ADD-RECIPE.md](ADD-RECIPE.md) | 新增产品 / 组件 / 版本线、catalog 地址判定 |
-| [SWOOLE.md](SWOOLE.md) | Swoole 各版本线的开关盘点、处置、默认值与验收 |
 | [FLOW.md](FLOW.md) | install / add / remove / scheme 的流程、判定矩阵、交互、`--force`、ini 备份 |
 | [GLOSSARY.md](GLOSSARY.md) | 名词字典：三层对象、line/补丁、mode / fold / standalone、闭包、构建环境、state 与标记 |
 
@@ -385,6 +384,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [plan/RUNTIME-IMAGE.md](plan/RUNTIME-IMAGE.md) | 把安装树产出为运行镜像：入口、配置覆盖、文件清单、runtime base 同源、OCI 输出、compose、`phprt build` |
 | [plan/RPATH.md](plan/RPATH.md) | rpath 双后端（oxipatch 库 / patchelf 命令）、配置切换、差分验收 |
 | [plan/STATIC-LTO.md](plan/STATIC-LTO.md) | 依赖静态链接与 LTO：dep 的 modes / lto、全局开关、nginx 参数合成、切换清理 |
+| [plan/SWOOLE.md](plan/SWOOLE.md) | Swoole 各版本线的开关盘点、sockets / sqlite / brotli / zstd feature 与 bundle preset 的改造方案、验收 |
 
 ### 14.3 记录
 

@@ -1,10 +1,14 @@
 # Swoole 构建开关
 
+状态：方案，未实现。当前 `swoole.star` 只实现 `cares` feature，sockets / sqlite /
+brotli / zstd 和 bundle 里的 `swoole` preset 都还没落地；代码与本文冲突时以代码
+实际行为为准。
+
 Swoole 有四条版本线（4.8 / 5.1 / 6.0 / 6.2），`config.m4` 的选项差别很大。本文是
 `recipes/components/php/swoole.star` 的盘点记录和改造方案：哪些开关做成 feature、哪些固定在
 `configure`、哪些进 `ignored`，默认值放在哪个 bundle。PHP 8.6 不提供 swoole。
 
-只覆盖 Swoole 自己的编译开关。PHP 扩展、依赖库的开关处置见 [FEATURES.md](FEATURES.md)。
+只覆盖 Swoole 自己的编译开关。PHP 扩展、依赖库的开关处置见 [FEATURES.md](../FEATURES.md)。
 
 ## 1. 盘点方法
 
@@ -225,7 +229,7 @@ def target(ctx):
 swoole = { features = ["sockets", "sqlite"] }
 ```
 
-`recipes/bundles/php/7.4.toml` 现在没有 `[component_presets]`，新增这个表（4.8 只有 `sockets`）：
+`recipes/bundles/php/7.4.toml` 在已有的 `[component_presets]` 里加一行（4.8 只有 `sockets`）：
 
 ```toml
 [component_presets]
