@@ -149,6 +149,11 @@ TARGET = product(
     toolchain = TOOLCHAIN,
     profile = PROFILE,
     series = "8.1",
+    features = {
+        # 用 phprt 编的 libxcrypt 静态库，产物不再依赖宿主 libcrypt.so.1/.so.2。
+        # dep 的 -I/-L 由构建环境自动注入，PHP 的 configure 和 Makefile 都使用 LDFLAGS。
+        "xcrypt": feature(needs = ["libxcrypt"]),
+    },
     bundled = BUILTIN_EXTS,
     bundled_disable = BUILTIN_DISABLE,
     configure = [

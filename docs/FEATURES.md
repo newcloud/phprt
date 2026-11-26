@@ -98,6 +98,10 @@ features = ["xcrypt"]
 - 默认集合只有 bundle 一个来源，没有 CLI、不进 state；改了 bundle 就按构建签名重编。
 - 典型用途是「可选地把某个系统库静态链进产品」（nginx 的 `xcrypt`），
   上游没有干净关闭参数、又不想总是依赖宿主运行库时用。
+- PHP 7.4 / 8.0 / 8.1 也用同名 feature `xcrypt`，但只写 `needs`：PHP 的
+  configure 和 Makefile 都使用 `LDFLAGS`，构建环境已经把依赖的 `-L` 注进去，
+  不需要像 nginx 那样手写单值 `--with-ld-opt`。8.2 起 PHP 默认用自带的 crypt
+  实现，不再链接系统 libcrypt，所以不启用这个 feature。
 
 #### 已知别扭：单值 configure 选项要重复写参数
 

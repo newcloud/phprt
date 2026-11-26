@@ -21,6 +21,15 @@ def target(ctx):
                     reason = "当前 perl 模块不全，需要安装完整的 perl 包",
                 ),
             ),
+            # open：libxcrypt 的 build-aux/scripts/expand-selected-hashes 里 use open。
+            # 只随 libxcrypt 构建出现；Debian/Ubuntu 的 perl-base 同样缺这个模块。
+            "open": feature_check(
+                run = ["-Mopen=:std", "-e1"],
+                on_fail = need_packages(
+                    ["perl"],
+                    reason = "当前 perl 模块不全，需要安装完整的 perl 包",
+                ),
+            ),
         },
     )
 

@@ -13,11 +13,15 @@ ssh2 = "1.5"
 amqp = "2.2"
 rdkafka = "6.0"
 
+# 默认把 libxcrypt 静态链进 php；去掉这一项就回退到镜像自带的系统 libcrypt。
+features = ["xcrypt"]
+
 # 依赖库的默认版本线，按 dep recipe 的名字索引。
 [deps]
 openssl = "1.1.1"
 libcurl = "7.88"
 libxml2 = "2.11"
+libxcrypt = "4.5"
 zlib = "1.3"
 libpng = "1.6"
 jpeg = "3.1"

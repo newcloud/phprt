@@ -1,3 +1,111 @@
+# PHP 7.4 的内置扩展事实。
+#
+# bundled：PHP 7.4 源码 ext/ 下的内置扩展。只从这里推导 ext 的 origin，
+#               和当前是否已有 recipe 无关。7.4 比 8.0 多一个 xmlrpc。
+# bundled_disable：phprt 需要显式关闭的内置扩展 -> 对应的 configure 关闭参数。
+#               选中 static 时会跳过对应的关闭参数，改用 ext recipe 的 configure。
+#               不在这里的扩展保持 PHP 默认或 php recipe 里的 --enable-*。
+BUILTIN_EXTS = [
+        "bcmath",
+        "bz2",
+        "calendar",
+        "com_dotnet",
+        "ctype",
+        "curl",
+        "date",
+        "dba",
+        "dom",
+        "enchant",
+        "exif",
+        "ffi",
+        "fileinfo",
+        "filter",
+        "ftp",
+        "gd",
+        "gettext",
+        "gmp",
+        "hash",
+        "iconv",
+        "imap",
+        "intl",
+        "json",
+        "ldap",
+        "libxml",
+        "mbstring",
+        "mysqli",
+        "mysqlnd",
+        "oci8",
+        "odbc",
+        "opcache",
+        "openssl",
+        "pcntl",
+        "pcre",
+        "pdo",
+        "pdo_dblib",
+        "pdo_firebird",
+        "pdo_mysql",
+        "pdo_oci",
+        "pdo_odbc",
+        "pdo_pgsql",
+        "pdo_sqlite",
+        "pgsql",
+        "phar",
+        "posix",
+        "pspell",
+        "readline",
+        "reflection",
+        "session",
+        "shmop",
+        "simplexml",
+        "snmp",
+        "soap",
+        "sockets",
+        "sodium",
+        "spl",
+        "sqlite3",
+        "standard",
+        "sysvmsg",
+        "sysvsem",
+        "sysvshm",
+        "tidy",
+        "tokenizer",
+        "xml",
+        "xmlreader",
+        "xmlrpc",
+        "xmlwriter",
+        "xsl",
+        "zend_test",
+        "zip",
+        "zlib",
+]
+
+BUILTIN_DISABLE = {
+        "openssl": "--without-openssl",
+        "curl": "--without-curl",
+        "libxml": "--without-libxml",
+        "gd": "--disable-gd",
+        "dom": "--disable-dom",
+        "simplexml": "--disable-simplexml",
+        "xml": "--disable-xml",
+        "xmlreader": "--disable-xmlreader",
+        "xmlwriter": "--disable-xmlwriter",
+        "sqlite3": "--without-sqlite3",
+        "pdo_sqlite": "--without-pdo-sqlite",
+        "zlib": "--without-zlib",
+        "mbstring": "--disable-mbstring",
+        "zip": "--without-zip",
+        "sodium": "--without-sodium",
+        "mysqli": "--without-mysqli",
+        "pdo_mysql": "--without-pdo-mysql",
+        "gettext": "--without-gettext",
+        "pcntl": "--disable-pcntl",
+        "sockets": "--disable-sockets",
+        "shmop": "--disable-shmop",
+        "sysvmsg": "--disable-sysvmsg",
+        "sysvsem": "--disable-sysvsem",
+        "sysvshm": "--disable-sysvshm",
+}
+
 # 构建目标：PHP 的 SAPI。每个版本单独声明，版本差异直接写在这里。
 #
 # 已核对 7.4～8.5 的 configure：
@@ -53,15 +161,14 @@ TARGET = product(
     profile = PROFILE,
     toolchain = TOOLCHAIN,
     series = "7.4",
-    # 该系列还没完整适配：先只声明当前有 recipe 的内置扩展，
-    # 其余内置事实等适配该系列时再补全。
-    bundled = ["openssl", "curl", "libxml", "zlib"],
-    bundled_disable = {
-        "openssl": "--without-openssl",
-        "curl": "--without-curl",
-        "libxml": "--without-libxml",
-        "zlib": "--without-zlib",
+    features = {
+        # 用 phprt 编的 libxcrypt 静态库，产物不再依赖宿主 libcrypt.so.1/.so.2。
+        # dep 的 -I/-L 由构建环境自动注入，PHP 的 configure 和 Makefile 都使用 LDFLAGS。
+        "xcrypt": feature(needs = ["libxcrypt"]),
     },
+    # 该系列的内置扩展事实见文件顶部 BUILTIN_EXTS / BUILTIN_DISABLE。
+    bundled = BUILTIN_EXTS,
+    bundled_disable = BUILTIN_DISABLE,
     configure = [
         "--prefix={tree}",
         "--with-config-file-path={tree}/etc",
@@ -73,16 +180,6 @@ TARGET = product(
         "--enable-bcmath",
         "--enable-calendar",
         "--enable-exif",
-        # 未适配的内置扩展显式关闭，避免探测系统库。
-        # 内置扩展的正向参数由 ext recipe 的 configure 提供；
-        # 关闭参数在各系列 php recipe 的 bundled_disable（未适配系列暂时写在 configure 里）。
-        "--without-sqlite3",
-        "--without-pdo-sqlite",
-        "--disable-dom",
-        "--disable-simplexml",
-        "--disable-xml",
-        "--disable-xmlreader",
-        "--disable-xmlwriter",
     ],
     make = ["make", "make install"],
     artifacts = [],

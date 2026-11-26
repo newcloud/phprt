@@ -468,13 +468,6 @@ other = ["cli"]
     }
 
     #[test]
-    fn other_series_have_no_default_components() {
-        let bundle = Bundle::load(&dir().join("bundles/php/7.4.toml")).unwrap();
-        assert!(bundle.default_components.is_empty());
-        assert!(bundle.component_presets.is_empty());
-    }
-
-    #[test]
     fn ref_uses_preset_and_allows_mode_override() {
         let path = temp_path("ref");
         std::fs::write(

@@ -458,9 +458,10 @@ family 显示 `-`。
 ### 10.1 构建镜像决定产物的运行库
 
 phprt 只把构建时找到的**非系统库**收进 `<tree>/lib/phprt`，例如 pcre2、openssl、
-zlib；glibc 这类基础系统库仍然由运行环境提供。libxcrypt 默认由 nginx 静态链入，只有
-关掉 `xcrypt` feature 时才改为链接系统 libcrypt。所以**产物能直接在哪个发行版上跑，
-取决于构建镜像和目标宿主是不是同一套运行库**。
+zlib；glibc 这类基础系统库仍然由运行环境提供。libxcrypt 默认由 nginx 和
+PHP 7.4 / 8.0 / 8.1 静态链入，只有关掉 `xcrypt` feature 时才改为链接系统
+libcrypt。所以**产物能直接在哪个发行版上跑，取决于构建镜像和目标宿主是不是同一套
+运行库**。
 
 实测（2026-11-24，Fedora 43 宿主，Debian 13 实例）：
 
@@ -485,6 +486,11 @@ nginx 1.29 的默认做法是开 `xcrypt` feature：phprt 自己编译 libxcrypt
 产物里没有 `DT_NEEDED libcrypt.so.1`。默认值写在
 `recipes/bundles/nginx/1.29.toml` 的 `features = ["xcrypt"]`；删掉这一行就回到上面的
 系统 libcrypt 行为。开关只在 recipe / bundle 层，没有 CLI 参数。
+
+PHP 7.4 / 8.0 / 8.1 也默认打开同名 `xcrypt` feature（默认值在
+`recipes/bundles/php/<系列>.toml`）。PHP 的 configure 和 Makefile 使用 `LDFLAGS`，
+依赖的 `-L` 由构建环境自动注入，不需要 nginx 那种单值 `--with-ld-opt`。PHP 8.2
+起默认使用自带的 crypt 实现，不链接系统 libcrypt，因此不启用这个 feature。
 
 为什么会缺：
 
@@ -514,9 +520,9 @@ libc.so.6       => /lib64/libc.so.6
 
 处理方式：
 
-1. **让产品自己带 libcrypt**。nginx 1.29 已经这么做：`xcrypt` 默认把 libxcrypt
-   静态链进 `sbin/nginx`，产物不依赖宿主 `libcrypt.so.1`。其他用 `crypt()` 的产品
-   可以照这个 recipe 模式加：dep 只装静态库，产品 feature 带 `needs`。
+1. **让产品自己带 libcrypt**。nginx 1.29 和 PHP 7.4 / 8.0 / 8.1 已经这么做：
+   `xcrypt` 默认把 libxcrypt 静态链进产品，产物不依赖宿主 `libcrypt.so.1`。其他用
+   `crypt()` 的产品可以照这个 recipe 模式加：dep 只装静态库，产品 feature 带 `needs`。
 2. **优先让构建镜像和宿主同族**。Fedora 宿主用 `quay.io/fedora/fedora:43`，
    产物直接链接宿主已有的运行库。
 3. 关掉 `xcrypt`、又必须用 Debian / Ubuntu 镜像构建并在 Fedora 上运行时，宿主安装
@@ -540,8 +546,8 @@ libc.so.6       => /lib64/libc.so.6
 
 这是构建镜像和宿主运行库不一致，不是实例本身坏了。用 `ldd <产物>` 确认缺哪个库；
 优先改用和宿主同族的镜像重新构建。Debian 构建物在 Fedora 上运行时，通常需要
-`sudo dnf install libxcrypt-compat`。这只影响关掉 nginx `xcrypt` feature 的产物；
-默认 `xcrypt` 已把 libxcrypt 静态链入。详见 §10.1。
+`sudo dnf install libxcrypt-compat`。这只影响关掉 nginx / PHP `xcrypt` feature 的
+产物；默认 `xcrypt` 已把 libxcrypt 静态链入。详见 §10.1。
 
 **容器创建失败 / systemd scope 报错**
 

@@ -272,7 +272,7 @@ recipe 的 `env` 里。
 - 报错要区分：
   - `宿主 autoconf 2.60 不满足 >= 2.68，catalog 也没有可用版本`
   - `宿主缺少构建命令：nasm`（另附发行版安装命令）
-  - `宿主 perl 在，但检查不过（findbin）：Can't locate FindBin.pm…`
+  - `宿主 perl 在，但检查不过（findbin / open）：Can't locate FindBin.pm / open.pm…`
     （命令在、`feature_check` 不过，按缺命令处理）
   - `当前 perl 模块不全，需要安装完整的 perl 包`
     （`need_packages` 写了 `reason` 时，用它替代上面那条原始输出）

@@ -15,7 +15,9 @@ def target(ctx):
     builtin = ctx["is_bundled"]
 
     if ctx["product_series"] == "7.4":
-        flags = ["--with-openssl-dir={dep:openssl}"]
+        # PHP 7.4 的 --with-openssl 不接受目录参数，走 pkg-config；
+        # dep 的 include/lib 和 pkgconfig 路径由构建环境注入。
+        flags = ["--with-openssl"]
     else:
         flags = ["--with-openssl={dep:openssl}"]
 
