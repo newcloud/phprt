@@ -11,6 +11,7 @@
 | 处置 | 写法 | 什么时候用 |
 | --- | --- | --- |
 | 固定 | `configure` / `dep_configure` | recipe 自己决定，用户不需要选 |
+| 固定（单值选项） | `configure_options` | 多个来源要给同一个选项追加值（nginx 的 `--with-*-opt`） |
 | 暴露 | `features`（扩展自己 / 依赖库） | 用户可能想开或关 |
 | 暴露且带依赖 | `features.<名字>.needs` | 开关需要额外的库，只在该开关选中时引入 |
 | 不暴露 | `ignored` + 理由 | 看过，但这次不提供 |
@@ -80,7 +81,9 @@ TARGET = product(
     features = {
         "xcrypt": feature(
             needs = ["libxcrypt"],
-            configure = ["--with-ld-opt=..."],
+            configure_options = {
+                "--with-ld-opt": ["-L{dep:libxcrypt}/lib"],
+            },
         ),
     },
     configure = [...],
@@ -92,7 +95,8 @@ product = "nginx"
 features = ["xcrypt"]
 ```
 
-- 只支持 `needs` / `configure`；`disable` / `requires` 写了直接报错（没有定义语义）。
+- 只支持 `needs` / `configure` / `configure_options`；`disable` / `requires` 写了直接
+  报错（没有定义语义）。
 - feature 启用时，`needs` 并进产品的依赖闭包，`configure` 追加到产品参数末尾；
   依赖必须在 bundle `[deps]` 里能绑定，否则报错并提示补线。
 - 默认集合只有 bundle 一个来源，没有 CLI、不进 state；改了 bundle 就按构建签名重编。
@@ -100,36 +104,68 @@ features = ["xcrypt"]
   上游没有干净关闭参数、又不想总是依赖宿主运行库时用。
 - PHP 7.4 / 8.0 / 8.1 也用同名 feature `xcrypt`，但只写 `needs`：PHP 的
   configure 和 Makefile 都使用 `LDFLAGS`，构建环境已经把依赖的 `-L` 注进去，
-  不需要像 nginx 那样手写单值 `--with-ld-opt`。8.2 起 PHP 默认用自带的 crypt
+  不需要像 nginx 那样用 `--with-ld-opt` 指路径。8.2 起 PHP 默认用自带的 crypt
   实现，不再链接系统 libcrypt，所以不启用这个 feature。
 
-#### 已知别扭：单值 configure 选项要重复写参数
+#### 可组合的 configure 选项：`configure_options`
 
-产品 feature 只能**追加**参数，不能改基础参数。有些上游把选项做成单值（同一个选项
-出现两次，后一个覆盖前一个），比如 nginx 的 `--with-ld-opt`。这时 feature 里必须把
-整串路径重复一遍：
+有些上游把选项做成单值（同一个选项出现两次，后一个覆盖前一个），比如 nginx 的
+`--with-cc-opt` / `--with-ld-opt`。这种选项用 `configure_options` 声明：
 
 ```python
-configure = [
-    # feature 关闭时生效
-    "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib -L{dep:zlib}/lib",
-],
+configure_options = {
+    "--with-cc-opt": [
+        "-I{dep:openssl}/include",
+        "-I{dep:pcre2}/include",
+        "-I{dep:zlib}/include",
+    ],
+    "--with-ld-opt": [
+        "-L{dep:openssl}/lib",
+        "-L{dep:pcre2}/lib",
+        "-L{dep:zlib}/lib",
+    ],
+},
+```
+
+key 是选项名，value 是参数值列表；每个值单独写一项，支持 `{tree}` / `{dep:名字}`
+等已有占位符。它和普通 `configure` 的区别：
+
+| | `configure` | `configure_options` |
+| --- | --- | --- |
+| 形式 | 完整的参数列表 | 选项名 → 值列表 |
+| 同名选项 | recipe 自己拼成一整串 | 由 phprt 合并成一条参数 |
+| 谁能追加 | 只有 recipe 自己 | 产品基础值 + 启用的产品 feature |
+| 结果 | 原样展开 | 每个选项只生成一条 `选项名=值 值 ...` |
+
+合并规则：
+
+- 产品 recipe 的 `configure_options` 是基础值；启用的产品 feature 按 bundle
+  `features` 里写出的顺序追加。
+- 同一个 key 的值只累加，不自动去重，保持声明顺序（`-L` 的顺序可能影响链接结果）。
+- 不同 key 各自生成一条参数，互不影响。
+- 合并结果作为**一个** configure 参数传入，不是拆成多条同名参数。
+- 同一个选项不能同时写在 `configure` 和 `configure_options` 里；feature 与产品之间
+  也按同样规则检查，加载时直接报错。
+- 普通参数（`--with-http_ssl_module`、`--prefix={tree}`）照常写在 `configure` 里，
+  不会被自动合并；是否合并由 recipe 显式选择。
+
+nginx 的 `xcrypt` 是实际例子：基础值是 OpenSSL / PCRE2 / zlib 的三个 `-L`，
+feature 只追加 libxcrypt 一个值：
+
+```python
 features = {
     "xcrypt": feature(
         needs = ["libxcrypt"],
-        # 必须把上面三个 -L 一起重复，只写 libxcrypt 会把它们覆盖掉
-        configure = [
-            "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib -L{dep:zlib}/lib -L{dep:libxcrypt}/lib",
-        ],
+        configure_options = {
+            "--with-ld-opt": ["-L{dep:libxcrypt}/lib"],
+        },
     ),
 },
 ```
 
-代价是路径列表写两份，以后加依赖要改两处。目前只有 nginx 的 `xcrypt` 这样写。
-等再出现第二个同类情况时一起改造，候选方向：
-
-- 产品 feature 支持 `disable`：把整串参数交给 feature，开 / 关各一条，不靠覆盖；
-- 或者让 render 合并同名 `--with-*-opt`（需要先确认是否只对单值选项做，避免改变其他语义）。
+未启用时只生成基础的三个 `-L`；启用后合并成一条
+`--with-ld-opt=-L...openssl... -L...pcre2... -L...zlib... -L...libxcrypt...`，
+即 `plan` 和构建命令里看到的最终参数。以后新增依赖只改基础列表一处。
 
 ## 3. 常用度判定
 

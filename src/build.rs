@@ -182,15 +182,7 @@ pub fn run(
                 (commands, artifacts_expanded(&target.artifacts, target))
             }
             Kind::Product => {
-                let mut args = target
-                    .configure
-                    .iter()
-                    .map(|arg| render::expand(arg, &node_ctx, reg))
-                    .collect::<Result<Vec<_>>>()?;
-                args.extend(render::product_configure_flags(
-                    reg, target, sel, &node_ctx,
-                )?);
-                render::dedupe(&mut args);
+                let mut args = product_configure_args(reg, target, sel, &node_ctx)?;
                 let mut commands = Vec::new();
                 if !args.is_empty() {
                     // 产品 recipe 的 configure 可以写 "./configure" 作为第一项，
@@ -510,6 +502,25 @@ fn program_commands(
         commands.push(Cmd::Shell(render::expand(line, ctx, reg)?));
     }
     Ok(commands)
+}
+
+/// 产品构建命令里的 configure 参数：recipe 的 `configure`、合并后的
+/// `configure_options`、组件和 target 追加的参数，按这个顺序拼接后去重。
+fn product_configure_args(
+    reg: &Registry,
+    target: &Target,
+    sel: &Selection,
+    node_ctx: &Ctx<'_>,
+) -> Result<Vec<String>> {
+    let mut args = target
+        .configure
+        .iter()
+        .map(|arg| render::expand(arg, node_ctx, reg))
+        .collect::<Result<Vec<_>>>()?;
+    args.extend(render::product_configure_options(reg, target, node_ctx)?);
+    args.extend(render::product_configure_flags(reg, target, sel, node_ctx)?);
+    render::dedupe(&mut args);
+    Ok(args)
 }
 
 fn artifacts_expanded(patterns: &[String], target: &Target) -> Vec<String> {
@@ -1453,6 +1464,7 @@ mod tests {
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
+            configure_options: Default::default(),
             make: vec![],
             artifacts: vec![],
             desc: String::new(),
@@ -1979,6 +1991,76 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn product_commands_use_merged_configure_options() {
+        let mut prod = product(&[]);
+        prod.bundled.clear();
+        prod.configure = vec!["./configure".to_owned(), "--prefix={tree}".to_owned()];
+        prod.configure_options.insert(
+            "--with-ld-opt".to_owned(),
+            vec![
+                "-L{dep:libssl}/lib".to_owned(),
+                "-L{dep:libssl}/lib".to_owned(),
+            ],
+        );
+        let reg = Registry::from_targets(vec![dep("libssl", &[]), prod]).unwrap();
+        let target = reg.product_any().unwrap();
+        let args =
+            product_configure_args(&reg, target, &Selection::default(), &node_ctx()).unwrap();
+        assert_eq!(
+            args,
+            [
+                "./configure".to_owned(),
+                "--prefix=/tree".to_owned(),
+                "--with-ld-opt=-L/tree/deps/libssl-1/lib -L/tree/deps/libssl-1/lib".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn signature_follows_merged_configure_options() {
+        let mut prod = product(&[]);
+        prod.bundled.clear();
+        prod.configure = vec!["./configure".to_owned()];
+        prod.configure_options.insert(
+            "--with-ld-opt".to_owned(),
+            vec!["-L{dep:libssl}/lib".to_owned()],
+        );
+        let reg = Registry::from_targets(vec![dep("libssl", &[]), prod]).unwrap();
+        let target = reg.product_any().unwrap();
+        let ctx = node_ctx();
+
+        let sig = |target: &Target| {
+            let args = render::product_configure_options(&reg, target, &ctx).unwrap();
+            let commands = vec![Cmd::Program {
+                program: "./configure".to_owned(),
+                args,
+            }];
+            sig_of(
+                &reg,
+                target,
+                &commands,
+                None,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+            )
+        };
+
+        let before = sig(target);
+        assert!(
+            before.contains("arg=--with-ld-opt=-L/tree/deps/libssl-1/lib\n"),
+            "{before}"
+        );
+
+        // 合并后的值变了，构建签名跟着变。
+        let mut more = target.clone();
+        more.configure_options
+            .get_mut("--with-ld-opt")
+            .unwrap()
+            .push("-L{dep:libssl}/lib".to_owned());
+        assert_ne!(before, sig(&more));
     }
 
     #[test]

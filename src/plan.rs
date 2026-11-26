@@ -175,6 +175,7 @@ mod tests {
         Feature {
             needs: needs.iter().map(|s| s.to_string()).collect(),
             configure: vec![],
+            configure_options: Default::default(),
             disable: vec![],
             requires: Default::default(),
         }
@@ -278,6 +279,7 @@ mod tests {
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
+            configure_options: Default::default(),
             make: vec![],
             artifacts: vec![],
             desc: String::new(),

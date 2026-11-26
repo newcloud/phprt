@@ -45,6 +45,10 @@ pub struct Feature {
     pub needs: Vec<String>,
     #[serde(default)]
     pub configure: Vec<String>,
+    /// 可组合的 configure 选项：选项名 -> 参数值列表。同一个选项的多个值合并成一条
+    /// 参数，避免单值选项（如 nginx 的 `--with-ld-opt`）被后者覆盖。只用于产品 feature。
+    #[serde(default)]
+    pub configure_options: BTreeMap<String, Vec<String>>,
     /// feature 未启用时应用的参数（关闭上游自动探测）。
     #[serde(default)]
     pub disable: Vec<String>,
@@ -453,6 +457,54 @@ pub(crate) fn is_compiler_name(name: &str) -> bool {
     matches!(name, "gcc" | "g++" | "gxx" | "cc" | "c++")
 }
 
+/// `configure` 里是否用普通参数声明了同一个选项：`--opt` 或 `--opt=value`。
+///
+/// 只按选项名精确匹配，`--with-ld-opt-extra` 之类不算 `--with-ld-opt`。
+fn configure_has_option(configure: &[String], key: &str) -> bool {
+    configure.iter().any(|arg| {
+        arg == key
+            || arg
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.starts_with('='))
+    })
+}
+
+/// `configure_options` 的声明检查：键是选项名，每个值恰好一个参数。
+///
+/// 同一个选项不允许既出现在 `configure` 又出现在 `configure_options` 里，
+/// 否则最终仍会产生两条同名参数（单值选项会被后者覆盖）。
+fn validate_configure_options(
+    at: &str,
+    what: &str,
+    configure: &[String],
+    options: &BTreeMap<String, Vec<String>>,
+) -> Result<()> {
+    for (key, values) in options {
+        if !key.starts_with('-') || key.contains(char::is_whitespace) || key.contains('=') {
+            bail!(
+                "{at}: {what} 的 configure_options 键 {key} 必须是不带值的选项名\
+                 （如 --with-ld-opt）"
+            );
+        }
+        if values.is_empty() {
+            bail!("{at}: {what} 的 configure_options[{key}] 不能为空");
+        }
+        for value in values {
+            let mut parts = value.split_whitespace();
+            if parts.next().is_none() || parts.next().is_some() {
+                bail!(
+                    "{at}: {what} 的 configure_options[{key}] 里的值 {value:?} \
+                     必须恰好是一个参数；多个值请分开写"
+                );
+            }
+        }
+        if configure_has_option(configure, key) {
+            bail!("{at}: {what} 的 configure 和 configure_options 都声明了 {key}");
+        }
+    }
+    Ok(())
+}
+
 fn validate_tools(tools: &[ToolSpec], at: &str) -> Result<()> {
     for tool in tools {
         if tool.name.is_empty() {
@@ -780,6 +832,10 @@ pub struct Target {
     pub ignored: BTreeMap<String, String>,
     #[serde(default)]
     pub configure: Vec<String>,
+    /// 可组合的 configure 选项：选项名 -> 参数值列表。产品的基础值在前，启用的
+    /// 产品 feature 按启用顺序追加；同一选项最终只生成一条参数。只有产品使用。
+    #[serde(default)]
+    pub configure_options: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub make: Vec<String>,
     #[serde(default)]
@@ -828,6 +884,13 @@ impl Target {
                     if !f.requires.product.is_empty() || !f.requires.dep.is_empty() {
                         bail!(
                             "{at}: dep:{} 的 feature {name} 只允许 requires.commands",
+                            self.name
+                        );
+                    }
+                    if !f.configure_options.is_empty() {
+                        bail!(
+                            "{at}: dep:{} 的 feature {name} 不支持 configure_options\
+                             （只用于产品 feature）",
                             self.name
                         );
                     }
@@ -917,6 +980,13 @@ impl Target {
                         bail!(
                             "{at}: component:{} 的 feature {name} 只允许 needs/configure/requires；\
                              disable 只用于 dep 的 feature",
+                            self.name
+                        );
+                    }
+                    if !f.configure_options.is_empty() {
+                        bail!(
+                            "{at}: component:{} 的 feature {name} 不支持 configure_options\
+                             （只用于产品 feature）",
                             self.name
                         );
                     }
@@ -1029,13 +1099,19 @@ impl Target {
                 if !self.dep_configure.is_empty() || !self.ignored.is_empty() {
                     bail!("{at}: product:{} 不允许 dep_configure/ignored", self.name);
                 }
+                validate_configure_options(
+                    &at.to_string(),
+                    &format!("product:{}", self.name),
+                    &self.configure,
+                    &self.configure_options,
+                )?;
                 for (dep, feats) in &self.deps {
                     if dep.is_empty() || feats.iter().any(|f| f.is_empty()) {
                         bail!("{at}: product:{} 的 deps 里有空名字", self.name);
                     }
                 }
-                // 产品 feature 只合并 needs / configure；disable / requires 没有定义语义，
-                // 写了直接报错，避免看起来生效其实被忽略。
+                // 产品 feature 只合并 needs / configure / configure_options；disable /
+                // requires 没有定义语义，写了直接报错，避免看起来生效其实被忽略。
                 for (name, feature) in &self.features {
                     if name.is_empty() {
                         bail!("{at}: product:{} 的 features 里有空名字", self.name);
@@ -1062,6 +1138,12 @@ impl Target {
                             self.name
                         );
                     }
+                    validate_configure_options(
+                        &at.to_string(),
+                        &format!("product:{} 的 feature {name}", self.name),
+                        &feature.configure,
+                        &feature.configure_options,
+                    )?;
                 }
                 if self.version.is_empty() {
                     bail!("{at}: product:{} 缺少 version", self.name);
@@ -1177,6 +1259,12 @@ impl Target {
         }
         if !self.targets.is_empty() {
             bail!("{at}: {kind}:{} 不允许 targets", self.name);
+        }
+        if !self.configure_options.is_empty() {
+            bail!(
+                "{at}: {kind}:{} 不允许 configure_options（只写在产品 recipe）",
+                self.name
+            );
         }
         if self.toolchain.is_some() {
             bail!(
@@ -2345,9 +2433,34 @@ fn apply_product_features(
                 targets[index].needs.push(need.clone());
             }
         }
+        // feature 的两种写法都不能和产品已有的同名选项撞车：撞了最终会生成两条
+        // 同名参数，单值选项被后者覆盖。
+        for key in def.configure_options.keys() {
+            if configure_has_option(&targets[index].configure, key) {
+                bail!(
+                    "产品 {product}@{series} 的 feature {name} 的 configure_options[{key}] \
+                     与产品的 configure 参数冲突；同一个选项只能选一种写法"
+                );
+            }
+        }
+        for key in targets[index].configure_options.keys() {
+            if configure_has_option(&def.configure, key) {
+                bail!(
+                    "产品 {product}@{series} 的 feature {name} 的 configure 参数 {key}=... \
+                     与产品的 configure_options[{key}] 冲突；同一个选项只能选一种写法"
+                );
+            }
+        }
         targets[index]
             .configure
             .extend(def.configure.iter().cloned());
+        for (key, values) in &def.configure_options {
+            targets[index]
+                .configure_options
+                .entry(key.clone())
+                .or_default()
+                .extend(values.iter().cloned());
+        }
     }
     Ok(())
 }
@@ -3666,6 +3779,226 @@ gd = { ref = "component_presets.gd", mode = "shared" }
             .unwrap_err()
             .to_string();
         assert!(err.contains("只有：xcrypt"), "{err}");
+    }
+
+    fn demo_product() -> Target {
+        let mut profile = Profile::default();
+        profile.modes.insert(
+            "static".to_owned(),
+            ProfileMode {
+                strategy: "fold".to_owned(),
+                ..Default::default()
+            },
+        );
+        Target {
+            kind: Kind::Product,
+            name: "demo".to_owned(),
+            series: "1.0".to_owned(),
+            version: "1.0".to_owned(),
+            url: "https://example.com/demo.tar.gz".to_owned(),
+            profile,
+            configure: vec!["./configure".to_owned(), "--prefix={tree}".to_owned()],
+            ..Target::default()
+        }
+    }
+
+    #[test]
+    fn product_feature_configure_options_append_in_enabled_order() {
+        let mut product = demo_product();
+        product.configure_options.insert(
+            "--with-ld-opt".to_owned(),
+            vec!["-Lbase".to_owned(), "-Lbase".to_owned()],
+        );
+        product
+            .configure_options
+            .insert("--with-cc-opt".to_owned(), vec!["-Ibase".to_owned()]);
+        for (name, values) in [("a", vec!["-La"]), ("b", vec!["-Lb1", "-Lb2"])] {
+            product.features.insert(
+                name.to_owned(),
+                Feature {
+                    configure_options: BTreeMap::from([(
+                        "--with-ld-opt".to_owned(),
+                        values.iter().map(|value| (*value).to_owned()).collect(),
+                    )]),
+                    ..Feature::default()
+                },
+            );
+        }
+        let mut targets = vec![product];
+
+        // feature 未启用时只有基础值；重复的值不去重。
+        apply_product_features(&mut targets, "demo", "1.0", &[]).unwrap();
+        assert_eq!(
+            targets[0].configure_options["--with-ld-opt"],
+            ["-Lbase", "-Lbase"]
+        );
+
+        // 值按 feature 的启用顺序追加：b 在前，b 的两个值保持声明顺序；
+        // 不同 key 互不影响，普通 configure 也不变。
+        apply_product_features(
+            &mut targets,
+            "demo",
+            "1.0",
+            &["b".to_owned(), "a".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(
+            targets[0].configure_options["--with-ld-opt"],
+            ["-Lbase", "-Lbase", "-Lb1", "-Lb2", "-La"]
+        );
+        assert_eq!(targets[0].configure_options["--with-cc-opt"], ["-Ibase"]);
+        assert_eq!(
+            targets[0].configure,
+            ["./configure".to_owned(), "--prefix={tree}".to_owned()]
+        );
+    }
+
+    #[test]
+    fn configure_options_reject_conflicting_configure_flag() {
+        let mut product = demo_product();
+        product.configure.push("--with-ld-opt=-L/x/lib".to_owned());
+        product
+            .configure_options
+            .insert("--with-ld-opt".to_owned(), vec!["-L/y/lib".to_owned()]);
+        let err = product
+            .validate(Path::new("demo.star"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("configure 和 configure_options 都声明了 --with-ld-opt"),
+            "{err}"
+        );
+
+        // 只是前缀相似的另一选项不算冲突。
+        product.configure = vec!["--with-ld-opt-extra=1".to_owned()];
+        product.validate(Path::new("demo.star")).unwrap();
+
+        // feature 内部也不允许两种写法并存。
+        let mut feature_product = demo_product();
+        feature_product.features.insert(
+            "xcrypt".to_owned(),
+            Feature {
+                configure: vec!["--with-ld-opt=-L/y/lib".to_owned()],
+                configure_options: BTreeMap::from([(
+                    "--with-ld-opt".to_owned(),
+                    vec!["-L/z/lib".to_owned()],
+                )]),
+                ..Feature::default()
+            },
+        );
+        let err = feature_product
+            .validate(Path::new("demo.star"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("feature xcrypt"), "{err}");
+        assert!(err.contains("都声明了 --with-ld-opt"), "{err}");
+    }
+
+    #[test]
+    fn configure_options_reject_bad_keys_and_values() {
+        let mut product = demo_product();
+        product
+            .configure_options
+            .insert("with-ld-opt".to_owned(), vec!["-L/x/lib".to_owned()]);
+        let err = product
+            .validate(Path::new("demo.star"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("必须是不带值的选项名"), "{err}");
+
+        product.configure_options = BTreeMap::from([("--with-ld-opt".to_owned(), vec![])]);
+        let err = product
+            .validate(Path::new("demo.star"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("不能为空"), "{err}");
+
+        product.configure_options =
+            BTreeMap::from([("--with-ld-opt".to_owned(), vec!["-L/a -L/b".to_owned()])]);
+        let err = product
+            .validate(Path::new("demo.star"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("必须恰好是一个参数"), "{err}");
+
+        // dep / component 的 feature 不支持 configure_options，只能写在产品上。
+        let dep = Target {
+            kind: Kind::Dep,
+            name: "demo".to_owned(),
+            version: "1.0".to_owned(),
+            url: "https://example.com/demo.tar.gz".to_owned(),
+            features: BTreeMap::from([(
+                "extra".to_owned(),
+                Feature {
+                    configure_options: BTreeMap::from([(
+                        "--with-ld-opt".to_owned(),
+                        vec!["-L/x".to_owned()],
+                    )]),
+                    ..Feature::default()
+                },
+            )]),
+            ..Target::default()
+        };
+        let err = dep
+            .validate(Path::new("demo.star"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("只用于产品 feature"), "{err}");
+    }
+
+    #[test]
+    fn feature_configure_options_conflict_with_product_configure() {
+        let mut product = demo_product();
+        product
+            .configure_options
+            .insert("--with-ld-opt".to_owned(), vec!["-L/x/lib".to_owned()]);
+        product.features.insert(
+            "xcrypt".to_owned(),
+            Feature {
+                configure: vec!["--with-ld-opt=-L/y/lib".to_owned()],
+                ..Feature::default()
+            },
+        );
+        let mut targets = vec![product];
+        let err = apply_product_features(&mut targets, "demo", "1.0", &["xcrypt".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("冲突"), "{err}");
+        assert!(err.contains("--with-ld-opt"), "{err}");
+    }
+
+    #[test]
+    fn nginx_configure_options_merge_base_and_xcrypt() {
+        let (reg, _) = load_product("nginx", "1.29", &[], &[]).unwrap();
+        let product = reg.product_any().unwrap();
+        // bundle 默认启用 xcrypt：基础值在前，feature 的值追加在后面。
+        assert_eq!(
+            product.configure_options["--with-ld-opt"],
+            [
+                "-L{dep:openssl}/lib",
+                "-L{dep:pcre2}/lib",
+                "-L{dep:zlib}/lib",
+                "-L{dep:libxcrypt}/lib"
+            ]
+        );
+        // --with-cc-opt 走同一个机制，不是 --with-ld-opt 的特例。
+        assert_eq!(
+            product.configure_options["--with-cc-opt"],
+            [
+                "-I{dep:openssl}/include",
+                "-I{dep:pcre2}/include",
+                "-I{dep:zlib}/include"
+            ]
+        );
+        // 单值选项不再出现在普通 configure 列表里。
+        assert!(
+            !product
+                .configure
+                .iter()
+                .any(|arg| arg.starts_with("--with-cc-opt") || arg.starts_with("--with-ld-opt")),
+            "{:?}",
+            product.configure
+        );
     }
 
     #[test]

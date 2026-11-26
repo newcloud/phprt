@@ -262,6 +262,7 @@ pub fn build(
                 build: build_dir.clone(),
                 prefix: tree.clone(),
             };
+            configure.extend(product_configure_options(reg, t, &product_ctx)?);
             configure.extend(product_configure_flags(reg, t, sel, &product_ctx)?);
             dedupe(&mut configure);
         }
@@ -576,6 +577,28 @@ pub(crate) fn target_configure_flags(
     }
     dedupe(&mut expanded);
     Ok(expanded)
+}
+
+/// 产品的 `configure_options`：每个选项只生成一条参数。
+///
+/// 值在 recipe 加载时已经按「产品基础 → 启用的 feature 按启用顺序」累加好，
+/// 这里只做模板展开和拼接：同一个选项的多个值用空格连起来，作为单个参数传给
+/// configure，避免单值选项（nginx 的 `--with-ld-opt`）被后面的值覆盖。
+/// 值不排序、不去重：`-L` 这类参数的位置会影响链接结果。
+pub(crate) fn product_configure_options(
+    reg: &Registry,
+    product: &Target,
+    ctx: &Ctx<'_>,
+) -> Result<Vec<String>> {
+    let mut out = Vec::with_capacity(product.configure_options.len());
+    for (key, values) in &product.configure_options {
+        let mut expanded = Vec::with_capacity(values.len());
+        for value in values {
+            expanded.push(expand(value, ctx, reg)?);
+        }
+        out.push(format!("{key}={}", expanded.join(" ")));
+    }
+    Ok(out)
 }
 
 /// 产品 configure 里由组件和构建目标贡献的参数：
@@ -1093,6 +1116,7 @@ mod tests {
             Feature {
                 needs: vec!["openssl".into()],
                 configure: vec!["--with-openssl={dep:openssl}".into()],
+                configure_options: Default::default(),
                 disable: vec!["--without-ssl".into()],
                 requires: Default::default(),
             },
@@ -1132,6 +1156,7 @@ mod tests {
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
+            configure_options: Default::default(),
             make: vec![],
             artifacts: vec![],
             desc: String::new(),
@@ -1299,6 +1324,58 @@ mod tests {
         let args = dep_configure(&reg, dep, Some(&enabled), &ctx).unwrap();
         assert!(args.contains(&"--with-openssl=/t/deps/openssl-3.5.9".to_owned()));
         assert!(!args.contains(&"--without-ssl".to_owned()));
+    }
+
+    #[test]
+    fn product_configure_options_expand_and_join_in_order() {
+        let zlib = Target {
+            kind: Kind::Dep,
+            name: "zlib".into(),
+            version: "1.3.2".into(),
+            ..blank()
+        };
+        let mut prod = product(&[]);
+        prod.bundled.clear();
+        prod.configure = vec!["./configure".into(), "--prefix={tree}".into()];
+        prod.configure_options = BTreeMap::from([
+            (
+                "--with-cc-opt".to_owned(),
+                vec!["-I{dep:openssl}/include".to_owned()],
+            ),
+            (
+                "--with-ld-opt".to_owned(),
+                vec![
+                    "-L{dep:openssl}/lib".to_owned(),
+                    "-L{dep:openssl}/lib".to_owned(),
+                    "-L{dep:zlib}/lib".to_owned(),
+                ],
+            ),
+        ]);
+        let reg = Registry::from_targets(vec![openssl(), zlib, prod]).unwrap();
+        let product = reg.product_any().unwrap();
+        let ctx = Ctx {
+            tree: "/t",
+            build: "/b".into(),
+            prefix: "/t".into(),
+        };
+
+        let args = product_configure_options(&reg, product, &ctx).unwrap();
+        let expected_ld = concat!(
+            "--with-ld-opt=-L/t/deps/openssl-3.5.9/lib ",
+            "-L/t/deps/openssl-3.5.9/lib -L/t/deps/zlib-1.3.2/lib"
+        );
+        assert_eq!(
+            args,
+            [
+                "--with-cc-opt=-I/t/deps/openssl-3.5.9/include".to_owned(),
+                expected_ld.to_owned(),
+            ]
+        );
+        // 普通 configure 列表保持原样，合并只发生在 configure_options 里。
+        assert_eq!(
+            product.configure,
+            ["./configure".to_owned(), "--prefix={tree}".to_owned()]
+        );
     }
 
     #[test]

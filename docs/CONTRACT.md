@@ -473,10 +473,15 @@ TARGETS = {
   系列差异用 `extend_profile(PROFILE, ...)` 覆盖，详见 [PRODUCT.md](PRODUCT.md)。
 - `version` / `url` / `sha256` 从 catalog 的同名产品注入。
 - `needs` / `deps`：产品链接和运行时需要的依赖库，以及要转给它们的 feature。
-- `features`：产品自己的可选开关，`feature(needs=[...], configure=[...])`。只支持
-  `needs` / `configure`；`disable` / `requires` 写了直接报错。`needs` 只在 feature
-  启用时并进产品的依赖闭包，`configure` 追加到产品自己的参数列表。默认启用集合只写在
-  bundle 的 `features`，recipe 不写默认；也不单独进 state（bundle 改了会按签名重编）。
+- `features`：产品自己的可选开关，`feature(needs=[...], configure=[...],
+  configure_options={...})`。只支持 `needs` / `configure` / `configure_options`；
+  `disable` / `requires` 写了直接报错。`needs` 只在 feature 启用时并进产品的依赖闭包，
+  `configure` 追加到产品自己的参数列表，`configure_options` 按选项名合并值。默认启用
+  集合只写在 bundle 的 `features`，recipe 不写默认；也不单独进 state（bundle 改了会按
+  签名重编）。
+- `configure_options`：产品里「选项名 → 参数值列表」的可组合 configure 选项，只用于
+  单值选项（如 nginx 的 `--with-ld-opt`）。`configure` 里的参数原样生成，这里每个选项
+  只生成一条 `选项名=值 值 ...`；同一个选项不能同时写进 `configure`。
 - `bundled`：该产品源码包内自带的组件名，和是否有 recipe 无关；不要求非空。
 - `bundled_disable`：bundled 组件名 → 单个关闭参数；key 必须在 `bundled` 里。
 - `toolchain` 是 `toolchain(gcc=[...], gxx=[...])`，声明编译器版本档位和每档的
@@ -547,6 +552,7 @@ TARGETS = {
 | `env`（component） | `component(env=...)` | 组件专用环境变量 | 在 profile env 之后合并 | `{tree}` / `{dep:}` / `{source:}` 等占位符 | 展开后的值进签名 |
 | `prepare` | `component(prepare=[...])` | 源码准备，如把 `config0.m4` 准备成 `config.m4`、打兼容补丁 | standalone 构建之前、源码拷贝之后、profile steps 之前 | 同 component env | 命令原文进签名 |
 | `configure` | `dep` / `component` / `product` 的 `configure` | 生成构建文件 | prepare 之后、make 之前 | 占位符展开；dep 追加 feature 参数 | 展开后的全部参数进签名 |
+| `configure_options`（product） | `product(configure_options=...)` / 产品 feature 的同名字段 | 单值选项按选项名合并值，每个选项只生成一条参数 | 产品 `configure` 之后、组件和 target 参数之前 | 值里的占位符展开，多个值用空格连成一个参数 | 展开后的参数进签名 |
 | `steps`（profile mode） | `mode(steps=[...])` | standalone 组件的构建步骤模板 | prepare 之后，按声明顺序 | `{name}` / `{product}` / `{flags}` / `{build}` / `{prefix}` 先替换，再展开占位符 | 替换后的命令进签名 |
 | `make` | 各 target 的 `make` | 编译 / 安装 | configure 之后 | 占位符展开 | 展开后的命令进签名 |
 | `runtime` | `runtime(lib_dir, rpath)` | 运行时收库和 rpath | 全部构建完成之后 | 不适用 | `lib_dir` / `rpath` 变化会改变环境或 patchelf 输入，间接进签名 |
@@ -596,7 +602,10 @@ TARGETS = {
 8. product 的 `toolchain` 至少要声明 `gcc` / `gxx` 之一；每个档位必须有 min 或 max，
    同一项里的档位不能重叠，`gcc` 档位不能写 `cxxflags`、`gxx` 档位不能写 `cflags`。
 8.1 product 的 `features` 名非空，`needs` 每项非空；`disable` / `requires` 必须为空；
-   feature 的 `needs` 必须能在 bundle `[deps]` 里绑定到同名 dep，否则报错。
+   `configure_options` 的 key 必须是不带值的选项名，每项值非空且恰好是一个参数；
+   同一个选项不能同时出现在 `configure` 和 `configure_options` 里（product 和它的
+   feature 都检查）；feature 的 `needs` 必须能在 bundle `[deps]` 里绑定到同名 dep，
+   否则报错。
 9. product 的 `targets` 名字、配置项名、类型、`{value}` 模板必须合法；声明了 targets
    时，cli / state / bundle 里的未知 target 或未知配置项都直接报错，不静默丢弃。
 10. component 的 `modes` 必须在产品 profile 的 `modes` 里；默认 mode 也必须在 `modes` 里。

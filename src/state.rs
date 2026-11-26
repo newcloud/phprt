@@ -582,6 +582,7 @@ mod tests {
                 crate::recipe::Feature {
                     needs: vec![],
                     configure: vec![],
+                    configure_options: Default::default(),
                     disable: vec![],
                     requires: Default::default(),
                 },
@@ -638,6 +639,7 @@ mod tests {
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
+            configure_options: Default::default(),
             make: vec![],
             artifacts: vec![],
             desc: String::new(),

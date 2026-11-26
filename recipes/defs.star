@@ -10,11 +10,14 @@ recipe 里不执行命令、不访问网络、不读写文件。
 """
 
 
-def feature(needs = [], configure = [], disable = [], requires = {}):
+def feature(needs = [], configure = [], configure_options = {}, disable = [], requires = {}):
     """一个可选 feature。
 
     dep 的 feature：由组件 spec 的 dep:NAME[feature] 打开，needs 是它额外需要的库，
     disable 是 feature 未启用时应用的参数，用来显式关掉上游的自动探测。
+
+    configure_options 是「选项名 -> 参数值列表」：同一个选项的多个值会合并成一条
+    参数（如 nginx 的单值 --with-ld-opt），只用于产品 feature。
 
     component 的 feature：由 --component NAME=feature:[...] 打开，是组件自己的编译开关。
     component 的 feature 也可以写 needs：只有选中它时才引入这个依赖（如 swoole 的 cares）。
@@ -32,6 +35,7 @@ def feature(needs = [], configure = [], disable = [], requires = {}):
     return {
         "needs": needs,
         "configure": configure,
+        "configure_options": configure_options,
         "disable": disable,
         "requires": requires,
     }
@@ -437,6 +441,7 @@ def product(
         bundled = [],
         bundled_disable = {},
         configure = [],
+        configure_options = {},
         features = {},
         make = ["make", "make install"],
         artifacts = ["bin/php"],
@@ -449,8 +454,10 @@ def product(
     series 是 8.5 这样的系列，补丁和下载地址由 catalog 注入。
     bundled / bundled_disable 是产品版本事实：源码包里自带哪些组件、
     没选中某个组件时用哪个 configure 参数关闭它。
-    features 是产品自己的可选开关（needs / configure）；默认启用集合写在
-    bundles/<产品>/<系列>.toml 的 features。
+    features 是产品自己的可选开关（needs / configure / configure_options）；默认启用
+    集合写在 bundles/<产品>/<系列>.toml 的 features。
+    configure_options 是产品的可组合选项：选项名 -> 参数值列表，同一选项只生成一条
+    参数；产品的 feature 可以向同一选项追加值。
     profile 描述组件怎么挂到产品上、装完怎么整理和验证。
     默认启用集合不在这里，写在 bundles/<产品>/<系列>.toml 的 default_components。
     toolchain 声明产品的 gcc / gxx 版本档位和每档的兼容参数；不写就不检查。
@@ -467,6 +474,7 @@ def product(
         "bundled": bundled,
         "bundled_disable": bundled_disable,
         "configure": configure,
+        "configure_options": configure_options,
         "features": features,
         "make": make,
         "artifacts": artifacts,

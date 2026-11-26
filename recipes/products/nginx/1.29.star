@@ -1,17 +1,12 @@
 # nginx 1.29：PCRE2、OpenSSL、zlib 用 phprt 编译好的依赖库，
 # 组件模块折叠进 nginx 的 ./configure。
 #
-# feature `xcrypt`（bundle 默认启用）把 libxcrypt 只编成静态库，nginx 的
-# -lcrypt 命中 libcrypt.a，产物不再依赖宿主 libcrypt.so.1，Debian 编的包
-# 也能在 Fedora 上直接跑。
-#
-# last-wins：nginx 的 --with-ld-opt 只保留最后一次出现的值，所以 feature 打开时
-# 用一份包含 libxcrypt 的完整 -L 覆盖基础参数；关掉时基础参数里没有 libxcrypt，
-# 不会因为 deps/ 里留着上次的 libcrypt.a 又悄悄静态链进去。
-#
-# 已知别扭（等再遇到同类问题再一起改造）：产品 feature 只能追加参数，碰上这种
-# 单值选项就得把整串 -L 重复一遍，以后加依赖要改两处。备选改法见
-# docs/FEATURES.md §2.1「已知别扭」。
+# --with-cc-opt / --with-ld-opt 是单值选项（同一个选项出现两次，后一个覆盖前一个），
+# 所以用 configure_options 写：基础值和 feature 追加的值按顺序合并成一条参数。
+# Feature `xcrypt`（bundle 默认启用）把 libxcrypt 只编成静态库，nginx 的 -lcrypt
+# 命中 libcrypt.a，产物不再依赖宿主 libcrypt.so.1，Debian 编的包也能在 Fedora 上直接跑。
+# 关掉 feature 时合并结果里没有 libxcrypt 的 -L，不会因为 deps/ 里留着上次的
+# libcrypt.a 又悄悄静态链进去。
 
 LINES = {
     "1.29": {
@@ -35,9 +30,11 @@ TARGET = product(
     features = {
         "xcrypt": feature(
             needs = ["libxcrypt"],
-            configure = [
-                "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib -L{dep:zlib}/lib -L{dep:libxcrypt}/lib",
-            ],
+            configure_options = {
+                "--with-ld-opt": [
+                    "-L{dep:libxcrypt}/lib",
+                ],
+            },
         ),
     },
     configure = [
@@ -49,12 +46,22 @@ TARGET = product(
         "--lock-path={tree}/var/nginx.lock",
         "--http-log-path={tree}/var/log/access.log",
         "--error-log-path={tree}/var/log/error.log",
-        "--with-cc-opt=-I{dep:openssl}/include -I{dep:pcre2}/include -I{dep:zlib}/include",
-        "--with-ld-opt=-L{dep:openssl}/lib -L{dep:pcre2}/lib -L{dep:zlib}/lib",
         "--with-http_ssl_module",
         "--with-http_v2_module",
         "--with-http_stub_status_module",
     ],
+    configure_options = {
+        "--with-cc-opt": [
+            "-I{dep:openssl}/include",
+            "-I{dep:pcre2}/include",
+            "-I{dep:zlib}/include",
+        ],
+        "--with-ld-opt": [
+            "-L{dep:openssl}/lib",
+            "-L{dep:pcre2}/lib",
+            "-L{dep:zlib}/lib",
+        ],
+    },
     make = ["make", "make install"],
     artifacts = ["sbin/nginx"],
     profile = PROFILE,

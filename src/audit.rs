@@ -588,6 +588,7 @@ mod tests {
             features: Default::default(),
             ignored: Default::default(),
             configure: vec![],
+            configure_options: Default::default(),
             make: vec![],
             artifacts: vec![],
             desc: String::new(),
