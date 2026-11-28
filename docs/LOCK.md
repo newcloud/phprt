@@ -515,7 +515,7 @@ scheme_cmd=...
 `install` 判定“配置一致”时同时比较 `scheme` 和 `resolution`：
 
 - 两个都相同：一致；
-- scheme 相同、resolution 不同：提示“编译配置一致，但解析出的版本与本次不同”，
+- scheme 相同、resolution 不同：提示“本次解析出的版本与已装不同，没有改动任何文件”，
   用 `--force` 或显式补丁重装；
 - 旧标记没有 `resolution`：只比较 scheme。
 - 版本和 scheme 都相同、`inputs` 不同：不拒绝，保留安装树按签名增量重编；

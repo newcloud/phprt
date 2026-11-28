@@ -407,39 +407,39 @@ $ phprt add php@8.5 xdebug --force        # 手改过 30-xdebug.ini
 
 ## 重复安装与中断
 
-`install` 先看现场再决定装、续装还是拒绝；判定发生在打印计划、下载之前，
+`install` 先看现场再决定装、续装、幂等成功还是拒绝；判定发生在打印计划、下载之前，
 被拒绝时不联网也不写文件。catalog 里的补丁号只代表“本次解析到的目标”，
 不代表上游最新。
 
 | 现场 | 命令 | 行为 |
 | --- | --- | --- |
 | 没装过 | 任意 | 正常安装 |
-| 本次补丁已装、方案指纹一致 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案一致”，退出 1 |
-| 本次补丁已装、方案指纹不同 | `install 产品@补丁` | 拒绝：说明“编译配置与本次方案不一致”，退出 1 |
-| 本次补丁已装、方案一致但解析出的版本不同 | `install 产品@补丁` | 拒绝：说明“编译配置一致，但解析出的版本与本次不同”，退出 1 |
+| 本次补丁已装、方案指纹一致 | `install 产品@补丁` | 幂等成功：打印“方案与本次一致，没有改动”，退出 0 |
+| 本次补丁已装、方案指纹不同 | `install 产品@补丁` | 拒绝：打印“已装方案与本次不同”和两份方案，退出 1 |
+| 本次补丁已装、方案一致但解析出的版本不同 | `install 产品@补丁` | 拒绝：打印“本次解析出的版本与已装不同，没有改动任何文件”，退出 1 |
 | 本次补丁已装、版本相同但 recipe 构建参数变了 | `install 产品@补丁` | 不拒绝：提示“构建参数有变化”，保留安装树按签名增量重编 |
 | 本次补丁已装 | `install 产品@补丁 --force` | 等下载、解压都成功后，旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
 | 本次补丁的树在、缺完成标记 | 任意 | 当成中断，打印提示后继续 |
 | state 说装过、本次补丁的树不存在 | 任意 | 直接装（树被删过，没有要保护的东西） |
-| 已装 8.5.12、catalog 已升到 8.5.13 | `install php@8.5` | 仍按 8.5.12 解析；命中上面的“已装”拒绝 |
+| 已装 8.5.12、catalog 已升到 8.5.13 | `install php@8.5` | 仍按 8.5.12 解析；命中上面的幂等成功 |
 | 已装 8.5.12、catalog 已升到 8.5.13 | `update php@8.5` | 解析到 8.5.13，构建新树，成功后写 state |
 | 已装 8.5.12 | `install php@8.5.13` | 显式补丁：正常升级 / 降级 |
 | `--downloads` | 任意 | 不判定，只取源码 |
 
 ```text
 $ phprt install php@8.4.14
-error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案一致
-  要重新安装，任选其一：
-    phprt install php@8.4.14 --targets 'cli' --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
-    rm -rf .phprt/php-8.4.14             # 确认不再需要这个版本，删掉后再装
+php 8.4.14 已安装（.phprt/php-8.4.14），方案与本次一致，没有改动
+  要重装这个版本（旧树改名备份后全新安装）：
+    phprt install php@8.4.14 --targets 'cli' --force
 ```
 
 ```text
 $ phprt install php@8.4            # 已装 8.4.12，catalog 的依赖补丁已前进
-error: php 8.4.12 已安装（.phprt/php-8.4.12），编译配置一致，但解析出的版本与本次不同
-  要重新安装，任选其一：
-    phprt install php@8.4.12 --force     # 已装版本改名成 .phprt/php-8.4.12-backup-<日期>，然后全新安装
-    rm -rf .phprt/php-8.4.12             # 确认不再需要这个版本，删掉后再装
+error: php 8.4.12 已安装（.phprt/php-8.4.12），本次解析出的版本与已装不同，没有改动任何文件
+  用本次方案覆盖（旧树改名为 .phprt/php-8.4.12-backup-<日期> 保留）：
+    phprt install php@8.4.12 --force
+  旧树不要了（删掉后按本次方案全新安装）：
+    rm -rf .phprt/php-8.4.12 && phprt install php@8.4.12
 ```
 
 版本和方案都没变、只是 recipe 的构建参数改了（例如 `configure` 参数）时，不拒绝也不备份：
@@ -453,16 +453,18 @@ $ phprt install php@8.5
 | --- | --- |
 | `--force` | 跳过上述判定：本次补丁已装时先改名备份再全新安装；补丁不同时直接装目标补丁（不忽略下载、编译、校验错误） |
 
-配置不一致时把**已装方案**和**本次方案**都打出来，两条命令都能直接复制：
+配置不一致时先打出**已装方案**和**本次方案**，再给两条出路：`--force` 覆盖（备份旧树）
+和删掉旧树重装；命令都能直接复制。两条方案命令里是完整展开的组件列表，示例做了省略。
 
 ```text
 $ phprt install php@8.4 'swoole=mode:shared,xdebug=mode:shared'
-error: php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案不一致
+error: php 8.4.14 已安装（.phprt/php-8.4.14），已装方案与本次不同，没有改动任何文件
   已装方案: phprt install php@8.4 'swoole=mode:shared' --targets 'cli'
   本次方案: phprt install php@8.4 'swoole=mode:shared,xdebug=mode:shared' --targets 'cli'
-  要重新安装，任选其一：
-    phprt install php@8.4.14 --targets 'cli' --force     # 已装版本改名成 .phprt/php-8.4.14-backup-<日期>，然后全新安装
-    rm -rf .phprt/php-8.4.14             # 确认不再需要这个版本，删掉后再装
+  用本次方案覆盖（旧树改名为 .phprt/php-8.4.14-backup-<日期> 保留）：
+    phprt install php@8.4.14 --targets 'cli' --force
+  旧树不要了（删掉后按本次方案全新安装）：
+    rm -rf .phprt/php-8.4.14 && phprt install php@8.4.14 --targets 'cli'
 ```
 
 `install --component` / `--dep` / `--disable-default-component` 与普通 `install` 走同一套判定，

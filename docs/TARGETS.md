@@ -179,8 +179,8 @@ phprt install php@8.5 '...' --targets 'cli,fpm=group:www-data,user:www-data'
 
 - `scheme` / `scheme --lock` 都导出有效 targets。
 - marker 的 `scheme_cmd` 也记录 targets。
-- targets 或配置变化会改变方案指纹；已装版本按现有 install 语义提示“编译配置不一致”，
-  需要 `--force` 重建，不会只改 state。
+- targets 或配置变化会改变方案指纹；已装版本按现有 install 语义提示“已装方案与本次不同”，
+  需要 `--force` 或删掉旧树重装，不会只改 state。
 - 配置顺序、target 顺序不改变指纹。
 
 ## 6. PHP 的实际参数

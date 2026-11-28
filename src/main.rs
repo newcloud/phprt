@@ -1259,7 +1259,7 @@ fn run_body(
                 &is_dep_kind(&metas),
             );
 
-            // 现场判定放在下载之前：拒绝重复安装时不碰网络、不写文件。
+            // 现场判定放在下载之前：拒绝或判定无需安装时不碰网络、不写文件。
             // `--downloads` 只取源码，不算安装，所以不判定。
             let tree_display = layout::display_path(
                 &cli.root,
@@ -1320,6 +1320,16 @@ fn run_body(
                 if plan == marker::Plan::Rebuild {
                     println!("已装版本不变，构建参数有变化：按签名增量重编，不备份原安装树");
                 }
+            }
+
+            // 版本、方案、解析结果都一样：已经是目标状态，这次没有要装的东西。
+            if plan == marker::Plan::UpToDate {
+                println!(
+                    "{product_name} {version} 已安装（{tree_display}），方案与本次一致，没有改动"
+                );
+                println!("  要重装这个版本（旧树改名备份后全新安装）：");
+                println!("    {command} install {product_name}@{version}{target_args} --force");
+                return Ok(RunOutcome::Done);
             }
             // install 的绑定提示放在判定之后：拒绝时不该先刷“注意”。
             if install_cmd {

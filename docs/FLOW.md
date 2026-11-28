@@ -63,43 +63,63 @@ state 里有 `build`（OCI 实例）时，整条命令转发进实例执行：�
 | 现状 | 命令 | 行为 |
 | --- | --- | --- |
 | 没装过 | `install php@8.5` | 按 catalog 里的目标补丁安装 |
-| 已装 8.5.12、完整，catalog 已升到 8.5.13 | `install php@8.5` | 仍按 8.5.12 解析；已装且方案一致时**拒绝**重复安装（见 2.2） |
-| 已装 8.5.12、完整，依赖补丁已前进 | `install php@8.5` | **拒绝**：提示“编译配置一致，但解析出的版本与本次不同” |
+| 已装 8.5.12、完整，catalog 已升到 8.5.13 | `install php@8.5` | 仍按 8.5.12 解析；已装且方案一致时幂等成功（见 2.2） |
+| 已装 8.5.12、完整，依赖补丁已前进 | `install php@8.5` | **拒绝**：提示“本次解析出的版本与已装不同，没有改动任何文件” |
 | 已装 8.5.12、完整 | `update php@8.5` | 解析到 8.5.13 并构建，成功后 state 记录 8.5.13 |
-| 已装 8.5.12、完整 | `install php@8.5.12` | **拒绝**：说明编译配置一致 / 不一致 |
+| 已装 8.5.12、完整 | `install php@8.5.12` | 方案一致时幂等成功；不一致时**拒绝**并给出 `--force` 和删掉重装两条命令 |
 | 已装 8.5.12、完整，recipe 的构建参数改了 | `install php@8.5` | **不拒绝**：提示构建参数有变化，保留安装树按签名增量重编 |
 | 已装 8.5.12、完整 | `install php@8.5.12 --targets 'cli' --force` | 下载、解压成功后旧树改名 `<产品>-<补丁>-backup-<日期>`，再全新安装 |
-| 已装 8.5.12、完整，本次 `--targets` 不同 | `install php@8.5 --targets='cli,fpm'` | **拒绝**：编译配置与已装方案不一致，提示加 `--force` |
+| 已装 8.5.12、完整，本次 `--targets` 不同 | `install php@8.5 --targets='cli,fpm'` | **拒绝**：已装方案与本次不同，提示 `--force` 或删掉重装 |
 | 已装 8.5.12、完整，只调整 target 配置或顺序 | `install php@8.5 --targets='fpm=group:www-data,user:www-data,cli'` | 顺序不同不影响身份；配置值不同则拒绝并提示 `--force` |
 | 已装 8.5.12（无完成标记） | 任意 | 视为中断，继续安装 |
 | 已装 8.5.12、完整 | `install php@8.5.13` | 升级：构建新树 → 成功后才写 state |
 | 已装 8.5.13 | `install php@8.5.12` | 降级：重新走流水线，签名一致的节点跳过编译 |
 | state 说装过、目标补丁的树不存在 | 任意 | 直接装（树被删过，没有要保护的东西） |
 
-### 2.2 拒绝重复安装
+### 2.2 重复安装
+
+版本、方案、解析结果都一样时 `install` 是幂等的：不备份、不重编，打印现状后以 0 退出。
+`add` 之后顺手再跑一次 `install`、脚本里重复执行都不会报错。
 
 ```text
 $ phprt install php@8.5.12
-error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置与本次方案一致
-  要重新安装，任选其一：
-    phprt install php@8.5.12 --targets 'cli' --force     # 现有树改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
-    rm -rf .phprt/php-8.5.12             # 确认不再需要这个版本，删掉后再装
+php 8.5.12 已安装（.phprt/php-8.5.12），方案与本次一致，没有改动
+  要重装这个版本（旧树改名备份后全新安装）：
+    phprt install php@8.5.12 --targets 'cli' --force
 ```
+
+已装方案和本次不同（`--component`、`--targets`、feature 等）时拒绝，退出 1：先给两份
+方案，再给两条可直接复制的命令。
+
+```text
+$ phprt install php@8.5 --targets='cli,fpm'
+error: php 8.5.12 已安装（.phprt/php-8.5.12），已装方案与本次不同，没有改动任何文件
+  已装方案: phprt install php@8.5.12 --targets 'cli'
+  本次方案: phprt install php@8.5.12 --targets 'cli,fpm'
+  用本次方案覆盖（旧树改名为 .phprt/php-8.5.12-backup-<日期> 保留）：
+    phprt install php@8.5.12 --targets 'cli,fpm' --force
+  旧树不要了（删掉后按本次方案全新安装）：
+    rm -rf .phprt/php-8.5.12 && phprt install php@8.5.12 --targets 'cli,fpm'
+```
+
+两条方案命令写的是完整展开后的组件列表；示例为了可读做了省略。
+
+方案相同、只有解析出的版本不同（catalog 的依赖补丁已经前进）时同样拒绝：
 
 ```text
 $ phprt install php@8.5            # 已装 8.5.12，catalog 的依赖补丁已前进
-error: php 8.5.12 已安装（.phprt/php-8.5.12），编译配置一致，但解析出的版本与本次不同
-  要重新安装，任选其一：
-    phprt install php@8.5.12 --targets 'cli' --force     # 已装版本改名成 .phprt/php-8.5.12-backup-<日期>，然后全新安装
-    rm -rf .phprt/php-8.5.12             # 确认不再需要这个版本，删掉后再装
+error: php 8.5.12 已安装（.phprt/php-8.5.12），本次解析出的版本与已装不同，没有改动任何文件
+  用本次方案覆盖（旧树改名为 .phprt/php-8.5.12-backup-<日期> 保留）：
+    phprt install php@8.5.12 --targets 'cli' --force
+  旧树不要了（删掉后按本次方案全新安装）：
+    rm -rf .phprt/php-8.5.12 && phprt install php@8.5.12 --targets 'cli'
 ```
 
-方案指纹不同时说明“编译配置与本次方案不一致”，并把已装方案和本次方案两条命令都打出来。
 catalog 里的补丁号只代表“本次解析到的目标”，文案里不出现“最新/过期”。
 
 版本和方案都相同、只有 recipe 的构建参数变了时（`configure` / `make` / `mode` /
 feature 等），不拒绝也不备份：打印“构建参数有变化：按签名增量重编”，保留安装树，
-签名一致的节点跳过，只重编受影响的节点。参数相同则仍按 2.2 拒绝。
+签名一致的节点跳过，只重编受影响的节点。
 
 ### 2.3 完成标记
 
@@ -130,8 +150,8 @@ CLI --targets > state.targets > bundle 的 [targets] default
 - 没有 `disable_flags` 的 target 不自动生成禁用参数；
 - target 的 `artifacts` / `verify` / `entry` / `post_install` 只在该 target 选中时生效。
 
-`install` 判定重复安装时比较方案指纹；targets 或配置变化会被视为“编译配置不一致”，
-需要 `--force`。target 名和配置名按字典序规范化，列表值保留元素顺序，所以下面两条
+`install` 判定重复安装时比较方案指纹；targets 或配置变化会被视为“已装方案与本次不同”，
+需要 `--force` 或删掉旧树重装。target 名和配置名按字典序规范化，列表值保留元素顺序，所以下面两条
 构建身份相同：
 
 ```bash
@@ -321,7 +341,7 @@ state 记两类数据，解析结果每次重算（完整字段见 [STATE.md](ST
 | 情况 | 退出码 |
 | --- | --- |
 | 成功 / 无变化 | 0 |
-| 拒绝重复安装、检查不通过、用户取消 | 1 |
+| 已装方案与本次不同、检查不通过、用户取消 | 1 |
 | 编译/下载失败 | 1 |
 | Ctrl-C | 130 |
 

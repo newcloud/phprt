@@ -342,7 +342,7 @@ impl ProjectState {
             }
             // 没写 mode / feature 的组件在这里补上解析后的值：state 保存的是
             // 解析结果，标记里的方案命令和指纹也必须按同一份结果渲染，否则首装后
-            // 重跑同一条 install 会算出不同的方案，被误判成“编译配置不一致”。
+            // 重跑同一条 install 会算出不同的方案，被误判成“已装方案与本次不同”。
             if spec.mode.is_none() && !component.default_mode.is_empty() {
                 spec.mode = Some(component.default_mode.clone());
             }

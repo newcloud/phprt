@@ -70,6 +70,8 @@ pub enum Plan {
     Continue,
     /// 版本和方案都没变，只是 recipe 的构建参数变了：保留安装树，按签名增量重编。
     Rebuild,
+    /// 版本、方案、解析结果都没变：已经是目标状态，本次不需要做任何事。
+    UpToDate,
 }
 
 /// `install` 之前看到的现场。全是判定需要的输入，不看磁盘状态以外的东西。
@@ -498,10 +500,10 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
             // 目录在、标记不在：上次没装完。
             (Site::Interrupted, false) => Ok(Plan::Continue),
             (Site::Complete(record), false) => {
-                let mut head =
-                    format!("{product} {target} 已安装（{tree}），编译配置与本次方案一致");
+                let mut head = format!(
+                    "{product} {target} 已安装（{tree}），已装方案与本次不同，没有改动任何文件"
+                );
                 if record.scheme != *scheme {
-                    head = format!("{product} {target} 已安装（{tree}），编译配置与本次方案不一致");
                     if !record.scheme_cmd.is_empty() {
                         head.push_str(&format!(
                             "\n  已装方案: {}\n  本次方案: {}",
@@ -514,17 +516,21 @@ pub fn decide(facts: &InstallFacts<'_>, force: bool) -> Result<Plan> {
                     }
                 } else if !record.resolution.is_empty() && record.resolution != *resolution {
                     head = format!(
-                        "{product} {target} 已安装（{tree}），编译配置一致，但解析出的版本与本次不同"
+                        "{product} {target} 已安装（{tree}），本次解析出的版本与已装不同，没有改动任何文件"
                     );
                 } else if !record.inputs.is_empty() && record.inputs != *inputs {
                     // 版本没变、只是 recipe 的构建参数变了：保留树，走增量构建。
                     return Ok(Plan::Rebuild);
+                } else {
+                    // 版本、方案、解析结果都一样：已经是目标状态，这次没有要装的东西。
+                    return Ok(Plan::UpToDate);
                 }
                 bail!(
                     "{head}\n  \
-                     要重新安装，任选其一：\n    \
-                     {command} install {product}@{target}{target_args} --force     # 已装版本改名成 {tree}-backup-<日期>，然后全新安装\n    \
-                     rm -rf {tree}             # 确认不再需要这个版本，删掉后再装"
+                     用本次方案覆盖（旧树改名为 {tree}-backup-<日期> 保留）：\n    \
+                     {command} install {product}@{target}{target_args} --force\n  \
+                     旧树不要了（删掉后按本次方案全新安装）：\n    \
+                     rm -rf {tree} && {command} install {product}@{target}{target_args}"
                 )
             }
         };
@@ -637,17 +643,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_install_says_config_matches() {
-        let err = decide(&facts(complete("abc"), "abc"), false)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("php 8.4.14 已安装（.phprt/php-8.4.14），编译配置与本次方案一致"),
-            "{err}"
+    fn duplicate_install_is_up_to_date() {
+        assert_eq!(
+            decide(&facts(complete("abc"), "abc"), false).unwrap(),
+            Plan::UpToDate
         );
-        assert!(err.contains("phprt install php@8.4.14 --force"), "{err}");
-        assert!(err.contains("rm -rf .phprt/php-8.4.14"), "{err}");
-        assert!(!err.contains("update"), "不该再提示 update：{err}");
     }
 
     #[test]
@@ -656,10 +656,11 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("编译配置与本次方案不一致"),
-            "方案不同要拒绝并说明不一致：{err}"
+            err.contains(
+                "php 8.4.14 已安装（.phprt/php-8.4.14），已装方案与本次不同，没有改动任何文件"
+            ),
+            "方案不同要拒绝并说明现场：{err}"
         );
-        assert!(!err.contains("编译配置与本次方案一致"), "{err}");
         // 两份方案都打出来，用户能直接对比。
         assert!(
             err.contains("已装方案: phprt install php@8.4 'gd=mode:static'"),
@@ -667,6 +668,12 @@ mod tests {
         );
         assert!(
             err.contains("本次方案: phprt install php@8.4 'swoole=mode=shared'"),
+            "{err}"
+        );
+        // 两条出路都是可直接复制的命令：覆盖（备份旧树）、删除重装。
+        assert!(err.contains("phprt install php@8.4.14 --force"), "{err}");
+        assert!(
+            err.contains("rm -rf .phprt/php-8.4.14 && phprt install php@8.4.14"),
             "{err}"
         );
     }
@@ -820,7 +827,7 @@ mod tests {
         }
         let err = decide(&facts(site, "abc"), false).unwrap_err().to_string();
         assert!(
-            err.contains("编译配置一致，但解析出的版本与本次不同"),
+            err.contains("本次解析出的版本与已装不同，没有改动任何文件"),
             "{err}"
         );
     }
@@ -840,7 +847,7 @@ mod tests {
             Plan::Rebuild
         );
 
-        // 参数相同：仍然是“已安装”拒绝。
+        // 参数相同：已经是目标状态，本次没有要做的。
         changed = match changed {
             Site::Complete(mut record) => {
                 record.inputs = "in".into();
@@ -848,10 +855,10 @@ mod tests {
             }
             other => other,
         };
-        let err = decide(&facts(changed, "abc"), false)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("编译配置与本次方案一致"), "{err}");
+        assert_eq!(
+            decide(&facts(changed, "abc"), false).unwrap(),
+            Plan::UpToDate
+        );
     }
 
     #[test]
