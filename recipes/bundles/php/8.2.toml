@@ -32,6 +32,7 @@ imagemagick = "7.1"
 libssh2 = "1.11"
 rabbitmq-c = "0.18"
 librdkafka = "2.16"
+libffi = "3.8"
 
 # 默认构建目标；由 --targets 覆盖。
 [targets]
@@ -78,3 +79,5 @@ sysvmsg = {}
 sysvsem = {}
 sysvshm = {}
 
+# FFI 默认 shared：独立 ffi.so + 20-ffi.ini，不静态编进 bin/php。
+ffi = { mode = "shared" }

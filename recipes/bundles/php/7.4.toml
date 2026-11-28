@@ -12,6 +12,7 @@ libcurl = "7.88"
 libxml2 = "2.11"
 libxcrypt = "4.5"
 zlib = "1.3"
+libffi = "3.8"
 
 # 默认构建目标；由 --targets 覆盖。
 [targets]
@@ -55,3 +56,6 @@ shmop = {}
 sysvmsg = {}
 sysvsem = {}
 sysvshm = {}
+
+# FFI 默认 shared：独立 ffi.so + 20-ffi.ini，不静态编进 bin/php。
+ffi = { mode = "shared" }
