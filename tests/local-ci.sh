@@ -56,47 +56,64 @@ trap cleanup EXIT
 
 step() { printf '\n== %s\n' "$*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
-has_module() { "$1" -m 2>/dev/null | grep -qx "$2"; }
-has_module_without_ini() { "$1" -n -m 2>/dev/null | grep -qx "$2"; }
+# 先收完整输出再 grep：php -i 的输出较大，grep -q 提前退出会让 php 收到
+# SIGPIPE，配合 pipefail 会把成功的检查判成失败。
+has_module() {
+  local out
+  out="$("$1" -m 2>/dev/null)" || return 1
+  grep -qx "$2" <<<"$out"
+}
+has_module_without_ini() {
+  local out
+  out="$("$1" -n -m 2>/dev/null)" || return 1
+  grep -qx "$2" <<<"$out"
+}
 
 step "安装 php@$SERIES，禁用 ${COMPONENTS[*]}"
-phprt install "php@$SERIES" \
-  --disable-default-component mbstring \
-  --disable-default-component pcntl \
-  --disable-default-component gettext \
-  "${DOWNLOAD_ARGS[@]}"
+DISABLE_ARGS=()
+for name in "${COMPONENTS[@]}"; do
+  DISABLE_ARGS+=(--disable-default-component "$name")
+done
+phprt install "php@$SERIES" "${DISABLE_ARGS[@]}" "${DOWNLOAD_ARGS[@]}"
 
 ENTRY="$ROOT/myphp-$SERIES"
 [ -x "$ENTRY" ] || fail "入口不存在：$ENTRY"
 ENV_OUT="$("$ENTRY" --env)"
 PHP_BIN="$(sed -n 's/^PHP=//p' <<<"$ENV_OUT")"
 PHPRC="$(sed -n 's/^PHPRC=//p' <<<"$ENV_OUT")"
-EXT_DIR="$(sed -n 's/^EXT_DIR=//p' <<<"$ENV_OUT")"
 [ -n "$PHP_BIN" ] && [ -n "$PHPRC" ] || fail "解析入口 --env 失败"
 TREE="$(cd "$(dirname "$PHPRC")/.." && pwd)"
 
 step "确认初始安装没有 ${COMPONENTS[*]}"
 for name in "${COMPONENTS[@]}"; do
-  has_module "$ENTRY" "$name" && fail "初始安装不应该有 $name（php -m）"
-  has_module_without_ini "$PHP_BIN" "$name" &&
+  if has_module "$ENTRY" "$name"; then
+    fail "初始安装不应该有 $name（php -m）"
+  fi
+  if has_module_without_ini "$PHP_BIN" "$name"; then
     fail "初始二进制里不应该有 $name（php -n 能看到说明是静态编入）"
+  fi
 done
-"$PHP_BIN" -i 2>/dev/null | grep -q -- '--disable-mbstring' ||
+PHPINFO="$("$PHP_BIN" -i 2>/dev/null)"
+grep -q -- '--disable-mbstring' <<<"$PHPINFO" ||
   fail "configure 里没有 --disable-mbstring"
-"$PHP_BIN" -i 2>/dev/null | grep -q -- '--disable-pcntl' ||
+grep -q -- '--disable-pcntl' <<<"$PHPINFO" ||
   fail "configure 里没有 --disable-pcntl"
-"$PHP_BIN" -i 2>/dev/null | grep -q -- '--without-gettext' ||
+grep -q -- '--without-gettext' <<<"$PHPINFO" ||
   fail "configure 里没有 --without-gettext"
 
 for name in "${COMPONENTS[@]}"; do
   step "add $name（shared）"
   phprt add "php@$SERIES" "$name=mode:shared" "${DOWNLOAD_ARGS[@]}"
 
-  [ -f "$EXT_DIR/$name.so" ] || fail "缺少 $name.so：$EXT_DIR/$name.so"
+  compgen -G "$TREE/lib/php/extensions/*/$name.so" >/dev/null ||
+    fail "缺少 $name.so（$TREE/lib/php/extensions/*/$name.so）"
   [ -f "$TREE/etc/conf.d/20-$name.ini" ] || fail "缺少 20-$name.ini"
-  has_module "$ENTRY" "$name" || fail "php -m 里没有 $name"
-  has_module_without_ini "$PHP_BIN" "$name" &&
+  if ! has_module "$ENTRY" "$name"; then
+    fail "php -m 里没有 $name"
+  fi
+  if has_module_without_ini "$PHP_BIN" "$name"; then
     fail "$name 在 php -n 里也能加载，不是动态库"
+  fi
 done
 
 step "确认扩展函数可用"
