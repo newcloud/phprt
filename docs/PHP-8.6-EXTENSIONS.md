@@ -11,9 +11,9 @@ https://www.php.net/distributions/php-8.6.0.tar.gz
 sha256 = 62337dccde3d9fcc39797d4529f42637613036eaf3875353c206874e5813a3c1
 ```
 
-`recipes/catalog.toml` 的 `8.6` 线同时保留 `8.6.0RC3` 和 `8.6.0`。默认补丁取数组内最大版本，RC3 只用于旧 state 和 `--lock` 复现。
+`recipes/catalog.toml` 的 `8.6` 线只有 `8.6.0`，默认补丁取数组内最大版本。
 
-版本比较器把预发布后缀（`alpha` / `beta` / `rc` / `dev` / `pre`）排在无后缀正式版之前，因此 `8.6.0RC3 < 8.6.0`。`1.1.1w` 这类补丁字母仍按字符串比较，规则见 [CATALOG-UPDATE.md](CATALOG-UPDATE.md) 6.3。
+版本比较器把预发布后缀（`alpha` / `beta` / `rc` / `dev` / `pre`）排在无后缀正式版之前，例如 `2.0.0-beta1 < 2.0.0`。`1.1.1w` 这类补丁字母仍按字符串比较，规则见 [CATALOG-UPDATE.md](CATALOG-UPDATE.md) 6.3。
 
 ## 2. PHP 8.6 recipe
 
