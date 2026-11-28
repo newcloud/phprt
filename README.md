@@ -67,7 +67,7 @@ phprt install nginx@1.29
 .phprt/nginx-1.29.8/sbin/nginx -V
 ```
 
-当前可装 PHP 7.4 / 8.0 ~ 8.6 和 nginx 1.29；PHP 8.6 用 8.6.0RC3 构建。
+当前可装 PHP 7.4 / 8.0 ~ 8.6 和 nginx 1.29；PHP 8.6 用 8.6.0 构建。
 nginx 不生成入口，直接用安装树里的二进制。
 
 ### 管理扩展
