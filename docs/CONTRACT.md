@@ -326,6 +326,7 @@ TARGET = target
     （PHP 默认是 `ext/{name}`）。
   - `external` 必须有自己的 `url` + `version`。
 - `modes` 非空，值由产品 profile 定义；默认挂载方式由 profile 的 `defaults` 按 source 推导。
+  组件支持的所有挂载方式都要列进 `modes`，默认方式只是其中之一。
 - `modules` 是产品启动后应看到的模块名，由产品 profile 的 `verify_modules` 使用。
 - `ini` / `ini_lines` 是安装后的登记文件，只有 profile 的 `register` 动作为 `php-ini` 时使用。
 - `tools` 是构建期工具要求：宿主满足就用宿主，否则从 `recipes/tools/` 构建到

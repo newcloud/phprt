@@ -5,6 +5,8 @@
 # bundled_disable：phprt 需要显式关闭的内置扩展 -> 对应的 configure 关闭参数。
 #               选中 static 时会跳过对应的关闭参数，改用 ext recipe 的 configure。
 #               不在这里的扩展保持 PHP 默认或 php recipe 里的 --enable-*。
+#
+# 按 php-8.5.13 的 ext/ 核对：ext/imap 只剩 tests，没有 config.m4，不参与构建。
 BUILTIN_EXTS = [
         "bcmath",
         "bz2",
@@ -27,7 +29,6 @@ BUILTIN_EXTS = [
         "gmp",
         "hash",
         "iconv",
-        "imap",
         "intl",
         "json",
         "ldap",

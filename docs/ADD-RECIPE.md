@@ -297,7 +297,12 @@ TARGET = target
 - bundled 组件由产品 recipe 的 `bundled` 列表推导；`source_path` 覆盖产品 profile 的
   `bundled_path`（PHP 默认 `ext/{name}`）。
 - external 组件必须有 catalog 的 url/version。
-- `modes` 必须在该产品 profile 的 `modes` 里。
+- `modes` 必须在该产品 profile 的 `modes` 里。PHP 内置扩展默认 `static`；上游
+  `config.m4` 支持 `$ext_shared` 时同时写 `["static", "shared"]`，并在 `tools` 里加
+  `autoconf`（shared 走 standalone / phpize）。上游硬编码 `ext_shared=no` 的（如
+  PHP 的 `libxml`）只写 `static`，并在 recipe 注释里写明依据。
+- 同一个扩展在不同系列可能来源不同：例如 `imap` 在 8.3 及以前内置、8.4 起改走
+  PECL；`xmlrpc` 在 7.4 内置、8.0 起改走 PECL。实现方式见 §7.3.1。
 - 组件自己的开关写 `features`；有条件的能力用 `requires` 声明，不要写成
   `target(ctx)` 里的 `if`。
 - 需要宿主机命令的 feature 用 `requires.commands`，不要塞进 `needs`。
@@ -329,6 +334,30 @@ BUNDLED_DISABLE = {
   不允许列表或空格。
 - 只列 phprt 需要控制的 bundled 组件；`--enable-filter` 这类基础参数不放进表里。
 - 未适配的 PHP 系列先写最小 `bundled` 和 `bundled_disable`，等适配时再补全。
+
+#### 7.3.1 同一扩展在不同系列来源不同
+
+PHP 升级时会把扩展移出核心或并入核心。7.4 ~ 8.6 范围内的例子：
+
+| 扩展 | 内置 | 外部（PECL） |
+| --- | --- | --- |
+| `imap` | 7.4 ~ 8.3 | 8.4 起（`ext/imap` 只剩 tests） |
+| `xmlrpc` | 7.4 | 8.0 起 |
+
+目前仓库里还没有这两个扩展的 recipe，下面只记录区分来源的做法；真加 recipe 时按
+这里的步骤写。
+
+这种组件按系列区分来源，做法是：
+
+- 各产品系列的 `bundled` 只列该系列真正内置的扩展；外部系列的 `bundled` 里不写。
+- component recipe 用 `ctx["is_bundled"]` 决定 `version` / `url` / `sha256`：
+  内置时取 `ctx["product_version"]`，`url` / `sha256` 留空；外部时取 `self`。
+- `LINES` 只覆盖外部来源的系列，`catalog.toml` 里只放这些系列的线。
+- bundle 顶层的默认线只写在外部来源的系列；内置系列不写，靠 `bundled` 加载。
+- 默认 mode 自动跟着 source 走：内置 `static`，外部 `shared`。需要别的 mode 时在
+  选择里显式写。
+- 选线和 `LINES` 的产品范围校验只对外部来源的系列生效；内置系列即使 recipe 带
+  `LINES` 也不参与选线，不需要版本线。
 
 ### 7.4 默认启用
 
@@ -435,11 +464,12 @@ sysvshm = {}
 
 ### 7.6 PHP 8.6 当前默认
 
-PHP 8.6 还没有正式版，catalog 的 8.6 线指向 `php-8.6.0RC3`；正式版发布后追加
-`8.6.0` 并指向 `www.php.net`。
+PHP 8.6.0 已于 2026-11-19 正式发布；catalog 的 8.6 线默认取 `8.6.0`，保留
+`8.6.0RC3` 供旧 state 和 `--lock` 复现。
 
 ```toml
 product = "php"
+ssh2 = "1.6"
 
 [deps]
 openssl = "3.5"
@@ -488,10 +518,12 @@ sysvshm = {}
 
 和 8.5 的差别：
 
-- 没有 PECL 扩展的默认线。PHP 8.6 删除了 `XtOffsetOf`、`INI_INT`、`zval_dtor` 等
-  Zend API，swoole 6.2.5、xdebug 3.5.3 和 8.5 默认线上的 11 个 PECL 扩展（redis、
-  apcu、igbinary、msgpack、protobuf、yaml、memcached、imagick、ssh2、amqp、rdkafka）
-  的现有版本线都编不过，`LINES` 里也不写 `8.6`；等上游发支持 8.6 的版本再加回。
+- PECL 扩展默认线目前只有 `ssh2 = "1.6"`，1.6.1 在 PHP 8.6.0 上实测可编。redis
+  6.4.0RC1 也能编译，但仍是 beta；xdebug 3.6.0alpha1 仍只是预发布；swoole 6.3.0
+  仍不支持 8.6。其余扩展的现有版本线都编不过，`LINES` 里也不写 `8.6`；等上游发支持
+  8.6 的稳定版再加回。
+- PHP 8.6 删除了 `XtOffsetOf`、`INI_INT`、`zval_dtor` 等 Zend API，旧版本线报错的
+  主要原因仍是这些符号或相关签名。
 - gd 在 8.6 多了 `tiff` / `heif` / `imagequant` / `uhdr` 四个 feature，都不在预设里，
   需要显式打开。
 

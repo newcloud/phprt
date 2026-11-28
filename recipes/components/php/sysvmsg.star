@@ -6,11 +6,14 @@ def target(ctx):
         product = "php",
         name = "sysvmsg",
         modules = ["sysvmsg"],
-        modes = ["static"],
+        modes = ["static", "shared"],
+        # shared 走 standalone / phpize，需要 autoconf；static 只用不到。
+        tools = [tool("autoconf", min = "2.68")],
         configure = ["--enable-sysvmsg"],
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],
         sha256 = "" if builtin else self["sha256"],
+        ini = "20-sysvmsg.ini",
         desc = "System V 消息队列扩展",
     )
 

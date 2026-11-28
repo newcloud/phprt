@@ -367,6 +367,7 @@ phprt install php@8.5 --component openssl --dep openssl=4.0
 | [OUTPUT.md](OUTPUT.md) | 文本 / JSON 输出、路径、字段 |
 | [STATE.md](STATE.md) | state.json、bindings、line/version、构建环境记录 |
 | [LOCK.md](LOCK.md) | 解析顺序、`--lock`、`update`、`scheme --lock`、catalog 旧补丁保留 |
+| [PHP-8.6-EXTENSIONS.md](PHP-8.6-EXTENSIONS.md) | PHP 8.6.0 的扩展支持矩阵、RC 与正式版比较、ssh2 1.6 回加与验收 |
 | [DOWNLOAD.md](DOWNLOAD.md) | 下载、缓存、镜像、分片续传、进度 UI |
 | [CATALOG-UPDATE.md](CATALOG-UPDATE.md) | 上游版本查询、每组件 upstream star 脚本、catalog 写回与备份、sha256 获取 |
 | [CATALOG-MODEL.md](CATALOG-MODEL.md) | catalog 文件、两类使用者、用户侧主线补丁检查、交互与写回 |

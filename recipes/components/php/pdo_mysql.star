@@ -11,12 +11,15 @@ def target(ctx):
         product = "php",
         name = "pdo_mysql",
         modules = ["pdo_mysql"],
-        modes = ["static"],
+        modes = ["static", "shared"],
+        # shared 走 standalone / phpize，需要 autoconf；static 只用不到。
+        tools = [tool("autoconf", min = "2.68")],
         ignored = ignored,
         configure = ["--with-pdo-mysql=mysqlnd"],
         version = ctx["product_version"] if builtin else self["version"],
         url = "" if builtin else self["url"],
         sha256 = "" if builtin else self["sha256"],
+        ini = "20-pdo_mysql.ini",
         desc = "PDO MySQL 驱动，mysqlnd 由 PHP 隐式编入",
     )
 

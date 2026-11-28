@@ -1,7 +1,9 @@
 # 只写默认版本线，不写补丁号；顶层是扩展，[deps] 是依赖库。
 product = "php"
-# PHP 8.6 删除了 XtOffsetOf / zval_dtor 等 Zend API，swoole 6.2.5、xdebug 3.5.3 和
-# 下面这批 PECL 扩展的现有版本线都编不过；等上游发支持 8.6 的版本再加回。
+# PHP 8.6 删除了 XtOffsetOf / zval_dtor 等 Zend API。swoole 6.3.0、xdebug 3.5.3
+# 仍未支持 8.6；PECL 里目前只有 ssh2 1.6.1 实测可编（redis 6.4.0RC1 也可编，
+# 等稳定版）。其余扩展的现有版本线都编不过，等上游发支持 8.6 的版本再加回。
+ssh2 = "1.6"
 
 [deps]
 openssl = "3.5"

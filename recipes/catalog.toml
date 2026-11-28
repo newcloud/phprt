@@ -25,9 +25,12 @@
     { version = "8.5.11", url = "https://www.php.net/distributions/php-8.5.11.tar.xz", sha256 = "d9be75c08e8c316f4c8f4194d8fbe1750a15f6a6d9d4e3fe72082abeeb800360" }
 ,
     { version = "8.5.13", url = "https://www.php.net/distributions/php-8.5.13.tar.gz", sha256 = "3aeb20a7e667e197929747f76047409196f91f0172357439319cba344df8b3e1" }]
-# 8.6 还没正式发布；RC 包只在发布经理目录短期存在，正式版发布后追加 8.6.0 并
-# 指向 www.php.net，旧 RC 保留。
-"8.6" = [ { version = "8.6.0RC3", url = "https://downloads.php.net/~svpernova09/php-8.6.0RC3.tar.bz2", sha256 = "12d024eba9fa4bf379693c045a544eec2144de2d7de71f31a6ed4496717e0307" } ]
+# 8.6.0 已于 2026-11-19 正式发布；RC 包只在发布经理目录短期存在，保留 RC3
+# 供旧 state 和 --lock 复现，默认取正式版。
+"8.6" = [
+    { version = "8.6.0RC3", url = "https://downloads.php.net/~svpernova09/php-8.6.0RC3.tar.bz2", sha256 = "12d024eba9fa4bf379693c045a544eec2144de2d7de71f31a6ed4496717e0307" },
+    { version = "8.6.0", url = "https://www.php.net/distributions/php-8.6.0.tar.gz", sha256 = "62337dccde3d9fcc39797d4529f42637613036eaf3875353c206874e5813a3c1" },
+]
 
 # OpenSSL 官方发布页只做跳转：https://www.openssl.org/source/openssl-<版本>.tar.gz
 # 会 301 到 GitHub Releases，所以这里直接写跳转后的最终地址。下载器按 catalog
@@ -162,6 +165,7 @@
 
 [ssh2]
 "1.5" = [ { version = "1.5.0", url = "https://pecl.php.net/get/ssh2-1.5.0.tgz", sha256 = "a943427fae39a5503c813179018ae6c500323c8c9fb434e1a9a665fb32a4d7b4" } ]
+"1.6" = [ { version = "1.6.1", url = "https://pecl.php.net/get/ssh2-1.6.1.tgz", sha256 = "2212d8266df54654b282ca681ee9b82f312a776e801b667b288d80f3541741ed" } ]
 
 [amqp]
 "2.2" = [ { version = "2.2.0", url = "https://pecl.php.net/get/amqp-2.2.0.tgz", sha256 = "5ae624bd785e299523f6132c204bd562cc73066dd33a10a12aa96389f55a4de7" } ]

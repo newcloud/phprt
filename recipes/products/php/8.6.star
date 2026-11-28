@@ -6,8 +6,8 @@
 #               选中 static 时会跳过对应的关闭参数，改用 ext recipe 的 configure。
 #               不在这里的扩展保持 PHP 默认或 php recipe 里的 --enable-*。
 #
-# 按 php-8.6.0RC3 的 ext/ 核对：8.6 没有 ext/imap，新增的 ext/skeleton 是扩展模板，
-# 不参与构建，和 8.5 一样不列进来。
+# 按 php-8.6.0 的 ext/ 核对：ext/imap 只剩 tests，没有 config.m4，不参与构建；
+# 新增的 ext/skeleton 是扩展模板，也不列进来。
 BUILTIN_EXTS = [
         "bcmath",
         "bz2",
@@ -81,7 +81,7 @@ BUILTIN_EXTS = [
         "zlib",
 ]
 
-# 关闭参数逐个按 php-8.6.0RC3 的 ext/*/config*.m4 与 configure --help 核对：
+# 关闭参数逐个按 php-8.6.0 的 ext/*/config*.m4 与 configure --help 核对：
 #   openssl / libxml / sqlite3 / zlib 用 config0.m4，选项名不变；
 #   其余扩展的 --enable-*/--with-* 选项名和 8.5 相同。
 BUILTIN_DISABLE = {
@@ -113,7 +113,7 @@ BUILTIN_DISABLE = {
 
 # 构建目标：PHP 的 SAPI。每个版本单独声明，版本差异直接写在这里。
 #
-# 按 php-8.6.0RC3 核对：--disable-cli 在 sapi/cli/config.m4、--disable-cgi 在
+# 按 php-8.6.0 核对：--disable-cli 在 sapi/cli/config.m4、--disable-cgi 在
 # sapi/cgi/config9.m4、--enable-fpm 在 sapi/fpm/config.m4；--disable-fpm 不存在
 # （FPM 默认关闭，未选中时不生成禁用参数）。
 TARGETS = {

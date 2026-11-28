@@ -278,6 +278,11 @@ pub fn resolve(
         if meta.lines.is_empty() {
             continue;
         }
+        // 内置组件跟随产品补丁，不需要版本线；即使它的 recipe 为外部系列声明了
+        // LINES，这条系列上也不参与选线和产品范围校验。
+        if bundled.contains(component_name) {
+            continue;
+        }
         if let Some(line) = skipped.get(component_name) {
             bail!("component:{component_name} {line} 不支持产品 {series}，该系列不加载这个组件");
         }
@@ -532,6 +537,33 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("[deps]"), "{err}");
+    }
+
+    #[test]
+    fn bundled_component_does_not_need_a_version_line() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recipes");
+        let catalog = Catalog::load(&dir.join("catalog.toml")).unwrap();
+        let mut metas = crate::recipe::load_meta(&dir, &catalog).unwrap();
+        let bundle = Bundle::load(&dir.join("bundles/php/7.4.toml")).unwrap();
+        // ssh2 的 LINES 只覆盖 8.0+；把它当成 7.4 的内置扩展时，
+        // 不应再要求版本线，也不该拿 LINES 的产品范围去校验。
+        metas
+            .iter_mut()
+            .find(|meta| meta.kind == Kind::Product && meta.series.as_deref() == Some("7.4"))
+            .unwrap()
+            .bundled
+            .push("ssh2".to_owned());
+        let bindings = resolve(
+            &catalog,
+            &bundle,
+            &metas,
+            "php",
+            "7.4",
+            &["ssh2".to_owned()],
+            &EffectivePins::default(),
+        )
+        .unwrap();
+        assert!(!bindings.lines.contains_key("ssh2"));
     }
 
     #[test]
