@@ -239,3 +239,8 @@
 
 [lua-nginx-module]
 "0.10" = [ { version = "0.10.29", url = "https://github.com/openresty/lua-nginx-module/archive/refs/tags/v0.10.29.tar.gz", sha256 = "ca2c2122b909529bf9d1a89e9a5763835a2bd2629def8cb279c550f638f0a78f" }, { version = "0.10.31", url = "https://github.com/openresty/lua-nginx-module/archive/refs/tags/v0.10.31.tar.gz", sha256 = "123d8203e74bf66f71437c7b3fa070bf8d24e6d332981bc18dc2db43303cc741" } ]
+
+# PHP 7.4～8.6 的 ext/ffi 只要求 libffi >= 3.0.11，没有上限；
+# 3.8.x 的 soname 仍是 libffi.so.8，与旧版 ABI 兼容。
+[libffi]
+"3.8" = [ { version = "3.8.2", url = "https://github.com/libffi/libffi/releases/download/v3.8.2/libffi-3.8.2.tar.gz", sha256 = "a699fda2b090c4b46cb79cf60c4dacfce480eb05742c0de66acf3af174a47f92" } ]

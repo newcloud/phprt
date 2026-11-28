@@ -96,6 +96,7 @@ BUILTIN_DISABLE = {
         "mbstring": "--disable-mbstring",
         "zip": "--without-zip",
         "sodium": "--without-sodium",
+        "ffi": "--without-ffi",
         "mysqli": "--without-mysqli",
         "pdo_mysql": "--without-pdo-mysql",
         "gettext": "--without-gettext",

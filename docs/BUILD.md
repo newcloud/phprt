@@ -231,7 +231,7 @@ rm -rf .phprt
 # PHP 8.5 默认集
 cargo run -- install php@8.5
 ./myphp-8.5 -v
-./myphp-8.5 -m | grep -E '^(zlib|sqlite3|pdo_sqlite|mysqli|pdo_mysql|mbstring|zip|sodium|gettext|pcntl|posix|sockets|shmop|sysvmsg|sysvsem|sysvshm)$'
+./myphp-8.5 -m | grep -E '^(zlib|sqlite3|pdo_sqlite|mysqli|pdo_mysql|mbstring|zip|sodium|ffi|gettext|pcntl|posix|sockets|shmop|sysvmsg|sysvsem|sysvshm)$'
 
 # 官方测试用例（验收标准）：在源码目录跑 PHP 自带的 run-tests 全量套件
 make test TESTS="-j$(nproc)"

@@ -230,7 +230,7 @@ features = {
 | ssh2 / amqp / rdkafka / yaml / msgpack / protobuf | 只有正向开关 | configure 固定，无 ignored |
 | mysqli `--with-mysql-sock` | 少用：mysqlnd 用编译期默认 socket | ignored |
 | mbstring `--enable-mbregex` | 常用（multibyte 正则） | configure 固定开，oniguruma 在树内 |
-| zlib / sqlite3 / pdo_sqlite / zip / sodium / gettext / pcntl / sockets / shmop / sysv* / pdo_mysql | 只有正向开关 | configure 固定 |
+| zlib / sqlite3 / pdo_sqlite / zip / sodium / ffi / gettext / pcntl / sockets / shmop / sysv* / pdo_mysql | 只有正向开关 | configure 固定 |
 
 PNG 不是 feature：PHP 8.5 / 8.6 gd 强制依赖 libpng，`--enable-gd` 就带上。
 

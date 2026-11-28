@@ -771,7 +771,7 @@ xdebug           external  shared             3.5.3      available
 | 组件没有版本表 | `「nope」没有可选版本（catalog 里没有这个组件）` |
 | 版本线不支持当前产品 | `swoole 4.8 不支持产品 8.5（可用：6.2）` |
 | 显式 pin 冲突 | `openssl 3.5 与当前产品/组件选择冲突（可用：1.1.1）` |
-| 禁用非默认组件 | `--disable-default-component swoole 不是 php@8.5 的默认组件（默认：curl, gettext, libxml, mbstring, mysqli, openssl, pcntl, pdo_mysql, pdo_sqlite, shmop, sockets, sodium, sqlite3, sysvmsg, sysvsem, sysvshm, zip, zlib）` |
+| 禁用非默认组件 | `--disable-default-component swoole 不是 php@8.5 的默认组件（默认：curl, ffi, gettext, libxml, mbstring, mysqli, openssl, pcntl, pdo_mysql, pdo_sqlite, shmop, sockets, sodium, sqlite3, sysvmsg, sysvsem, sysvshm, zip, zlib）` |
 | 同时启用和禁用 | `--component 和 --disable-default-component 同时指定了 openssl` |
 | default_components ref 写法不对 | `default_components.gd 的 ref 不合法：ref 必须是 "component_presets.<名字>"` |
 | 状态文件是旧格式 | `state.json 是旧格式（version=2）...` |
