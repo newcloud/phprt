@@ -6,7 +6,8 @@
 //!
 //! 比较器分两类，用 `classify` 的正则区分（见 docs/CATALOG-UPDATE.md 13.3）：
 //!
-//! - 点分数字，末段可带字母后缀：`3.5.9`、`1.1.1w`、`8.6.0RC3`；
+//! - 点分数字，末段可带字母后缀：`3.5.9`、`1.1.1w`、`8.6.0RC3`；预发布后缀
+//!   （alpha / beta / rc / dev / pre）排在无后缀正式版之前；
 //! - 点分数字 + 连字符数字后缀：`7.1.2-35`、`2.1-20261102`（后缀按数值比）。
 //!
 //! 新增不规则形式时在这里加比较器，并在 `classify` 登记。
@@ -49,6 +50,8 @@ pub fn compare(left: &str, right: &str) -> Ordering {
     }
 }
 
+const PRERELEASE_MARKERS: [&str; 5] = ["alpha", "beta", "rc", "dev", "pre"];
+
 /// 点分数字比较：逐段比数字，数字相同再比后缀（如 `1.1.1w > 1.1.1u`）；缺的段按 0 补。
 fn compare_dotted(left: &str, right: &str) -> Ordering {
     let mut left = left.split('.');
@@ -62,13 +65,31 @@ fn compare_dotted(left: &str, right: &str) -> Ordering {
         let (left_num, left_rest) = split_segment(l.unwrap_or("0"));
         let (right_num, right_rest) = split_segment(r.unwrap_or("0"));
         match left_num.cmp(&right_num) {
-            Ordering::Equal => match left_rest.cmp(right_rest) {
+            Ordering::Equal => match compare_suffix(left_rest, right_rest) {
                 Ordering::Equal => continue,
                 other => return other,
             },
             other => return other,
         }
     }
+}
+
+/// 同一数字段的后缀：预发布排在正式版之前，补丁字母仍按字符串比较。
+fn compare_suffix(left: &str, right: &str) -> Ordering {
+    match (is_prerelease(left), is_prerelease(right)) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => left.cmp(right),
+    }
+}
+
+fn is_prerelease(suffix: &str) -> bool {
+    let marker = suffix
+        .trim_start_matches(|c: char| !c.is_ascii_alphabetic())
+        .to_ascii_lowercase();
+    PRERELEASE_MARKERS
+        .iter()
+        .any(|name| marker.starts_with(name))
 }
 
 /// 连字符数字后缀：基础部分走点分比较，后缀按数值比（`7.1.2-10 > 7.1.2-9`）。
@@ -93,7 +114,7 @@ fn split_segment(segment: &str) -> (u64, &str) {
 /// （libjpeg-turbo 的 `3.1.90` 表示 3.2.0 beta）。沿用 v2 outdated 的判据。
 pub fn is_unstable(version: &str) -> bool {
     let lower = version.to_ascii_lowercase();
-    if ["alpha", "beta", "rc", "dev", "pre"]
+    if PRERELEASE_MARKERS
         .iter()
         .any(|marker| lower.contains(marker))
     {
@@ -125,8 +146,12 @@ mod tests {
         assert_eq!(compare("3.5.10", "3.5.9"), Ordering::Greater);
         assert_eq!(compare("8.5.13", "8.5.9"), Ordering::Greater);
         assert_eq!(compare("1.1.1w", "1.1.1u"), Ordering::Greater);
+        assert_eq!(compare("1.1.1w", "1.1.1"), Ordering::Greater);
         assert_eq!(compare("4.0", "4.0.0"), Ordering::Equal);
-        assert_eq!(compare("8.6.0RC3", "8.6.0"), Ordering::Greater);
+        assert_eq!(compare("8.6.0RC3", "8.6.0"), Ordering::Less);
+        assert_eq!(compare("8.6.0", "8.6.0RC3"), Ordering::Greater);
+        assert_eq!(compare("2.0.0-beta1", "2.0.0"), Ordering::Less);
+        assert_eq!(compare("3.5.9", "3.5.9"), Ordering::Equal);
     }
 
     #[test]
